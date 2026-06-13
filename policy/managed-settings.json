@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(distrobox-host-exec sudo dnf install:*)",
+      "Bash(distrobox-host-exec sudo dnf -y install:*)",
+      "Bash(distrobox-host-exec sudo rpm-ostree install:*)",
+      "Bash(distrobox-host-exec sudo rpm -i:*)",
+      "Bash(rpm-ostree install:*)",
+      "Bash(pip install --user:*)",
+      "Bash(pip3 install --user:*)",
+      "Bash(pipx install:*)",
+      "Bash(npm install -g:*)",
+      "Bash(npm i -g:*)",
+      "Bash(yarn global add:*)",
+      "Bash(pnpm add -g:*)",
+      "Bash(cargo install:*)",
+      "Bash(go install:*)",
+      "Bash(gem install:*)",
+      "Bash(brew install:*)",
+      "Bash(dnf copr:*)",
+      "Bash(flatpak install:*)",
+      "Bash(snap install:*)",
+      "Write(~/.local/bin/**)",
+      "Write(/usr/local/bin/**)"
+    ],
+    "disableBypassPermissionsMode": "disable"
+  }
+}

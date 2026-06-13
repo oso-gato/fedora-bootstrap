@@ -1,0 +1,45 @@
+name: refresh-release
+
+# Keep the README's pinned Fedora release (Option 2 of "Fedora Cloud Update")
+# current. Weekly (Mondays 04:00 UTC), re-read Fedora's official releases.json,
+# rewrite the --releasever number on the line tagged "# fedora-stable", and
+# commit ONLY when it actually changed. The dynamic Option 1 block needs none
+# of this; this exists solely so the pinned copy never goes stale.
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bump pinned Fedora stable from releases.json
+        run: |
+          latest=$(curl -fsSL https://fedoraproject.org/releases.json \
+                    | grep -oE '"version": *"[0-9]+"' | grep -oE '[0-9]+' | sort -rn | head -1)
+          case "$latest" in
+            ''|*[!0-9]*) echo "::error::could not detect a numeric latest Fedora release (got '$latest')"; exit 1 ;;
+          esac
+          echo "Latest stable Fedora = $latest"
+
+          # Rewrite only the line carrying the "# fedora-stable" marker.
+          sed -i -E "/# fedora-stable/ s/(--releasever=)[0-9]+/\1${latest}/" README.md
+
+          if git diff --quiet -- README.md; then
+            echo "README already pinned to Fedora ${latest} — nothing to do."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "README: bump pinned Fedora stable to ${latest} (auto, weekly)"
+          git push
