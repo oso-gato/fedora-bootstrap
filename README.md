@@ -2,13 +2,15 @@
 
 ## Fedora Cloud Update
 
-Cloud images can ship behind current Fedora, so bring the host fully current
-**before** running `setup.sh` (the Packages table and vendor repos are validated
-against the latest stable). Hostinger currently provisions **Fedora Cloud 44** <!-- HOSTINGER_FEDORA: auto-checked weekly by refresh-release.yml -->.
-When that lags the latest stable, the release-upgrade below closes the gap; when it
-is already current the block reports "nothing to do", and the `dnf upgrade --refresh`
-folded into **Day 0** still freshens packages. Keep the release-upgrade for providers
-that lag, or for when Fedora ships the next release.
+<!-- HOSTINGER_STATUS_START : auto-generated every Friday by .github/workflows/refresh-release.yml — do not edit by hand -->
+**Hostinger's Fedora Cloud is 44 — yes, it's the latest release.** You can ignore the version-upgrade steps in this section and skip straight to **Day 0** below.
+<!-- HOSTINGER_STATUS_END -->
+
+Cloud images can ship behind current Fedora; when a provider lags, the status line
+above says how far behind, and you bring the host current **before** running `setup.sh`
+(the Packages table and vendor repos are validated against the latest stable). That
+status is refreshed every Friday by [`refresh-release.yml`](.github/workflows/refresh-release.yml);
+either way, the `dnf upgrade --refresh` folded into **Day 0** still freshens packages.
 
 Both blocks below run Fedora's official **DNF system-upgrade** flow, which is
 **built into dnf5** (Fedora ≥ 41 — there is no plugin to install). Fedora supports
@@ -19,7 +21,7 @@ Pick whichever you prefer — they reach the same place.
 **Option 1 — self-updating (never edit this one).** Reads the latest GA straight
 from Fedora's official, Beta-safe
 [`releases.json`](https://fedoraproject.org/releases.json) (GA shows as a bare
-integer `"44"`; the regex matches only purely-integer `version` values, so any non-GA/pre-release entry (not a bare integer) is ignored and an integer-only `max` never lands
+integer like `"44"`; the regex matches only purely-integer `version` values, so any non-GA/pre-release entry (not a bare integer) is ignored and an integer-only `max` never lands
 on a pre-release) and caps the jump at +2:
 
 ```sh
@@ -63,7 +65,7 @@ behind, run the block again for the next +2 step. Then carry on to **Day 0** bel
 script.** The host itself stays as close to immutable as possible: it runs
 Podman containers, and everything else (including the Claude Code that
 manages it) lives in containers or in the disposable `claudebox` Distrobox.
-Built and pinned for **Fedora Cloud Base, latest stable (44)**; Workstation
+Built and pinned for **Fedora Cloud Base 44** <!-- OBJECTIVE_PIN: kept in lockstep with distrobox.ini's fedora-toolbox tag by refresh-release.yml; the weekly run flags when a newer stable ships so the pin is bumped deliberately (Build Principles 1 & 3) -->; Workstation
 and Atomic hosts work as documented secondary paths.
 
 ## The ecosystem this host anchors
@@ -115,7 +117,7 @@ and Atomic hosts work as documented secondary paths.
 The only manual steps. As root on a fresh Fedora Cloud instance:
 
 ```sh
-dnf -y upgrade --refresh                        # freshen ALL packages first (an already-on-44 host no-ops the release-upgrade above, so it gets current here)
+dnf -y upgrade --refresh                        # freshen ALL packages first (a host already on the latest release no-ops the release-upgrade above, so it gets current here)
 dnf -y install git
 useradd -m -G wheel core
 echo 'core ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/core
@@ -129,7 +131,7 @@ fi
 passwd core      # optional, runs last — Cockpit/console password (SSH stays key-only)
 ```
 
-The first line freshens every package (an already-on-44 host no-ops the
+The first line freshens every package (a host already on the latest release no-ops the
 release-upgrade section above, so this is where it still gets fully current). If
 that upgrade pulls a new kernel or systemd and you want them live before
 bootstrapping, `reboot` first, then run the rest of the block.
