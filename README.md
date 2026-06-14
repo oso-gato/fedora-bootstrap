@@ -320,7 +320,7 @@ ssh-add -l
 | Host | mosh | Fedora repos | roaming-resilient public remote shell (UDP, AEAD; bootstraps over sshd) |
 | Host | openssh-server | Fedora repos | key-only public door + mosh bootstrap (Cloud default config is already key-only) |
 | Host | tailscale | Tailscale's official dnf repo | tailnet node + Tailscale SSH + serves Cockpit |
-| Host | cockpit, -podman, -files, -storaged, -networkmanager, -selinux | Fedora repos | browser host management (containers, files, disks, network, SELinux), tailnet-only |
+| Host | cockpit, -podman, -files, -networkmanager, -selinux | Fedora repos | browser host management (containers, files, network, SELinux), tailnet-only |
 | Box | claude-code | Anthropic's official dnf repo | the manager — claudebox's purpose |
 | Box | host-spawn | Fedora repos | container side of distrobox-host-exec (no GitHub download — deterministic) |
 | Box | bubblewrap, socat | Fedora repos | Claude Code's Linux sandbox dependencies |

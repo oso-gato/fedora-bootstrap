@@ -35,8 +35,13 @@ else
 fi
 dnf -y --setopt=install_weak_deps=False install \
     distrobox flatpak-session-helper podman tmux mosh openssh-server tailscale \
-    cockpit cockpit-podman cockpit-files cockpit-storaged \
+    cockpit cockpit-podman cockpit-files \
     cockpit-networkmanager cockpit-selinux
+# cockpit-storaged is intentionally NOT installed (host-minimal, Build Principle 4): little
+# use on a single-disk VPS, and it is the heaviest Cockpit add-on (udisks2 + libblockdev-* +
+# mdadm). Remove it + its now-orphaned deps if an earlier run installed it (dnf clears
+# no-longer-needed dependencies on removal by default).
+rpm -q cockpit-storaged >/dev/null 2>&1 && dnf -y remove cockpit-storaged || true
 
 PHASE "host 2/6 operating user '$U' + scoped passwordless-sudo allowlist"
 # Create the unprivileged user that OWNS the rootless layer (podman, distrobox, Claude
