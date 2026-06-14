@@ -135,8 +135,11 @@ layers** below): it runs the SYSTEM phase (`setup-host.sh`) as root — host pac
 system services, the tailnet, and **creating the `core` user** — then drops to `core` for the
 ROOTLESS phase (`setup-user.sh`). The repo is cloned by root into `/opt/fedora-bootstrap`
 because it is the host's provisioning definition (root-owned), and because `core` does not
-exist yet when the clone runs. To reuse a cloud-init user (often `fedora`) instead of
-creating `core`, set `BOOTSTRAP_USER=fedora` before `setup.sh`. To also give the VPS access to a
+exist yet when the clone runs. To name the operating user something other than `core`, set
+`BOOTSTRAP_USER=<name>` before `setup.sh` — it's created fresh (or reused if it already exists) as a
+password-gated `wheel` admin. Either way the bootstrap **strips cloud-init's default-user blanket
+`NOPASSWD:ALL`** (`/etc/sudoers.d/90-cloud-init-users`), so reusing or colliding with a cloud image's
+default user (e.g. `fedora`) can never smuggle passwordless root past the scoped-sudo model. To also give the VPS access to a
 home LAN or make it an exit node, set `TS_ACCEPT_ROUTES=1` / `TS_EXIT_NODE=1` — see **Tailscale
 routing** below (both are opt-in; a bare run leaves the tailnet posture untouched).
 

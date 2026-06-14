@@ -72,6 +72,27 @@ PHASE "host 3/7 operating user '$U' + scoped passwordless-sudo allowlist"
 # OS-blocked from it. Grow the allowlist ONLY by committing to the repo (policy/CLAUDE.md:
 # "propose; the user commits"). (For a stricter posture, drop '-G wheel' and the allowlist.)
 id "$U" >/dev/null 2>&1 || useradd -m -G wheel "$U"
+# ENFORCE the no-blanket-NOPASSWD model for the OPERATING USER rather than assume it. cloud-init grants its
+# default user `<user> ALL=(ALL) NOPASSWD:ALL` in /etc/sudoers.d/90-cloud-init-users; if such a user is reused
+# as $U, that blanket rule sits ALONGSIDE our scoped allowlist (sudoers is a permissive union — the broad rule
+# still wins) and would hand the unattended in-box agent full passwordless root. Strip ONLY $U's blanket
+# NOPASSWD line(s) — leaving any other cloud-init admins' stanzas untouched (no over-reach) — so $U falls back
+# to password-gated `wheel` + the scoped allowlist. On Hostinger's root-only image this file doesn't exist, so
+# it is a no-op; a panel rebuild re-provisions from scratch and re-runs setup.sh, which re-applies this.
+ci=/etc/sudoers.d/90-cloud-init-users
+if [ -f "$ci" ] && grep -qE "^[[:space:]]*${U}[[:space:]].*NOPASSWD" "$ci"; then
+    grep -vE "^[[:space:]]*${U}[[:space:]].*NOPASSWD" "$ci" > "${ci}.new" || true
+    chmod 0440 "${ci}.new"
+    if ! visudo -cf "${ci}.new" >/dev/null 2>&1; then
+        rm -f "${ci}.new"; echo "WARN: could not safely rewrite $ci to drop '$U' NOPASSWD; left as-is" >&2
+    elif [ -s "${ci}.new" ]; then
+        mv -f "${ci}.new" "$ci"; restorecon "$ci" 2>/dev/null || true       # other admins' rules remain → keep filtered file
+        echo ">> stripped cloud-init's blanket NOPASSWD for '$U' (other cloud-init users untouched); scoped-sudo model enforced."
+    else
+        rm -f "${ci}.new" "$ci"                                              # file held only $U's blanket grant → remove it
+        echo ">> removed cloud-init's blanket NOPASSWD ($ci held only '$U'); scoped-sudo model enforced."
+    fi
+fi
 # Install the scoped allowlist, validated with visudo BEFORE it goes live (a malformed
 # sudoers file can lock out sudo — never install one unchecked). The temp name contains a
 # dot so sudo's includedir ignores it until it is valid and renamed into place.
@@ -79,6 +100,7 @@ sed "s/__USER__/${U}/g" "$HERE/policy/sudoers.claudebox" > /etc/sudoers.d/.claud
 chmod 0440 /etc/sudoers.d/.claudebox.new
 if visudo -cf /etc/sudoers.d/.claudebox.new >/dev/null; then
     mv -f /etc/sudoers.d/.claudebox.new /etc/sudoers.d/claudebox
+    restorecon /etc/sudoers.d/claudebox 2>/dev/null || true
 else
     rm -f /etc/sudoers.d/.claudebox.new
     echo "ERROR: policy/sudoers.claudebox failed visudo validation — scoped sudo not installed" >&2
