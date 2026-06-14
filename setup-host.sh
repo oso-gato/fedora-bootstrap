@@ -16,7 +16,26 @@ U="${BOOTSTRAP_USER:-core}"
 case "$U" in (''|*[!a-z0-9_-]*) echo "FATAL: invalid BOOTSTRAP_USER '$U' (allowed chars: a-z 0-9 _ -)" >&2; exit 1 ;; esac
 PHASE() { printf '\n==== %s ====\n' "$*"; }
 
-PHASE "host 1/6 packages (Fedora repos + Tailscale's official repo)"
+PHASE "host 1/7 hostname"
+# Name the box. `hostnamectl set-hostname` writes the STATIC name to /etc/hostname AND sets the live
+# (transient) one in the same call — idempotent, no reboot. On a cloud VPS that alone is NOT durable:
+# cloud-init's update_hostname module runs every boot and would REVERT it to the cloud-provided name, so we
+# also install `preserve_hostname: true` — the one documented key that disables both its set- and
+# update-hostname modules. It goes in a /etc/cloud/cloud.cfg.d/ DROP-IN (upgrade-safe; editing the vendor
+# cloud.cfg risks .rpmnew churn). No /etc/hosts edit is needed on Fedora — nss-myhostname already resolves
+# the local name (the 127.0.1.1 line is a Debian-ism). The OS name is independent of Hostinger's external
+# srvNNN.hstgr.cloud forward/reverse DNS (which only Hostinger controls — you cannot get erebus.hstgr.cloud).
+H="${BOOTSTRAP_HOSTNAME:-erebus}"
+case "$H" in (''|-*|*-|*[!a-z0-9-]*) echo "FATAL: invalid BOOTSTRAP_HOSTNAME '$H' (RFC-1123: lowercase a-z 0-9 and hyphen, no leading/trailing hyphen)" >&2; exit 1 ;; esac
+[ "${#H}" -le 63 ] || { echo "FATAL: BOOTSTRAP_HOSTNAME '$H' exceeds 63 characters" >&2; exit 1; }
+hostnamectl set-hostname "$H"
+install -d -m0755 /etc/cloud/cloud.cfg.d
+printf '#cloud-config\npreserve_hostname: true\n' > /etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg
+chmod 0644 /etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg
+restorecon /etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg 2>/dev/null || true
+echo ">> hostname set to '$H' (cloud-init preserve_hostname drop-in installed; persists across reboots)."
+
+PHASE "host 2/7 packages (Fedora repos + Tailscale's official repo)"
 # Tailscale's OFFICIAL vendor repo. Write it (as root) straight into /etc/yum.repos.d —
 # the system-owned dir, correct SELinux context — to a temp ".new" name dnf ignores,
 # validate it's the real repo file, then atomically move it into place, so a partial or
@@ -43,7 +62,7 @@ dnf -y --setopt=install_weak_deps=False install \
 # no-longer-needed dependencies on removal by default).
 rpm -q cockpit-storaged >/dev/null 2>&1 && dnf -y remove cockpit-storaged || true
 
-PHASE "host 2/6 operating user '$U' + scoped passwordless-sudo allowlist"
+PHASE "host 3/7 operating user '$U' + scoped passwordless-sudo allowlist"
 # Create the unprivileged user that OWNS the rootless layer (podman, distrobox, Claude
 # Code). useradd also allocates its /etc/subuid + /etc/subgid ranges — the rootless
 # prerequisite. It joins 'wheel' so a human admin escalates WITH a password (set via
@@ -66,7 +85,7 @@ else
     exit 1
 fi
 
-PHASE "host 3/6 system services"
+PHASE "host 4/7 system services"
 # Bind cockpit.socket to LOOPBACK *before* it ever starts. Its vendor default is `ListenStream=9090`
 # on ALL interfaces — and with no firewall on Fedora Cloud that exposes Cockpit on the PUBLIC IP. The
 # empty `ListenStream=` first RESETS that default (systemd drop-ins append to list directives, so the
@@ -85,7 +104,7 @@ systemctl enable --now sshd cockpit.socket tailscaled
 # A running socket keeps its old listener until restarted, so re-assert the loopback bind on re-runs too.
 systemctl restart cockpit.socket
 
-PHASE "host 4/6 ssh: permit only LOGIN_KEY from authorized_keys"
+PHASE "host 5/7 ssh: permit only LOGIN_KEY from authorized_keys"
 # Whitelist ONLY the LOGIN_KEY variable (never the unsafe blanket `yes`, which would also
 # permit LD_PRELOAD et al.). The keys themselves are synced into the user's own ~/.ssh by
 # setup-user.sh (user layer).
@@ -97,7 +116,7 @@ PermitUserEnvironment LOGIN_KEY
 EOS
 systemctl reload sshd 2>/dev/null || systemctl restart sshd
 
-PHASE "host 5/6 tailscale (host node + Tailscale SSH; Cockpit over tailnet)"
+PHASE "host 6/7 tailscale (host node + Tailscale SSH; Cockpit over tailnet)"
 if ! tailscale status >/dev/null 2>&1; then
     if [ -n "${TS_AUTHKEY:-}" ]; then
         tailscale up --ssh --auth-key="$TS_AUTHKEY"            # unattended join
@@ -185,7 +204,7 @@ systemctl daemon-reload
 systemctl enable cockpit-tailnet-serve.service
 systemctl start --no-block cockpit-tailnet-serve.service
 
-PHASE "host 6/6 tmux drop-in + bring up '$U' rootless user manager"
+PHASE "host 7/7 tmux drop-in + bring up '$U' rootless user manager"
 # System-wide login drop-in: ssh/mosh logins attach a per-device tmux session.
 tee /etc/profile.d/zz-tmux-attach.sh >/dev/null <<'EOS'
 # ssh/mosh logins attach to a tmux session named after the key that authenticated
