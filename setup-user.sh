@@ -27,6 +27,22 @@ PHASE "user 3/4 claudebox (declarative assemble from distrobox.ini) + Claude pol
 cd "$HERE" && distrobox assemble create --file distrobox.ini
 echo ">> first enter builds the box (dnf install claude-code from Anthropic + init hooks) — this can take a minute"
 distrobox enter claudebox -- true   # triggers distrobox-init; fails loudly HERE, not mislabeled later
+# Guard: the box's root maps to THIS user via keep-id (NOT real root), so the bridge + policy steps
+# below can only read the repo at /run/host$HERE if the clone dir is traversable+readable by this
+# user. Day-0 clones to /opt/fedora-bootstrap (root umask 022 -> world-traversable), which is fine; a
+# 0700 clone dir would otherwise fail those steps with a cryptic Permission denied. Fail loudly here.
+distrobox enter claudebox -- test -r "/run/host$HERE/claudebox-init.sh" || {
+    echo "FATAL: claudebox cannot read this repo at /run/host$HERE — the clone dir is not readable by" \
+         "$(id -un) (uid $(id -u)). Clone to /opt/fedora-bootstrap per Day-0, or make the path" \
+         "traversable+readable by this user, then re-run setup.sh." >&2
+    exit 1
+}
+# Wire the box's host bridges (CONTAINER_HOST -> host podman socket; systemctl/journalctl/loginctl/
+# flatpak shims). Done here, NOT via distrobox.ini init_hooks: distrobox-create single-quote-wraps
+# init_hooks and re-evals them on the host, so any quote in the hook escapes and runs as this
+# unprivileged user (Permission denied on /etc, /usr/local/bin). The `sudo` is the CONTAINER's own
+# root; we pass only a path + our numeric uid, so nothing crosses the boundary that could detonate.
+distrobox enter claudebox -- sudo bash "/run/host$HERE/claudebox-init.sh" "$(id -u)"
 # Stamp the enterprise policy into the box. The `sudo` here is the CONTAINER's root
 # (distrobox grants it passwordless inside the box), NOT the host's root.
 distrobox enter claudebox -- sudo mkdir -p /etc/claude-code

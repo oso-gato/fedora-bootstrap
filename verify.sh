@@ -10,6 +10,10 @@ ck "box: exists"                           "distrobox list | grep -q claudebox"
 ck "box: claude runs"                      "distrobox enter claudebox -- /usr/bin/claude --version"
 ck "box: policy present"                   "distrobox enter claudebox -- sh -c 'test -f /etc/claude-code/CLAUDE.md && test -f /etc/claude-code/managed-settings.json'"
 ck "box: podman reaches HOST engine"       "distrobox enter claudebox -- sh -lc 'podman info --format {{.Host.RemoteSocket.Exists}} | grep -q true'"
-ck "box: systemctl shim works (host)"      "distrobox enter claudebox -- systemctl --user is-active podman.socket"
-ck "tailnet: host joined"                  "tailscale status"
+ck "box: systemctl shim works (host)"      "distrobox enter claudebox -- /usr/local/bin/systemctl --user is-active podman.socket"
+# Tolerate the browser-auth path: setup-host.sh joins the tailnet unattended (TS_AUTHKEY) OR leaves
+# the node in NeedsLogin until you click the consent link (it absorbs a missed window with `|| true`
+# and still exits 0). So PASS when the backend is Running (joined) OR pending auth — only a missing/
+# down daemon (no BackendState) fails. Use --json so we read the state, not the bare exit code.
+ck "tailnet: host joined (or pending browser-auth)" "tailscale status --json 2>/dev/null | grep BackendState | grep -qE 'Running|NeedsLogin|Starting|NeedsMachineAuth'"
 exit $fail
