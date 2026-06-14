@@ -2,10 +2,13 @@
 
 ## Fedora Cloud Update
 
-Cloud images ship behind current Fedora — Hostinger, for instance, still
-provisions **Fedora Cloud 42**, typically two releases behind. Bring the host
-fully current **before** running `setup.sh` (the Packages table and vendor repos
-are validated against the latest stable).
+Cloud images can ship behind current Fedora, so bring the host fully current
+**before** running `setup.sh` (the Packages table and vendor repos are validated
+against the latest stable). Hostinger currently provisions **Fedora Cloud 44** <!-- HOSTINGER_FEDORA: auto-checked weekly by refresh-release.yml -->.
+When that lags the latest stable, the release-upgrade below closes the gap; when it
+is already current the block reports "nothing to do", and the `dnf upgrade --refresh`
+folded into **Day 0** still freshens packages. Keep the release-upgrade for providers
+that lag, or for when Fedora ships the next release.
 
 Both blocks below run Fedora's official **DNF system-upgrade** flow, which is
 **built into dnf5** (Fedora ≥ 41 — there is no plugin to install). Fedora supports
@@ -112,6 +115,7 @@ and Atomic hosts work as documented secondary paths.
 The only manual steps. As root on a fresh Fedora Cloud instance:
 
 ```sh
+dnf -y upgrade --refresh                        # freshen ALL packages first (an already-on-44 host no-ops the release-upgrade above, so it gets current here)
 dnf -y install git
 useradd -m -G wheel core
 echo 'core ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/core
@@ -124,6 +128,11 @@ else
 fi
 passwd core      # optional, runs last — Cockpit/console password (SSH stays key-only)
 ```
+
+The first line freshens every package (an already-on-44 host no-ops the
+release-upgrade section above, so this is where it still gets fully current). If
+that upgrade pulls a new kernel or systemd and you want them live before
+bootstrapping, `reboot` first, then run the rest of the block.
 
 Why a non-root user first: rootless podman, distrobox, and Claude Code all
 assume one; `wheel` + the `NOPASSWD` drop-in let the unattended `su - core -c …`

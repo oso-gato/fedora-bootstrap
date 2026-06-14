@@ -1,14 +1,24 @@
 name: refresh-release
 
-# Keep the README's pinned Fedora release (Option 2 of "Fedora Cloud Update")
-# current. Weekly (Mondays 04:00 UTC), re-read Fedora's official releases.json,
-# rewrite the --releasever number on the line tagged "# fedora-stable", and
-# commit ONLY when it actually changed. The dynamic Option 1 block needs none
-# of this; this exists solely so the pinned copy never goes stale.
+# Weekly (Fridays 19:00 US Eastern / EST = Saturday 00:00 UTC) the repo refreshes two facts in the README and commits
+# only when something actually moved:
+#
+#   1. The pinned Fedora releasever (Option 2 of "Fedora Cloud Update", marked
+#      "# fedora-stable") — re-read from Fedora's official, Beta-safe releases.json.
+#   2. The Fedora Cloud version Hostinger currently provisions — read from Hostinger's
+#      public "available operating systems" help page (plain text; NO API token, so no
+#      secret — the authenticated /api/vps/v1/templates endpoint 401s and would need one).
+#      The job STATES whether that version is the latest stable and therefore whether a
+#      fresh/recovery instance would need a release upgrade before setup.sh, and keeps the
+#      README's "Hostinger currently provisions Fedora Cloud NN" line (marked
+#      "HOSTINGER_FEDORA") current. Best-effort: if Hostinger changes the page it reports
+#      "undetermined" and never fails the run.
 
 on:
   schedule:
-    - cron: "0 4 * * 1"
+    # Friday 19:00 America/New_York (EST, UTC-5) = Saturday 00:00 UTC.
+    # GitHub cron is UTC-only (no DST), so during US daylight time this lands at 20:00 ET.
+    - cron: "0 0 * * 6"
   workflow_dispatch:
 
 permissions:
@@ -21,8 +31,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Bump pinned Fedora stable from releases.json
+      - name: Refresh Fedora stable + check Hostinger Fedora Cloud version
         run: |
+          set -euo pipefail
+
+          # (1) Latest stable Fedora GA — bare-integer "version" only, so a "45 Beta" never wins.
           latest=$(curl -fsSL https://fedoraproject.org/releases.json \
                     | grep -oE '"version": *"[0-9]+"' | grep -oE '[0-9]+' | sort -rn | head -1)
           case "$latest" in
@@ -30,16 +43,46 @@ jobs:
           esac
           echo "Latest stable Fedora = $latest"
 
-          # Rewrite only the line carrying the "# fedora-stable" marker.
+          # (2) Hostinger's currently-provisioned Fedora Cloud version, from their public
+          # help page (plain text, no token). Best-effort — empty if the page changed/blocked.
+          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+          HOST_URL='https://www.hostinger.com/support/1583571-what-are-the-available-operating-systems-for-vps-at-hostinger/'
+          hv=$(curl -fsSL -m 30 -A "$UA" "$HOST_URL" 2>/dev/null \
+                 | sed 's/<[^>]*>//g' \
+                 | grep -oiE 'Fedora Cloud[[:space:]]*[0-9]+' \
+                 | grep -oE '[0-9]+' | sort -rn | head -1 || true)
+
+          # (3) State the verdict (Actions step summary + log).
+          {
+            echo "## Fedora release check ($(date -u +%Y-%m-%d))"
+            echo ""
+            echo "- Latest stable Fedora (releases.json): **$latest**"
+            if [ -n "$hv" ]; then
+              if [ "$hv" -ge "$latest" ]; then
+                echo "- Hostinger provisions **Fedora Cloud $hv** — **up to date**: a fresh/recovery instance is on the latest stable, so no release upgrade is needed before \`setup.sh\` (a plain \`dnf upgrade --refresh\` still freshens packages)."
+              else
+                gap=$(( latest - hv )); step=$(( gap > 2 ? 2 : gap ))
+                echo "- Hostinger provisions **Fedora Cloud $hv** — **$gap release(s) behind** the latest stable ($latest): a fresh/recovery instance would need the README \"Fedora Cloud Update\" system-upgrade (+$step per pass) before \`setup.sh\`."
+              fi
+            else
+              echo "- Hostinger version: **undetermined** (help page changed or unreachable) — README Hostinger line left unchanged this week."
+            fi
+          } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+
+          # (4) Keep the README current: pinned releasever ("# fedora-stable") always; the
+          # Hostinger line ("HOSTINGER_FEDORA") only when we confidently parsed a version.
           sed -i -E "/# fedora-stable/ s/(--releasever=)[0-9]+/\1${latest}/" README.md
+          if [ -n "$hv" ]; then
+            sed -i -E "/HOSTINGER_FEDORA/ s/(Fedora Cloud )[0-9]+/\1${hv}/" README.md
+          fi
 
           if git diff --quiet -- README.md; then
-            echo "README already pinned to Fedora ${latest} — nothing to do."
+            echo "README already current (Fedora stable=${latest}, Hostinger=${hv:-undetermined}) — nothing to commit."
             exit 0
           fi
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md
-          git commit -m "README: bump pinned Fedora stable to ${latest} (auto, weekly)"
+          git commit -m "README: Fedora stable=${latest}, Hostinger Fedora Cloud=${hv:-unchanged} (auto, weekly)"
           git push
