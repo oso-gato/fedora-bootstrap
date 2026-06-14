@@ -164,7 +164,7 @@ Cockpit's). There is **no blanket `NOPASSWD:ALL`**; instead a **scoped** passwor
 allowlist (`policy/sudoers.claudebox` → `/etc/sudoers.d/claudebox`) lets `core` run a few
 specific host commands without a password — currently an **exact-pinned** `tailscale serve`
 loopback proxy (`…http://127.0.0.1:9090`) plus read-only `tailscale status` (no wildcards, no
-`funnel`), so the in-box Claude Code can re-assert / read the tailnet exposure of what it deploys. Every *other* `sudo` needs the
+`funnel`), so the in-box Claude Code can re-assert / read the tailnet exposure of Cockpit (the one pinned loopback port; exposing any other port it deploys needs a new exact-pinned line you commit). Every *other* `sudo` needs the
 password: a human admin types it (the Fedora default), while the unattended in-box agent —
 which has no password — is OS-blocked. So after Day 0, `root` is retired and `core` runs
 everything; you `sudo` (with the password) for host changes, the agent only for its narrow
@@ -172,8 +172,8 @@ allowlist (and even then it asks you first). To let the agent do more, grow the 
 committing to `policy/sudoers.claudebox` — see **Privilege layers** and `policy/CLAUDE.md`.
 
 `setup.sh` runs **as root** and is idempotent. It splits into two layers: the **system**
-phase (`setup-host.sh`, as root — packages, the `core` user, system services, the ssh
-drop-in, tailscale, the tmux drop-in, and `core`'s user manager) and the **rootless** phase
+phase (`setup-host.sh`, as root — the hostname, packages, the `core` user, system services, the
+ssh drop-in, tailscale, the tmux drop-in, and `core`'s user manager) and the **rootless** phase
 (`setup-user.sh`, as `core` — podman socket, ssh keys, claudebox assemble, Claude policy,
 verify). It pauses at most once during the run: the tailscale auth link (once
 per host; open it, then re-run setup.sh). Claude Code is installed but NOT logged
@@ -258,7 +258,7 @@ declaratively in `distrobox.ini` and built on the first `setup.sh` run; rebuild 
 | Agent | **`claude-code`** → `/usr/bin/claude`, from Anthropic's official dnf repo | Claude Code CLI |
 | Host bridges | `CONTAINER_HOST` → host rootless **podman** socket; `host-spawn`; shims `systemctl`/`journalctl`/`loginctl`/`flatpak` → host | drive host podman + host commands from inside the box |
 | Dev tools | `git`, `gh`, `tmux`, `podman`, `socat`, `bubblewrap`, `fastfetch` | the agent's toolbox |
-| Policy (managed tier) | `/etc/claude-code/CLAUDE.md` + `managed-settings.json` | hard-deny host installs, `disableBypassPermissionsMode`, behavioural rules |
+| Policy (managed tier) | `/etc/claude-code/CLAUDE.md` + `managed-settings.json` | best-effort deny globs for host installs (defense-in-depth — the real gate is the sudo wall), `disableBypassPermissionsMode`, behavioural rules |
 
 **The nesting:** host → `claudebox` (the container) → Claude Code (the program in it). The box shares
 your `/home/core`, so the agent edits the same files you do; `podman` inside the box drives the **host**
@@ -464,6 +464,7 @@ ssh-add -l
 
 | File | Purpose |
 |---|---|
+| CLAUDE.md | repo-editing guide for Claude Code (read README first; Build Principles + Packages tables are binding; host-immutability doctrine; policy/* are the law stamped into the box) |
 | setup.sh | orchestrator (run as root): runs the system layer then the rootless layer in their correct identities |
 | setup-host.sh | **system layer**, as root — packages, /etc, system services, tailnet, creates `core` + its rootless prerequisites |
 | setup-user.sh | **rootless layer**, as `core` — user podman socket, ssh keys, claudebox, Claude policy, verify (no host privilege) |
@@ -472,9 +473,10 @@ ssh-add -l
 | claudebox-init.sh | claudebox host bridges (CONTAINER_HOST → host podman socket; systemctl/journalctl/loginctl/flatpak shims), applied as the box's own root post-assemble over the quote-safe `distrobox enter -- sudo` channel — avoids distrobox's init_hook quote traps |
 | cockpit-tailnet-serve.sh | installed to /usr/local/sbin; publishes Cockpit on the tailnet (`tailscale serve` :443 → loopback:9090, retrying until MagicDNS+HTTPS-certs are on) and writes `/etc/cockpit/cockpit.conf` with the node's MagicDNS Origin so the proxied login works |
 | policy/CLAUDE.md | Claude Code's binding law inside claudebox (mission: orchestrate, host immutable, source rules) |
-| policy/managed-settings.json | hard deny rules + bypass-permissions disabled — non-overridable |
+| policy/managed-settings.json | deny-rule guardrails (best-effort, defense-in-depth) + bypass-permissions disabled — non-overridable (managed tier) |
 | policy/sudoers.claudebox | scoped passwordless-sudo allowlist for the operating user (exact-pinned `tailscale serve` loopback proxy + read-only `status`; no wildcards, no `funnel`); grown by propose+commit; visudo-validated, stamped to /etc/sudoers.d/claudebox |
 | verify.sh | PASS/FAIL acceptance: sockets, box, claude, host-engine reach, shims, tailnet |
+| .github/workflows/refresh-release.yml | weekly CI (Fri): re-checks Fedora's latest stable + Hostinger's provisioned version, refreshes the README status line and the pinned releasever, committing only on change |
 
 ## Notes
 

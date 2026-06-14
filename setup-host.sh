@@ -52,15 +52,13 @@ elif [ -s /etc/yum.repos.d/tailscale.repo ]; then
 else
     rm -f "$new"; echo "ERROR: could not fetch tailscale.repo and no existing copy present" >&2; exit 1
 fi
+# install_weak_deps=False pins the host footprint to EXACTLY this list (Build Principle 4, host-minimal):
+# Cockpit's recommended add-in plugins are weak deps, so they are never pulled. The Packages table is the
+# allowlist of what IS installed; an add-in that isn't listed simply isn't there (do NOT drop this flag).
 dnf -y --setopt=install_weak_deps=False install \
     distrobox flatpak-session-helper podman tmux mosh openssh-server tailscale \
     cockpit cockpit-podman cockpit-files \
     cockpit-networkmanager cockpit-selinux
-# cockpit-storaged is intentionally NOT installed (host-minimal, Build Principle 4): little
-# use on a single-disk VPS, and it is the heaviest Cockpit add-on (udisks2 + libblockdev-* +
-# mdadm). Remove it + its now-orphaned deps if an earlier run installed it (dnf clears
-# no-longer-needed dependencies on removal by default).
-rpm -q cockpit-storaged >/dev/null 2>&1 && dnf -y remove cockpit-storaged || true
 
 PHASE "host 3/7 operating user '$U' + scoped passwordless-sudo allowlist"
 # Create the unprivileged user that OWNS the rootless layer (podman, distrobox, Claude
@@ -112,7 +110,7 @@ PHASE "host 4/7 system services"
 # on ALL interfaces — and with no firewall on Fedora Cloud that exposes Cockpit on the PUBLIC IP. The
 # empty `ListenStream=` first RESETS that default (systemd drop-ins append to list directives, so the
 # reset line is load-bearing — the documented Cockpit "TCP Port and Address" idiom), then we re-bind to
-# 127.0.0.1 only. The SOLE ingress then becomes the tailnet `tailscale serve` proxy (host 5/6), making
+# 127.0.0.1 only. The SOLE ingress then becomes the tailnet `tailscale serve` proxy (host 6/7), making
 # Cockpit genuinely tailnet-only. (Cockpit guide; systemd.socket(5). No FreeBind/semanage needed:
 # loopback is always up and the port stays 9090.)
 install -d /etc/systemd/system/cockpit.socket.d
@@ -189,7 +187,7 @@ if [ "$(ts_bool "${TS_EXIT_NODE:-}")" = true ]; then
     fi
 fi
 # Publish Cockpit on the tailnet AND make Cockpit work behind that proxy. cockpit.socket is now
-# loopback-only (host 3/6), so the ONLY way to reach Cockpit is this `tailscale serve` proxy (TLS at 443
+# loopback-only (host 4/7), so the ONLY way to reach Cockpit is this `tailscale serve` proxy (TLS at 443
 # on the tailnet -> http://127.0.0.1:9090). `serve --https` only works once the tailnet has MagicDNS +
 # HTTPS Certificates enabled, so the helper retries in the background and applies it the instant they're
 # on — no setup.sh re-run, nothing to forget. It also writes /etc/cockpit/cockpit.conf with the node's
