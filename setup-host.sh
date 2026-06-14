@@ -161,17 +161,29 @@ Description=Publish Cockpit on the tailnet (tailscale serve :443 -> 127.0.0.1:90
 Documentation=https://tailscale.com/kb/1242/tailscale-serve
 After=tailscaled.service cockpit.socket network-online.target
 Wants=tailscaled.service
+# The MANAGER owns the retry (idiomatic systemd), not a bash sleep-loop: the helper makes ONE attempt and
+# exits non-zero until MagicDNS + HTTPS Certificates are enabled; systemd reschedules it (Restart=on-failure
+# + RestartSec below). A clean exit 0 (serve applied) is not a failure, so it stops on first success.
+# StartLimitIntervalSec=0 lifts the start rate-limit so an open-ended wait (seconds to days) is never capped
+# — systemd.unit(5): a Restart= unit that hits the start limit "is not attempted to be restarted anymore".
+StartLimitIntervalSec=0
 
 [Service]
-Type=simple
+# Type=oneshot, no RemainAfterExit: a fire-once provisioning task that retries until it can complete, then
+# settles at inactive(dead) — the honest "work done" state (serve config persists in tailscaled regardless).
+Type=oneshot
 ExecStart=/usr/local/sbin/cockpit-tailnet-serve
-Restart=no
+Restart=on-failure
+RestartSec=60s
 
 [Install]
 WantedBy=multi-user.target
 EOS
 systemctl daemon-reload
-systemctl enable --now cockpit-tailnet-serve.service
+# enable for boot, and start NOW without blocking: a oneshot's start would otherwise wait for the (first,
+# expected-to-fail) attempt and return non-zero under `set -e`. --no-block kicks it off in the background.
+systemctl enable cockpit-tailnet-serve.service
+systemctl start --no-block cockpit-tailnet-serve.service
 
 PHASE "host 6/6 tmux drop-in + bring up '$U' rootless user manager"
 # System-wide login drop-in: ssh/mosh logins attach a per-device tmux session.
