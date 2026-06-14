@@ -146,7 +146,10 @@ hostname via `hostnamectl` and — the part that actually makes it stick on a cl
 doesn't revert the name to `srvNNN` on the next boot. It's purely the OS's local identity: Hostinger's
 external `srvNNN.hstgr.cloud` forward/reverse DNS is separate and unaffected (you still reach the box at
 that name or its tailnet name; you can't make `erebus.hstgr.cloud` resolve — that subdomain is
-Hostinger's to assign). No `/etc/hosts` edit is needed — Fedora's `nss-myhostname` resolves it.
+Hostinger's to assign). No `/etc/hosts` edit is needed — Fedora's `nss-myhostname` resolves it. The name
+survives reboots; only a Hostinger panel **rebuild/reinstall** (which wipes the disk) resets it to `srvNNN`
+until you re-run `setup.sh`. (Because the hostname is set before `tailscale up`, a fresh tailnet join also
+takes the name — so the box appears as `erebus.<tailnet>.ts.net`.)
 
 The first `dnf upgrade` freshens every package (an already-latest host no-ops the
 release-upgrade section above, so this is where it still gets current). If it pulls a new
