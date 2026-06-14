@@ -131,16 +131,34 @@ if [ "$(ts_bool "${TS_EXIT_NODE:-}")" = true ]; then
         firewall-cmd --permanent --add-masquerade && firewall-cmd --reload
     fi
 fi
-# Cockpit: tailnet-only (Fedora Cloud has no firewall — never expose 9090 publicly).
-# `serve --https` needs MagicDNS + HTTPS Certificates enabled ONCE per tailnet (admin
-# console: DNS > MagicDNS, then HTTPS Certificates); until then it would block on a
-# consent URL, so bound it with `timeout`. The JSON guard matches the real schema
-# {"TCP":{"443":...}}.
-if ! tailscale serve status --json 2>/dev/null | tr -d ' \n' | grep -q '"TCP":{[^}]*"443"'; then
-    timeout 15 tailscale serve --bg --https=443 http://127.0.0.1:9090 || \
-        echo ">> Cockpit not yet served over the tailnet. Enable MagicDNS + HTTPS Certificates" \
-             "in the Tailscale admin console (or complete the consent URL above), then re-run." >&2
-fi
+# Cockpit over the tailnet (tailnet-only — Fedora Cloud has no firewall; never expose 9090 publicly).
+# `tailscale serve --https=443` only works once the tailnet has MagicDNS + HTTPS Certificates enabled
+# (admin console: DNS > MagicDNS, then HTTPS Certificates) — until then it blocks on a consent URL.
+# Rather than make you re-run setup.sh after flipping those toggles, install a service that retries in
+# the background and applies serve the instant they're on. Serve config then PERSISTS in tailscaled
+# (survives reboots), so this is a one-time, self-healing step — no re-run, nothing to forget.
+tee /etc/systemd/system/cockpit-tailnet-serve.service >/dev/null <<'EOS'
+[Unit]
+Description=Publish Cockpit on the tailnet (tailscale serve :443 -> 127.0.0.1:9090)
+Documentation=https://tailscale.com/kb/1242/tailscale-serve
+After=tailscaled.service cockpit.socket network-online.target
+Wants=tailscaled.service
+
+[Service]
+# Type=simple so it never blocks boot; the loop runs in the background. `serve --https` blocks until
+# the tailnet has MagicDNS + HTTPS certs, so bound each attempt with `timeout` and retry. Re-asserting
+# an already-applied serve is idempotent (instant exit 0), so this also self-heals on every boot.
+Type=simple
+ExecStart=/usr/bin/bash -c 'until timeout 20 tailscale serve --bg --https=443 http://127.0.0.1:9090; do echo "cockpit-serve: tailnet not ready — enable MagicDNS + HTTPS Certificates in the admin console; retrying in 60s"; sleep 60; done'
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
+EOS
+systemctl daemon-reload
+# enable (re-asserts serve on every boot) + start now in the background (Type=simple => returns at once,
+# never hangs setup even if you haven't enabled the tailnet toggles yet).
+systemctl enable --now cockpit-tailnet-serve.service
 
 PHASE "host 6/6 tmux drop-in + bring up '$U' rootless user manager"
 # System-wide login drop-in: ssh/mosh logins attach a per-device tmux session.

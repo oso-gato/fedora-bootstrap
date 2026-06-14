@@ -10,7 +10,11 @@ ck "box: exists"                           "distrobox list | grep -q claudebox"
 ck "box: claude runs"                      "distrobox enter claudebox -- /usr/bin/claude --version"
 ck "box: policy present"                   "distrobox enter claudebox -- sh -c 'test -f /etc/claude-code/CLAUDE.md && test -f /etc/claude-code/managed-settings.json'"
 ck "box: podman reaches HOST engine"       "distrobox enter claudebox -- sh -lc 'podman info --format {{.Host.RemoteSocket.Exists}} | grep -q true'"
-ck "box: systemctl shim works (host)"      "distrobox enter claudebox -- /usr/local/bin/systemctl --user is-active podman.socket"
+# Probe the shim with a SYSTEM-level query (its real purpose): distrobox-host-exec rewrites the
+# *session* bus env to /run/host paths that don't resolve host-side, so `systemctl --user` over the
+# shim can't reach core's user bus — but system systemctl uses the system bus and works. tailscaled is
+# a system service we enabled, so this confirms the shim routes to the host's systemd.
+ck "box: systemctl shim works (host)"      "distrobox enter claudebox -- /usr/local/bin/systemctl is-active tailscaled"
 # Tolerate the browser-auth path: setup-host.sh joins the tailnet unattended (TS_AUTHKEY) OR leaves
 # the node in NeedsLogin until you click the consent link (it absorbs a missed window with `|| true`
 # and still exits 0). So PASS when the backend is Running (joined) OR pending auth — only a missing/
