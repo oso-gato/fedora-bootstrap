@@ -136,7 +136,9 @@ system services, the tailnet, and **creating the `core` user** — then drops to
 ROOTLESS phase (`setup-user.sh`). The repo is cloned by root into `/opt/fedora-bootstrap`
 because it is the host's provisioning definition (root-owned), and because `core` does not
 exist yet when the clone runs. To reuse a cloud-init user (often `fedora`) instead of
-creating `core`, set `BOOTSTRAP_USER=fedora` before `setup.sh`.
+creating `core`, set `BOOTSTRAP_USER=fedora` before `setup.sh`. To also give the VPS access to a
+home LAN or make it an exit node, set `TS_ACCEPT_ROUTES=1` / `TS_EXIT_NODE=1` — see **Tailscale
+routing** below (both are opt-in; a bare run leaves the tailnet posture untouched).
 
 The first `dnf upgrade` freshens every package (an already-latest host no-ops the
 release-upgrade section above, so this is where it still gets current). If it pulls a new
@@ -231,6 +233,46 @@ The only escalation is *inside* the box (the container's own root, not the host'
   designed out, not patched).
 - **Clean failure domains.** A system failure surfaces in the root phase; a rootless failure
   in the user phase — no SELinux denial masquerading as a user-script bug.
+
+## Tailscale routing — LAN access & exit node (optional)
+
+By default the host joins the tailnet as a plain node (Tailscale SSH + Cockpit over `serve`); it
+neither reaches remote subnets nor routes anyone's traffic. Two **env vars** passed to `setup.sh`
+turn routing on. They are **opt-in and non-destructive**: leave a var unset and that preference is
+left exactly as-is (a re-run never tears down a posture an earlier run set); pass `…=0` to withdraw
+one explicitly. Applied with `tailscale set` (not `up`), so they never disturb the `--ssh` join.
+
+```sh
+# reach a home LAN advertised by a remote subnet router, AND be an exit node:
+TS_ACCEPT_ROUTES=1 TS_EXIT_NODE=1 /opt/fedora-bootstrap/setup.sh < /dev/null
+```
+
+| Env var | Effect | Official basis |
+|---|---|---|
+| `TS_ACCEPT_ROUTES=1` | `tailscale set --accept-routes=true` — the host **and the host-netns containers** (claudebox runs with `--network host`) accept subnet routes a remote router advertises, so they reach those LAN devices. Off by default on Linux. | [kb/1019](https://tailscale.com/kb/1019/subnets) |
+| `TS_EXIT_NODE=1` | `tailscale set --advertise-exit-node=true` **plus** IP forwarding (`net.ipv4.ip_forward` + `net.ipv6.conf.all.forwarding` → `/etc/sysctl.d/99-tailscale.conf`) **plus** a firewalld masquerade *only if firewalld is running* (Fedora Cloud Base ships none, so normally a no-op). | [kb/1103](https://tailscale.com/kb/1103/exit-nodes) |
+
+**The script does only the host-node side.** Each capability also needs one-time actions the host
+cannot perform for you:
+
+| Goal | One-time action | Where |
+|---|---|---|
+| Reach the LAN | Approve the advertised route | admin console → Machines → *the router* → approve its CIDR |
+| Reach the LAN | Ensure IP forwarding is on **the advertising router** (not this VPS) | the router host |
+| Exit node | Approve the exit node | admin console → Machines → *this VPS* → Edit route settings → ✓ Use as exit node |
+| Exit node | Opt in per device | each device: `tailscale set --exit-node=<vps> --exit-node-allow-lan-access` |
+
+**Containers as their own tailnet devices.** A service container that should be reachable by its own
+name runs the official `tailscale/tailscale` image in **userspace mode** (rootless-friendly, the
+image default) with `TS_AUTHKEY` + `TS_HOSTNAME` + a persistent `TS_STATE_DIR` volume; it
+self-registers as its own node with its own MagicDNS name. Nothing is required on the host for this,
+and you do **not** advertise the container subnet from the VPS.
+
+> **Security — scope the agent's reach.** Once the VPS accepts routes, the in-box Claude Code can
+> send packets to your LAN; `--accept-routes` itself imposes no limit. Contain it in the **tailnet
+> policy file** ([grants/ACLs](https://tailscale.com/kb/1393/access-control)): tag the VPS
+> (`tag:vps`) and grant it only specific LAN hosts/ports — never the bare `/24` — and scope which
+> devices may use the exit node. Optional for *function*, recommended as posture.
 
 ## macOS — log in via the 1Password SSH agent
 
@@ -335,7 +377,8 @@ ssh-add -l
 | setup-host.sh | **system layer**, as root — packages, /etc, system services, tailnet, creates `core` + its rootless prerequisites |
 | setup-user.sh | **rootless layer**, as `core` — user podman socket, ssh keys, claudebox, Claude policy, verify (no host privilege) |
 | sync-authorized-keys.sh | authorizes `core`'s **allowlisted** SSH keys from `github.com/<user>.keys` (fingerprint allowlist = the access policy; other keys ignored), tags each `environment="LOGIN_KEY=<device>"`; defensive (never wipes keys on a failed fetch) |
-| distrobox.ini | claudebox, declaratively (image pin, packages, host bridges) |
+| distrobox.ini | claudebox, declaratively (image pin, pre-init Anthropic repo, packages) |
+| claudebox-init.sh | claudebox host bridges (CONTAINER_HOST → host podman socket; systemctl/journalctl/loginctl/flatpak shims), applied as the box's own root post-assemble over the quote-safe `distrobox enter -- sudo` channel — avoids distrobox's init_hook quote traps |
 | policy/CLAUDE.md | Claude Code's binding law inside claudebox (mission: orchestrate, host immutable, source rules) |
 | policy/managed-settings.json | hard deny rules + bypass-permissions disabled — non-overridable |
 | policy/sudoers.claudebox | scoped passwordless-sudo allowlist for the operating user (exact-pinned `tailscale serve` loopback proxy + read-only `status`; no wildcards, no `funnel`); grown by propose+commit; visudo-validated, stamped to /etc/sudoers.d/claudebox |
