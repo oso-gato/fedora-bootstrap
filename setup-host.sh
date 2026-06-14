@@ -67,7 +67,23 @@ else
 fi
 
 PHASE "host 3/6 system services"
+# Bind cockpit.socket to LOOPBACK *before* it ever starts. Its vendor default is `ListenStream=9090`
+# on ALL interfaces — and with no firewall on Fedora Cloud that exposes Cockpit on the PUBLIC IP. The
+# empty `ListenStream=` first RESETS that default (systemd drop-ins append to list directives, so the
+# reset line is load-bearing — the documented Cockpit "TCP Port and Address" idiom), then we re-bind to
+# 127.0.0.1 only. The SOLE ingress then becomes the tailnet `tailscale serve` proxy (host 5/6), making
+# Cockpit genuinely tailnet-only. (Cockpit guide; systemd.socket(5). No FreeBind/semanage needed:
+# loopback is always up and the port stays 9090.)
+install -d /etc/systemd/system/cockpit.socket.d
+tee /etc/systemd/system/cockpit.socket.d/listen.conf >/dev/null <<'EOS'
+[Socket]
+ListenStream=
+ListenStream=127.0.0.1:9090
+EOS
+systemctl daemon-reload
 systemctl enable --now sshd cockpit.socket tailscaled
+# A running socket keeps its old listener until restarted, so re-assert the loopback bind on re-runs too.
+systemctl restart cockpit.socket
 
 PHASE "host 4/6 ssh: permit only LOGIN_KEY from authorized_keys"
 # Whitelist ONLY the LOGIN_KEY variable (never the unsafe blanket `yes`, which would also
@@ -131,33 +147,30 @@ if [ "$(ts_bool "${TS_EXIT_NODE:-}")" = true ]; then
         firewall-cmd --permanent --add-masquerade && firewall-cmd --reload
     fi
 fi
-# Cockpit over the tailnet (tailnet-only — Fedora Cloud has no firewall; never expose 9090 publicly).
-# `tailscale serve --https=443` only works once the tailnet has MagicDNS + HTTPS Certificates enabled
-# (admin console: DNS > MagicDNS, then HTTPS Certificates) — until then it blocks on a consent URL.
-# Rather than make you re-run setup.sh after flipping those toggles, install a service that retries in
-# the background and applies serve the instant they're on. Serve config then PERSISTS in tailscaled
-# (survives reboots), so this is a one-time, self-healing step — no re-run, nothing to forget.
+# Publish Cockpit on the tailnet AND make Cockpit work behind that proxy. cockpit.socket is now
+# loopback-only (host 3/6), so the ONLY way to reach Cockpit is this `tailscale serve` proxy (TLS at 443
+# on the tailnet -> http://127.0.0.1:9090). `serve --https` only works once the tailnet has MagicDNS +
+# HTTPS Certificates enabled, so the helper retries in the background and applies it the instant they're
+# on — no setup.sh re-run, nothing to forget. It also writes /etc/cockpit/cockpit.conf with the node's
+# MagicDNS Origin (required, or the login WebSocket is rejected cross-origin), which is only knowable
+# once the node is named — hence done from the helper, post-serve. Type=simple => never blocks boot.
+install -m0755 "$HERE/cockpit-tailnet-serve.sh" /usr/local/sbin/cockpit-tailnet-serve
 tee /etc/systemd/system/cockpit-tailnet-serve.service >/dev/null <<'EOS'
 [Unit]
-Description=Publish Cockpit on the tailnet (tailscale serve :443 -> 127.0.0.1:9090)
+Description=Publish Cockpit on the tailnet (tailscale serve :443 -> 127.0.0.1:9090) + matching cockpit.conf
 Documentation=https://tailscale.com/kb/1242/tailscale-serve
 After=tailscaled.service cockpit.socket network-online.target
 Wants=tailscaled.service
 
 [Service]
-# Type=simple so it never blocks boot; the loop runs in the background. `serve --https` blocks until
-# the tailnet has MagicDNS + HTTPS certs, so bound each attempt with `timeout` and retry. Re-asserting
-# an already-applied serve is idempotent (instant exit 0), so this also self-heals on every boot.
 Type=simple
-ExecStart=/usr/bin/bash -c 'until timeout 20 tailscale serve --bg --https=443 http://127.0.0.1:9090; do echo "cockpit-serve: tailnet not ready — enable MagicDNS + HTTPS Certificates in the admin console; retrying in 60s"; sleep 60; done'
+ExecStart=/usr/local/sbin/cockpit-tailnet-serve
 Restart=no
 
 [Install]
 WantedBy=multi-user.target
 EOS
 systemctl daemon-reload
-# enable (re-asserts serve on every boot) + start now in the background (Type=simple => returns at once,
-# never hangs setup even if you haven't enabled the tailnet toggles yet).
 systemctl enable --now cockpit-tailnet-serve.service
 
 PHASE "host 6/6 tmux drop-in + bring up '$U' rootless user manager"
