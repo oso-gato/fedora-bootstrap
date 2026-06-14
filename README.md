@@ -182,6 +182,83 @@ each login's session after that tag, so every device lands in its own persistent
 its admin/`sudo` + Cockpit/console password — a password-gated `wheel` escalation for a human
 admin. SSH stays key-only regardless.
 
+## Using the host — get in and work
+
+**Prerequisite — be on the tailnet.** Everything below (SSH, Cockpit, Mosh) is reached over your
+**tailnet**, not the public IP. Run Tailscale on your client and join the same tailnet; the VPS appears
+as `<vps>.<tailnet>.ts.net`.
+
+**1. Get in — SSH (or Mosh)**
+
+```sh
+ssh core@<vps>.<tailnet>.ts.net      # or the 100.x tailnet IP
+```
+
+- **Key-only.** Your public keys come from `github.com/oso-gato.keys` into `core`'s `authorized_keys`
+  (the 1Password agent answers — see **macOS** below). Tailscale SSH is also on, so from a tailnet
+  device the connection is authed by Tailscale per your ACL.
+- You land **straight into a tmux session** named after the key that authenticated (`oSo`/`Alchemist`/
+  `Fatima`).
+- `passwd core` (Day 0) set the password used for **sudo** and **Cockpit**. SSH stays key-only.
+
+**2. tmux — persistent, one session per device.** Every interactive login auto-attaches a tmux session
+named after your device key (unkeyed → `main`). Sessions **persist across disconnects** and outlive box
+rebuilds / tailscaled restarts. Detach (leave it running): `Ctrl-b` then `d`; reattach by logging in
+again, or `tmux attach -t <name>`. All device sessions share one server, so `tmux attach -t oSo` hops
+into that device's session.
+
+**3. Mosh — resilient connections.** `mosh` survives roaming, sleep, and flaky links. Install it on your
+client (`brew install mosh`), then `mosh core@<vps>.<tailnet>.ts.net`. Mosh runs your login shell, so it
+also drops you into your tmux session — **mosh + tmux = double resilience** (mosh rides out network
+changes; tmux rides out everything else).
+
+**4. Claude Code — just `claude`.**
+
+```sh
+claude          # enters claudebox, runs Claude Code inside it, in your current directory
+```
+
+First run prints a one-time OAuth URL (open in your browser, paste the code back). Everything runs
+**inside `claudebox`** — see **Inside claudebox** below. (`distrobox enter claudebox` for a box shell.)
+
+**5. Cockpit — the web console (tailnet-only).** A browser dashboard for the host: Podman containers,
+files, networking, SELinux, logs, terminal.
+
+- **Reachable only over the tailnet** — `cockpit.socket` is bound to loopback, so the public `:9090` is
+  closed; the only ingress is the tailnet `tailscale serve` proxy. You must be connected to Tailscale.
+- **One-time tailnet setup:** in the admin console enable **DNS → MagicDNS** and **HTTPS Certificates**.
+  Within ~60s the host auto-publishes Cockpit (no re-run, nothing to forget).
+- **Open** `https://<vps>.<tailnet>.ts.net/` from a tailnet device; **log in** as `core` with your
+  `passwd core` password.
+
+## Inside claudebox — what the agent has
+
+`claudebox` is the **Distrobox container** where Claude Code and its tools live. **Nothing below is
+installed on the host** — the host carries only the one-line `claude` wrapper. The box is defined
+declaratively in `distrobox.ini` and built on the first `setup.sh` run; rebuild it anytime by re-running
+`setup.sh`.
+
+| Layer | What | Why |
+|---|---|---|
+| Base image | `quay.io/fedora/fedora-toolbox:44` (pinned) | Fedora 44 userspace |
+| Agent | **`claude-code`** → `/usr/bin/claude`, from Anthropic's official dnf repo | Claude Code CLI |
+| Host bridges | `CONTAINER_HOST` → host rootless **podman** socket; `host-spawn`; shims `systemctl`/`journalctl`/`loginctl`/`flatpak` → host | drive host podman + host commands from inside the box |
+| Dev tools | `git`, `gh`, `tmux`, `podman`, `socat`, `bubblewrap`, `fastfetch` | the agent's toolbox |
+| Policy (managed tier) | `/etc/claude-code/CLAUDE.md` + `managed-settings.json` | hard-deny host installs, `disableBypassPermissionsMode`, behavioural rules |
+
+**The nesting:** host → `claudebox` (the container) → Claude Code (the program in it). The box shares
+your `/home/core`, so the agent edits the same files you do; `podman` inside the box drives the **host**
+engine via `CONTAINER_HOST`, so containers it builds are real host containers, not nested. The agent's
+*only* host privilege is the scoped `tailscale serve`/`status` sudo allowlist — every other host change
+is OS-blocked by the kernel.
+
+You do **not** enter the box to use Claude. `setup.sh` installs a wrapper at `~/.local/bin/claude` that
+runs `distrobox enter claudebox -- bash -lc 'exec /usr/bin/claude "$@"'` — so a bare `claude` enters the
+box, sources its login profile (so `CONTAINER_HOST` + the shims are set), and execs the real CLI
+connected to your terminal, in your current directory. First run is a one-time OAuth (or `distrobox
+enter claudebox -- claude setup-token` for a headless token, then export `CLAUDE_CODE_OAUTH_TOKEN` — a
+secret, never commit it).
+
 ## Privilege layers — what runs as root, what runs as the user
 
 Provisioning is split into two layers by **identity**, matching Fedora/Red Hat's
@@ -379,6 +456,7 @@ ssh-add -l
 | sync-authorized-keys.sh | authorizes `core`'s **allowlisted** SSH keys from `github.com/<user>.keys` (fingerprint allowlist = the access policy; other keys ignored), tags each `environment="LOGIN_KEY=<device>"`; defensive (never wipes keys on a failed fetch) |
 | distrobox.ini | claudebox, declaratively (image pin, pre-init Anthropic repo, packages) |
 | claudebox-init.sh | claudebox host bridges (CONTAINER_HOST → host podman socket; systemctl/journalctl/loginctl/flatpak shims), applied as the box's own root post-assemble over the quote-safe `distrobox enter -- sudo` channel — avoids distrobox's init_hook quote traps |
+| cockpit-tailnet-serve.sh | installed to /usr/local/sbin; publishes Cockpit on the tailnet (`tailscale serve` :443 → loopback:9090, retrying until MagicDNS+HTTPS-certs are on) and writes `/etc/cockpit/cockpit.conf` with the node's MagicDNS Origin so the proxied login works |
 | policy/CLAUDE.md | Claude Code's binding law inside claudebox (mission: orchestrate, host immutable, source rules) |
 | policy/managed-settings.json | hard deny rules + bypass-permissions disabled — non-overridable |
 | policy/sudoers.claudebox | scoped passwordless-sudo allowlist for the operating user (exact-pinned `tailscale serve` loopback proxy + read-only `status`; no wildcards, no `funnel`); grown by propose+commit; visudo-validated, stamped to /etc/sudoers.d/claudebox |
