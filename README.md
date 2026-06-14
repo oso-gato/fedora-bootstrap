@@ -115,11 +115,11 @@ The only manual steps. As root on a fresh Fedora Cloud instance:
 dnf -y install git
 useradd -m -G wheel core
 echo 'core ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/core
-if su - core -c 'git clone https://github.com/oso-gato/fedora-bootstrap && cd fedora-bootstrap && ./setup.sh'; then
+if su - core -c 'git clone https://github.com/oso-gato/fedora-bootstrap && cd fedora-bootstrap && ./setup.sh' < /dev/null; then
   echo 'setup.sh: all phases PASS.'
 else
   echo '*** setup.sh did NOT finish all-PASS. If it printed a login.tailscale.com link,'
-  echo '*** open it once, then re-run:  su - core -c "cd ~/fedora-bootstrap && ./setup.sh"'
+  echo '*** open it once, then re-run:  su - core -c "cd ~/fedora-bootstrap && ./setup.sh" < /dev/null'
   echo '*** Otherwise fix the cause shown above and re-run the same command.'
 fi
 passwd core      # optional, runs last — Cockpit/console password (SSH stays key-only)

@@ -73,7 +73,7 @@ fi
 # `serve --https` needs HTTPS Certificates + MagicDNS enabled ONCE per tailnet (admin
 # console: DNS > MagicDNS, then HTTPS Certificates). Until then serve prints a consent
 # URL to stdout and would BLOCK, so bound it with `timeout` and keep the run moving.
-if ! sudo tailscale serve status --json 2>/dev/null | grep -q '"tcp:443"'; then
+if ! sudo tailscale serve status --json 2>/dev/null | tr -d ' \n' | grep -q '"TCP":{[^}]*"443"'; then
     sudo timeout 15 tailscale serve --bg --https=443 http://127.0.0.1:9090 || \
         echo ">> Cockpit not yet served over the tailnet. Enable MagicDNS + HTTPS Certificates" \
              "in the Tailscale admin console (or complete the consent URL printed above), then re-run setup.sh."
