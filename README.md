@@ -139,9 +139,9 @@ exist yet when the clone runs. To name the operating user something other than `
 `BOOTSTRAP_USER=<name>` before `setup.sh` — it's created fresh (or reused if it already exists) as a
 password-gated `wheel` admin. Either way the bootstrap **strips cloud-init's default-user blanket
 `NOPASSWD:ALL`** (`/etc/sudoers.d/90-cloud-init-users`), so reusing or colliding with a cloud image's
-default user (e.g. `fedora`) can never smuggle passwordless root past the scoped-sudo model. To also give the VPS access to a
-home LAN or make it an exit node, set `TS_ACCEPT_ROUTES=1` / `TS_EXIT_NODE=1` — see **Tailscale
-routing** below (both are opt-in; a bare run leaves the tailnet posture untouched).
+default user (e.g. `fedora`) can never smuggle passwordless root past the scoped-sudo model. The VPS comes
+up as an **exit node** and **accepting LAN routes by default** — set `TS_EXIT_NODE=0` / `TS_ACCEPT_ROUTES=0`
+to turn either off — see **Tailscale routing** below (each still needs a one-time admin-console approval).
 
 The host **names itself `erebus`** (override with `BOOTSTRAP_HOSTNAME=<name>`). This sets the static
 hostname via `hostnamectl` and — the part that actually makes it stick on a cloud image — installs a
@@ -325,23 +325,22 @@ The only escalation is *inside* the box (the container's own root, not the host'
 - **Clean failure domains.** A system failure surfaces in the root phase; a rootless failure
   in the user phase — no SELinux denial masquerading as a user-script bug.
 
-## Tailscale routing — LAN access & exit node (optional)
+## Tailscale routing — LAN access & exit node
 
-By default the host joins the tailnet as a plain node (Tailscale SSH + Cockpit over `serve`); it
-neither reaches remote subnets nor routes anyone's traffic. Two **env vars** passed to `setup.sh`
-turn routing on. They are **opt-in and non-destructive**: leave a var unset and that preference is
-left exactly as-is (a re-run never tears down a posture an earlier run set); pass `…=0` to withdraw
-one explicitly. Applied with `tailscale set` (not `up`), so they never disturb the `--ssh` join.
+**On by default.** The host comes up advertising itself as an **exit node** and **accepting** the subnet
+routes your LAN router advertises — so a bare `setup.sh` run already does the node side. Turn either off per
+run with `TS_EXIT_NODE=0` / `TS_ACCEPT_ROUTES=0`. Applied with `tailscale set` (not `up`), so it never
+disturbs the `--ssh` join and re-runs are idempotent.
 
 ```sh
-# reach a home LAN advertised by a remote subnet router, AND be an exit node:
-TS_ACCEPT_ROUTES=1 TS_EXIT_NODE=1 /opt/fedora-bootstrap/setup.sh < /dev/null
+# default = exit node + accept-routes ON. To opt OUT of either:
+TS_EXIT_NODE=0 TS_ACCEPT_ROUTES=0 /opt/fedora-bootstrap/setup.sh < /dev/null
 ```
 
-| Env var | Effect | Official basis |
-|---|---|---|
-| `TS_ACCEPT_ROUTES=1` | `tailscale set --accept-routes=true` — the host **and the host-netns containers** (claudebox runs with `--network host`) accept subnet routes a remote router advertises, so they reach those LAN devices. Off by default on Linux. | [kb/1019](https://tailscale.com/kb/1019/subnets) |
-| `TS_EXIT_NODE=1` | `tailscale set --advertise-exit-node=true` **plus** IP forwarding (`net.ipv4.ip_forward` + `net.ipv6.conf.all.forwarding` → `/etc/sysctl.d/99-tailscale.conf`) **plus** a firewalld masquerade *only if firewalld is running* (Fedora Cloud Base ships none, so normally a no-op). | [kb/1103](https://tailscale.com/kb/1103/exit-nodes) |
+| Default | What it does | Disable with | Official basis |
+|---|---|---|---|
+| accept-routes **ON** | `tailscale set --accept-routes=true` — the host **and the host-netns containers** (claudebox runs with `--network host`, so the in-box agent too) accept subnet routes a remote router advertises, reaching those LAN devices. | `TS_ACCEPT_ROUTES=0` | [kb/1019](https://tailscale.com/kb/1019/subnets) |
+| advertise-exit-node **ON** | `tailscale set --advertise-exit-node=true` **plus** IP forwarding (`net.ipv4.ip_forward` + `net.ipv6.conf.all.forwarding` → `/etc/sysctl.d/99-tailscale.conf`) **plus** a firewalld masquerade *only if firewalld is running* (Fedora Cloud Base ships none, so normally a no-op). | `TS_EXIT_NODE=0` | [kb/1103](https://tailscale.com/kb/1103/exit-nodes) |
 
 **The script does only the host-node side.** Each capability also needs one-time actions the host
 cannot perform for you:
@@ -359,11 +358,12 @@ image default) with `TS_AUTHKEY` + `TS_HOSTNAME` + a persistent `TS_STATE_DIR` v
 self-registers as its own node with its own MagicDNS name. Nothing is required on the host for this,
 and you do **not** advertise the container subnet from the VPS.
 
-> **Security — scope the agent's reach.** Once the VPS accepts routes, the in-box Claude Code can
-> send packets to your LAN; `--accept-routes` itself imposes no limit. Contain it in the **tailnet
-> policy file** ([grants/ACLs](https://tailscale.com/kb/1393/access-control)): tag the VPS
-> (`tag:vps`) and grant it only specific LAN hosts/ports — never the bare `/24` — and scope which
-> devices may use the exit node. Optional for *function*, recommended as posture.
+> **Security — scope the agent's reach.** Because accept-routes is now **ON by default**, the in-box
+> Claude Code **can send packets to your LAN out of the box**; `--accept-routes` itself imposes no limit.
+> Contain it in the **tailnet policy file** ([grants/ACLs](https://tailscale.com/kb/1393/access-control)):
+> tag the VPS (`tag:vps`) and grant it only specific LAN hosts/ports — never the bare `/24` — and scope
+> which devices may use the exit node. With routing on by default this is the **recommended hardening**,
+> not optional. (Or set `TS_ACCEPT_ROUTES=0` if the agent shouldn't reach the LAN at all.)
 
 ## macOS — log in via the 1Password SSH agent
 

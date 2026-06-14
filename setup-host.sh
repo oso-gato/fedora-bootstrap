@@ -159,30 +159,20 @@ if ! tailscale status >/dev/null 2>&1; then
         tailscale up --ssh --timeout=5m || true
     fi
 fi
-# Optional routing posture — env-gated. UNSET a var => leave that pref UNTOUCHED (a bare run changes
-# nothing and never tears down a posture an earlier run set); set it to enable/disable explicitly:
-#   TS_ACCEPT_ROUTES=1  this VPS accepts the subnet routes your LAN's subnet router advertises, so the
-#                       host AND the host-netns containers (claudebox shares the host netns via
-#                       `--network host`) reach LAN devices. --accept-routes is OFF by default on Linux
-#                       (the join's "peers are advertising routes" notice). Still requires that route to
-#                       be APPROVED in the admin console (Machines > that router > approve) or autoApprovers.
-#   TS_EXIT_NODE=1      advertise this VPS as an exit node so your other Tailscale devices can egress
-#                       through its public IP. Adds the IP forwarding below (Tailscale kb/1103) and needs
-#                       approval in the admin console (Machines > this VPS > Edit route settings).
-#   (set either to 0 to explicitly WITHDRAW it; leaving it unset preserves whatever is current.)
-# Uses `tailscale set` (not `up`): it changes ONLY the named prefs and persists, so it never disturbs the
-# --ssh applied at join, and re-runs are idempotent. We emit a flag only for a var that is actually set,
-# so a redeploy that forgets the vars does NOT silently revert your routing.
-ts_bool(){ case "${1:-}" in 1|true|TRUE|yes|on) echo true;; *) echo false;; esac; }
-ts_set_args=()
-if [ -n "${TS_ACCEPT_ROUTES:-}" ]; then ts_set_args+=( --accept-routes="$(ts_bool "$TS_ACCEPT_ROUTES")" ); fi
-if [ -n "${TS_EXIT_NODE:-}" ];     then ts_set_args+=( --advertise-exit-node="$(ts_bool "$TS_EXIT_NODE")" ); fi
-if [ "${#ts_set_args[@]}" -gt 0 ]; then
-    tailscale set "${ts_set_args[@]}" \
-        || echo ">> 'tailscale set' deferred (node not logged in yet) — re-run setup.sh with the same" \
-                "TS_* vars AFTER completing the browser-auth link so these prefs actually land." >&2
-fi
-if [ "$(ts_bool "${TS_EXIT_NODE:-}")" = true ]; then
+# Routing posture — ON BY DEFAULT for this deployment: this box is meant to BE an exit node and to reach the
+# home LAN. Override per run with TS_EXIT_NODE=0 and/or TS_ACCEPT_ROUTES=0 to turn either off.
+#   accept-routes        : the VPS (and the host-netns containers — claudebox shares the host netns via
+#                          `--network host`) accept the subnet routes your LAN router advertises, so they reach
+#                          LAN devices. (Consequence: the in-box agent can reach your LAN too.)
+#   advertise-exit-node  : the VPS offers itself as an exit node so your devices can egress via its public IP
+#                          (needs the IP forwarding below — Tailscale kb/1103).
+# Applied with `tailscale set` (not `up`): changes only these prefs + persists, never disturbing the --ssh from
+# join. Advertising/accepting is NOT enough by itself — one-time admin-console approvals still apply (below).
+ts_bool(){ case "${1:-}" in 0|false|FALSE|no|off) echo false;; *) echo true;; esac; }   # default TRUE; only 0/false/off => off
+ACCEPT_ROUTES="$(ts_bool "${TS_ACCEPT_ROUTES:-}")"; ADVERTISE_EXIT="$(ts_bool "${TS_EXIT_NODE:-}")"
+tailscale set --accept-routes="$ACCEPT_ROUTES" --advertise-exit-node="$ADVERTISE_EXIT" \
+    || echo ">> 'tailscale set' deferred (node not logged in yet) — re-run setup.sh after completing the browser-auth link so the routing prefs land." >&2
+if [ "$ADVERTISE_EXIT" = true ]; then
     # An exit node FORWARDS packets; the kernel only does that with IP forwarding on (Tailscale kb/1103;
     # `tailscale up --advertise-exit-node` itself warns when it is off). Write it in place to the
     # system-owned dir (correct SELinux context) and apply now. Idempotent.
@@ -194,15 +184,9 @@ if [ "$(ts_bool "${TS_EXIT_NODE:-}")" = true ]; then
     if systemctl is-active --quiet firewalld; then
         firewall-cmd --permanent --add-masquerade && firewall-cmd --reload
     fi
-fi
-# Make the opt-in DISCOVERABLE: if this node isn't advertising an exit node, say so plainly — otherwise the
-# admin console shows "Use as exit node" GREYED OUT (the node never offered one) and it looks broken. This is
-# the #1 point of confusion; surface the exact one-command fix right here in the run output.
-if [ "$(ts_bool "${TS_EXIT_NODE:-}")" != true ]; then
-    echo ">> NOTE: exit node + accept-routes are OFF (the opt-in default), so this node is NOT advertising an"
-    echo ">> exit node — 'Use as exit node' will stay GREYED OUT in the admin console (nothing to approve)."
-    echo ">> To enable, run on THIS node:  tailscale set --advertise-exit-node --accept-routes  (then approve"
-    echo ">> it in the console), or redeploy with:  TS_ACCEPT_ROUTES=1 TS_EXIT_NODE=1 /opt/fedora-bootstrap/setup.sh"
+    echo ">> Tailscale: advertising as an exit node (default ON). One-time admin-console step remains —"
+    echo ">> Machines > this VPS > Edit route settings > check 'Use as exit node'. Then on each client:"
+    echo ">>   tailscale set --exit-node=<this-VPS> --exit-node-allow-lan-access"
 fi
 # Publish Cockpit on the tailnet AND make Cockpit work behind that proxy. cockpit.socket is now
 # loopback-only (host 4/7), so the ONLY way to reach Cockpit is this `tailscale serve` proxy (TLS at 443
