@@ -52,11 +52,15 @@ elif [ -s /etc/yum.repos.d/tailscale.repo ]; then
 else
     rm -f "$new"; echo "ERROR: could not fetch tailscale.repo and no existing copy present" >&2; exit 1
 fi
-# Pre-import Tailscale's signing key from its official URL so dnf does NOT print the harmless, transient
-# "repomd.xml GPG signature: signing key not found" on first contact — dnf would import this very key (the
-# repo's own gpgkey=) on its own at install time; doing it up front just keeps the log clean. Same trust
-# model (same official HTTPS URL), idempotent, and best-effort: if the fetch fails, dnf still auto-imports.
-curl -fsSL https://pkgs.tailscale.com/stable/fedora/repo.gpg | rpm --import /dev/stdin 2>/dev/null || true
+# Pre-warm Tailscale's repo metadata so the VISIBLE install below does NOT print the harmless, transient
+# "repomd.xml GPG signature verification error: Signing key not found" first-contact notice. dnf5 verifies
+# repomd against a PER-REPO keyring that is SEPARATE from rpm's package keyring (per dnf5.conf repo_gpgcheck:
+# "OpenPGP keys for this check are stored separately ... and ... separately for each repository") — so
+# `rpm --import` does NOT help; only dnf can populate it. Triggering that first-contact import here via a
+# scoped `makecache`, with -y to auto-accept and all output suppressed, caches the key in dnf5's per-repo
+# store; the install then finds it already trusted and runs clean. Best-effort (|| true): on failure the
+# install just shows the notice as before — repomd is still verified and gpgcheck=1 still verifies packages.
+dnf -y -q --repo=tailscale-stable makecache >/dev/null 2>&1 || true
 # install_weak_deps=False pins the host footprint to EXACTLY this list (Build Principle 4, host-minimal):
 # Cockpit's recommended add-in plugins are weak deps, so they are never pulled. The Packages table is the
 # allowlist of what IS installed; an add-in that isn't listed simply isn't there (do NOT drop this flag).

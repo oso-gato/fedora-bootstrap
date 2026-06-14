@@ -22,10 +22,12 @@ printf 'export CONTAINER_HOST=unix:///run/user/%s/podman/podman.sock\n' "$host_u
     > /etc/profile.d/10-host-podman.sh
 chmod 0644 /etc/profile.d/10-host-podman.sh
 
-# systemctl/journalctl/loginctl (systemd) and flatpak have no meaning inside the box; shim them out
-# to the host via distrobox-host-exec so the agent manages the real host services.
-for c in systemctl journalctl loginctl flatpak; do
-    ln -sf /usr/bin/distrobox-host-exec "/usr/local/bin/$c"
-done
+# NOTE: deliberately NO systemctl/journalctl/loginctl/flatpak host-exec shims. They route through
+# host-spawn, which calls org.freedesktop.Flatpak.Development.HostCommand on the session bus — a method
+# only flatpak-session-helper provides, and its unit is PartOf=graphical-session.target, which never
+# starts on a headless, linger-only server. So those shims never functioned here. And by policy the host
+# is immutable: the agent drives host containers via CONTAINER_HOST (above), not host systemd, and real
+# host changes go through propose-and-commit (a human re-runs setup.sh as root). CONTAINER_HOST is the
+# one host bridge, and it is socket-based (not host-spawn), so it works headless.
 
-echo "claudebox bridges: CONTAINER_HOST -> host uid ${host_uid}; shims systemctl/journalctl/loginctl/flatpak."
+echo "claudebox bridge: CONTAINER_HOST -> host rootless podman socket (uid ${host_uid})."

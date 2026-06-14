@@ -256,7 +256,7 @@ declaratively in `distrobox.ini` and built on the first `setup.sh` run; rebuild 
 |---|---|---|
 | Base image | `quay.io/fedora/fedora-toolbox:44` (pinned) | Fedora 44 userspace |
 | Agent | **`claude-code`** → `/usr/bin/claude`, from Anthropic's official dnf repo | Claude Code CLI |
-| Host bridges | `CONTAINER_HOST` → host rootless **podman** socket; `host-spawn`; shims `systemctl`/`journalctl`/`loginctl`/`flatpak` → host | drive host podman + host commands from inside the box |
+| Host bridge | `CONTAINER_HOST` → host rootless **podman** socket | drive the host's podman engine from inside the box (socket-based, works headless). Host *command* shims are deliberately omitted — they need `host-spawn` → `flatpak-session-helper`, which isn't running on a headless server; by policy the host is immutable and the agent doesn't run host systemd |
 | Dev tools | `git`, `gh`, `tmux`, `podman`, `socat`, `bubblewrap`, `fastfetch` | the agent's toolbox |
 | Policy (managed tier) | `/etc/claude-code/CLAUDE.md` + `managed-settings.json` | best-effort deny globs for host installs (defense-in-depth — the real gate is the sudo wall), `disableBypassPermissionsMode`, behavioural rules |
 
@@ -268,7 +268,7 @@ is OS-blocked by the kernel.
 
 You do **not** enter the box to use Claude. `setup.sh` installs a wrapper at `~/.local/bin/claude` that
 runs `distrobox enter claudebox -- bash -lc 'exec /usr/bin/claude "$@"'` — so a bare `claude` enters the
-box, sources its login profile (so `CONTAINER_HOST` + the shims are set), and execs the real CLI
+box, sources its login profile (so `CONTAINER_HOST` is set), and execs the real CLI
 connected to your terminal, in your current directory. First run is a one-time OAuth (or `distrobox
 enter claudebox -- claude setup-token` for a headless token, then export `CLAUDE_CODE_OAUTH_TOKEN` — a
 secret, never commit it).
@@ -470,12 +470,12 @@ ssh-add -l
 | setup-user.sh | **rootless layer**, as `core` — user podman socket, ssh keys, claudebox, Claude policy, verify (no host privilege) |
 | sync-authorized-keys.sh | authorizes `core`'s **allowlisted** SSH keys from `github.com/<user>.keys` (fingerprint allowlist = the access policy; other keys ignored), tags each `environment="LOGIN_KEY=<device>"`; defensive (never wipes keys on a failed fetch) |
 | distrobox.ini | claudebox, declaratively (image pin, pre-init Anthropic repo, packages) |
-| claudebox-init.sh | claudebox host bridges (CONTAINER_HOST → host podman socket; systemctl/journalctl/loginctl/flatpak shims), applied as the box's own root post-assemble over the quote-safe `distrobox enter -- sudo` channel — avoids distrobox's init_hook quote traps |
+| claudebox-init.sh | claudebox host bridge (CONTAINER_HOST → host rootless podman socket), applied as the box's own root post-assemble over the quote-safe `distrobox enter -- sudo` channel — avoids distrobox's init_hook quote traps |
 | cockpit-tailnet-serve.sh | installed to /usr/local/sbin; publishes Cockpit on the tailnet (`tailscale serve` :443 → loopback:9090, retrying until MagicDNS+HTTPS-certs are on) and writes `/etc/cockpit/cockpit.conf` with the node's MagicDNS Origin so the proxied login works |
 | policy/CLAUDE.md | Claude Code's binding law inside claudebox (mission: orchestrate, host immutable, source rules) |
 | policy/managed-settings.json | deny-rule guardrails (best-effort, defense-in-depth) + bypass-permissions disabled — non-overridable (managed tier) |
 | policy/sudoers.claudebox | scoped passwordless-sudo allowlist for the operating user (exact-pinned `tailscale serve` loopback proxy + read-only `status`; no wildcards, no `funnel`); grown by propose+commit; visudo-validated, stamped to /etc/sudoers.d/claudebox |
-| verify.sh | PASS/FAIL acceptance: sockets, box, claude, host-engine reach, shims, tailnet |
+| verify.sh | PASS/FAIL acceptance: sockets, box, claude, policy, host-engine reach, tailnet |
 | .github/workflows/refresh-release.yml | weekly CI (Fri): re-checks Fedora's latest stable + Hostinger's provisioned version, refreshes the README status line and the pinned releasever, committing only on change |
 
 ## Notes
