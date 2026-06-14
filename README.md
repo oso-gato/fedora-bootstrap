@@ -117,34 +117,48 @@ and Atomic hosts work as documented secondary paths.
 The only manual steps. As root on a fresh Fedora Cloud instance:
 
 ```sh
-dnf -y upgrade --refresh                        # freshen ALL packages first (a host already on the latest release no-ops the release-upgrade above, so it gets current here)
+dnf -y upgrade --refresh        # freshen ALL packages first (already-latest hosts no-op the release-upgrade above)
 dnf -y install git
-useradd -m -G wheel core
-echo 'core ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/core
-if su - core -c 'git clone https://github.com/oso-gato/fedora-bootstrap && cd fedora-bootstrap && ./setup.sh' < /dev/null; then
-  echo 'setup.sh: all phases PASS.'
+git clone https://github.com/oso-gato/fedora-bootstrap /opt/fedora-bootstrap
+if /opt/fedora-bootstrap/setup.sh < /dev/null; then
+  echo 'setup: all layers PASS.'
 else
-  echo '*** setup.sh did NOT finish all-PASS. If it printed a login.tailscale.com link,'
-  echo '*** open it once, then re-run:  su - core -c "cd ~/fedora-bootstrap && ./setup.sh" < /dev/null'
+  echo '*** setup did NOT finish all-PASS. If it printed a login.tailscale.com link,'
+  echo '*** open it once, then re-run as root:  /opt/fedora-bootstrap/setup.sh < /dev/null'
   echo '*** Otherwise fix the cause shown above and re-run the same command.'
 fi
-passwd core      # optional, runs last — Cockpit/console password (SSH stays key-only)
+passwd core      # REQUIRED — sets core's admin (password-gated sudo) + Cockpit/console password; SSH stays key-only
 ```
 
-The first line freshens every package (a host already on the latest release no-ops the
-release-upgrade section above, so this is where it still gets fully current). If
-that upgrade pulls a new kernel or systemd and you want them live before
-bootstrapping, `reboot` first, then run the rest of the block.
+`setup.sh` runs **as root** and orchestrates the two privilege layers (see **Privilege
+layers** below): it runs the SYSTEM phase (`setup-host.sh`) as root — host packages, `/etc`,
+system services, the tailnet, and **creating the `core` user** — then drops to `core` for the
+ROOTLESS phase (`setup-user.sh`). The repo is cloned by root into `/opt/fedora-bootstrap`
+because it is the host's provisioning definition (root-owned), and because `core` does not
+exist yet when the clone runs. To reuse a cloud-init user (often `fedora`) instead of
+creating `core`, set `BOOTSTRAP_USER=fedora` before `setup.sh`.
 
-Why a non-root user first: rootless podman, distrobox, and Claude Code all
-assume one; `wheel` + the `NOPASSWD` drop-in let the unattended `su - core -c …`
-run the script's privileged steps without a password prompt (delete
-`/etc/sudoers.d/core` later if you'd rather require one). Fedora Cloud images may
-already provide a cloud-init user (often `fedora`) — using it instead of creating
-`core` is fine.
+The first `dnf upgrade` freshens every package (an already-latest host no-ops the
+release-upgrade section above, so this is where it still gets current). If it pulls a new
+kernel or systemd and you want them live first, `reboot`, then run the rest.
 
-`setup.sh` is idempotent and ordered (8 numbered phases: packages → services
-→ ssh keys → tailscale → tmux-attach → claudebox assemble → Claude policy →
+**`core` is a full `sudo` admin** — it is in `wheel`, so `sudo` works once you set its
+password with `passwd core` (required: that is `core`'s admin/sudo password, not just
+Cockpit's). There is **no blanket `NOPASSWD:ALL`**; instead a **scoped** passwordless
+allowlist (`policy/sudoers.claudebox` → `/etc/sudoers.d/claudebox`) lets `core` run a few
+specific host commands without a password — currently an **exact-pinned** `tailscale serve`
+loopback proxy (`…http://127.0.0.1:9090`) plus read-only `tailscale status` (no wildcards, no
+`funnel`), so the in-box Claude Code can re-assert / read the tailnet exposure of what it deploys. Every *other* `sudo` needs the
+password: a human admin types it (the Fedora default), while the unattended in-box agent —
+which has no password — is OS-blocked. So after Day 0, `root` is retired and `core` runs
+everything; you `sudo` (with the password) for host changes, the agent only for its narrow
+allowlist (and even then it asks you first). To let the agent do more, grow the allowlist by
+committing to `policy/sudoers.claudebox` — see **Privilege layers** and `policy/CLAUDE.md`.
+
+`setup.sh` runs **as root** and is idempotent. It splits into two layers: the **system**
+phase (`setup-host.sh`, as root — packages, the `core` user, system services, the ssh
+drop-in, tailscale, the tmux drop-in, and `core`'s user manager) and the **rootless** phase
+(`setup-user.sh`, as `core` — podman socket, ssh keys, claudebox assemble, Claude policy,
 verify). It pauses at most once during the run: the tailscale auth link (once
 per host; open it, then re-run setup.sh). Claude Code is installed but NOT logged
 in by setup.sh — the first time you run `claude` (the wrapper in ~/.local/bin) you
@@ -155,16 +169,68 @@ setup-token` and export CLAUDE_CODE_OAUTH_TOKEN (a secret — never commit it). 
 after any failure; it resumes safely. Rebuild the box anytime by re-running setup.sh
 (assemble is declarative; ad-hoc tools inside the box are disposable by design).
 
-**SSH keys & provenance.** Phase 3 pulls your public keys from
-`github.com/oso-gato.keys` (GitHub is the registry — no keys in this repo) and
-writes `core`'s `authorized_keys`, tagging each with `environment="LOGIN_KEY=…"`
-so every login is attributable to the key that authenticated (`oSo`,
-`Alchemist`, `Fatima`). Add or revoke a key on GitHub, then re-run `setup.sh` to
-resync. Phase 5 names each login's tmux session after that tag, so every device
-lands in its own persistent session (`tmux attach -t <other>` hops between
-them). Day 0 gives `core` passwordless `sudo` (so `setup.sh` runs unattended; key-only
-SSH means no console password to protect by default); the optional final `passwd`
-adds a Cockpit/console password. SSH stays key-only regardless.
+**SSH keys & provenance.** The rootless phase pulls your public keys from
+`github.com/oso-gato.keys` (GitHub is the registry — no keys in this repo) and writes
+`core`'s own `authorized_keys`, tagging each with `environment="LOGIN_KEY=…"` so every
+login is attributable to the key that authenticated (`oSo`, `Alchemist`, `Fatima`). Add
+or revoke a key on GitHub, then re-run `setup.sh` to resync. The host's tmux drop-in names
+each login's session after that tag, so every device lands in its own persistent session
+(`tmux attach -t <other>` hops between them). `core` has **no blanket passwordless `sudo`**
+(only the scoped `/etc/sudoers.d/claudebox` allowlist); the **required** `passwd core` sets
+its admin/`sudo` + Cockpit/console password — a password-gated `wheel` escalation for a human
+admin. SSH stays key-only regardless.
+
+## Privilege layers — what runs as root, what runs as the user
+
+Provisioning is split into two layers by **identity**, matching Fedora/Red Hat's
+documented model — root provisions the *system* layer; the unprivileged user owns the
+*rootless* layer. `setup.sh` (run as root) orchestrates both.
+
+**Root layer — `setup-host.sh` (runs as root).** The bounded, one-time set of operations
+that *genuinely require* root. Nothing here is a persistent root workload — it is host
+provisioning, done once:
+
+| Root action | Why it must be root |
+|---|---|
+| install the host package set (`dnf`) | system packages |
+| write `/etc/yum.repos.d/tailscale.repo` (in place, `restorecon`) | system repo file |
+| `useradd -m -G wheel core` (+ `/etc/subuid` / `/etc/subgid`) | create the user + its rootless prerequisites |
+| `systemctl enable --now sshd cockpit.socket tailscaled` | **system** services |
+| write `/etc/ssh/sshd_config.d/…` + reload sshd | system SSH config |
+| `tailscale up` / `tailscale serve` | configure the system `tailscaled` daemon |
+| write `/etc/profile.d/…` | system-wide login config |
+| `loginctl enable-linger core` + start `user@<uid>.service` | bring up `core`'s user manager (the one root→user bridge) |
+
+**User layer — `setup-user.sh` (runs as `core`, no host privilege).** The rootless layer.
+The only escalation is *inside* the box (the container's own root, not the host's):
+
+| User action | scope |
+|---|---|
+| `systemctl --user enable --now podman.socket` | `core`'s own user manager |
+| sync `core`'s `~/.ssh/authorized_keys` | `core`'s own file |
+| `distrobox assemble` + build claudebox | rootless Podman, `core`'s containers |
+| stamp the Claude policy into the box | the box's root, not the host's |
+| write `~/.local/bin/claude`; run `verify.sh` | `core`'s own |
+
+**The principles this enforces:**
+
+- **Least privilege.** Each action runs in its native identity. The system phase needs root
+  once; the user phase needs no broad host privilege — so `core` carries **no `NOPASSWD:ALL`**.
+  A human admin keeps a *password-gated* `wheel` escalation; the in-box Claude Code gets only a
+  **scoped passwordless allowlist** (`/etc/sudoers.d/claudebox`, from `policy/sudoers.claudebox`
+  — currently an exact-pinned `tailscale serve` loopback proxy + read-only `status`, no wildcards,
+  no `funnel`) and is OS-blocked from everything else.
+- **Immutable host, enforced by the OS.** Outside its small allowlist `core` has no passwordless
+  root, so the Claude Code running as `core` cannot modify the host — the `policy/CLAUDE.md` rule
+  "never modify the host" is backed by the kernel, not only the policy file. The agent grows its
+  allowlist only by *proposing* a command you commit to `policy/sudoers.claudebox` (the same
+  "propose; you commit" model as box packages).
+- **No cross-privilege file handoffs.** Privileged files are written *in place* in their
+  system directory by root (correct SELinux context); nothing is staged in a `core`-owned
+  `/tmp` file and handed to root (the SELinux `tmp_t` mislabel / `curl 23` failure class is
+  designed out, not patched).
+- **Clean failure domains.** A system failure surfaces in the root phase; a rootless failure
+  in the user phase — no SELinux denial masquerading as a user-script bug.
 
 ## macOS — log in via the 1Password SSH agent
 
@@ -241,6 +307,7 @@ ssh-add -l
 | 6 | GUARDRAILS ARE CODE | Claude Code's law lives in policy/ (enterprise tier: /etc/claude-code/ inside the box) and is re-stamped on every setup.sh run. Changing the rules = changing this repo. |
 | 7 | EXPOSURE | Public IP carries key-only ssh and mosh ONLY. Cockpit and every sensitive port are tailnet-only. etserver is never installed (replaced fleet-wide by mosh). |
 | 8 | VALIDATE | setup.sh ends with verify.sh; a bootstrap is done when every check PASSes. |
+| 9 | LEAST PRIVILEGE / LAYERS | Provisioning splits by identity: the SYSTEM layer (packages, /etc, system services) runs as root once via setup-host.sh; the ROOTLESS layer (podman, distrobox, Claude Code) runs as the operating user via setup-user.sh. The user is a password-gated `wheel` admin with NO blanket NOPASSWD; the in-box agent gets only a scoped passwordless allowlist (policy/sudoers.claudebox), grown solely by committing to the repo, and is OS-blocked from everything else (host installs stay hard-denied). Privileged files are written in place by root, never staged via a user-owned /tmp file. |
 
 ## Packages
 
@@ -264,11 +331,14 @@ ssh-add -l
 
 | File | Purpose |
 |---|---|
-| setup.sh | the one command: 8 idempotent phases, ends in verify |
+| setup.sh | orchestrator (run as root): runs the system layer then the rootless layer in their correct identities |
+| setup-host.sh | **system layer**, as root — packages, /etc, system services, tailnet, creates `core` + its rootless prerequisites |
+| setup-user.sh | **rootless layer**, as `core` — user podman socket, ssh keys, claudebox, Claude policy, verify (no host privilege) |
 | sync-authorized-keys.sh | authorizes `core`'s **allowlisted** SSH keys from `github.com/<user>.keys` (fingerprint allowlist = the access policy; other keys ignored), tags each `environment="LOGIN_KEY=<device>"`; defensive (never wipes keys on a failed fetch) |
 | distrobox.ini | claudebox, declaratively (image pin, packages, host bridges) |
 | policy/CLAUDE.md | Claude Code's binding law inside claudebox (mission: orchestrate, host immutable, source rules) |
 | policy/managed-settings.json | hard deny rules + bypass-permissions disabled — non-overridable |
+| policy/sudoers.claudebox | scoped passwordless-sudo allowlist for the operating user (exact-pinned `tailscale serve` loopback proxy + read-only `status`; no wildcards, no `funnel`); grown by propose+commit; visudo-validated, stamped to /etc/sudoers.d/claudebox |
 | verify.sh | PASS/FAIL acceptance: sockets, box, claude, host-engine reach, shims, tailnet |
 
 ## Notes

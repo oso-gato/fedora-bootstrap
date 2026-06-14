@@ -60,5 +60,7 @@ fi
 
 mv -f "$NEW" "$AK"            # rename WITHIN ~/.ssh — keeps the ssh_home_t SELinux label
                              # (never mv from /tmp: that carries tmp_t and sshd can't read it)
-command -v restorecon >/dev/null 2>&1 && sudo restorecon -F "$AK" >/dev/null 2>&1 || true
+# Belt-and-suspenders relabel; best-effort as the unprivileged user (the in-dir mv above
+# already preserves ssh_home_t, so this needs no host privilege — no sudo).
+command -v restorecon >/dev/null 2>&1 && restorecon -F "$AK" 2>/dev/null || true
 echo "ssh keys: authorized $n allowlisted key(s) from github.com/${GH_USER}.keys, tagged via LOGIN_KEY"

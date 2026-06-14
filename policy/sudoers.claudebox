@@ -1,0 +1,31 @@
+# fedora-bootstrap — scoped passwordless-sudo allowlist for the ClaudeBox operating user.
+#
+# Installed to /etc/sudoers.d/claudebox by setup-host.sh, validated with `visudo` first.
+# The user is a normal `wheel` admin (sudo WITH a password). This file grants passwordless
+# sudo for ONLY the EXACT commands below, so the non-interactive in-box Claude Code can run
+# those — and NOTHING else — without a password. Every other `sudo` still requires the
+# password, so the agent is OS-blocked from it.
+#
+# SECURITY — NO WILDCARDS on file-capable commands. `tailscale serve`/`funnel` accept a
+# local FILE or DIRECTORY path as their target; run as root they READ and EXPOSE it — over
+# the tailnet (serve) or the PUBLIC INTERNET (funnel): /etc/shadow, TLS/SSH host keys, the
+# tailscale node keys, anything root can read. So a bare `serve *` is a full root-secret
+# disclosure. Every serve entry below is therefore PINNED to an EXACT http://127.0.0.1:PORT
+# loopback target, never a wildcard, and `funnel` is intentionally ABSENT.
+#
+# GROW THIS LIST ONLY HERE, by review: ClaudeBox proposes a NEW EXACT line (e.g. another
+# pinned loopback port it must expose), you commit it, and re-running setup re-stamps it
+# (policy/CLAUDE.md: "propose; the user commits"). Every entry must be a FULL command with
+# its EXACT arguments and NO trailing wildcard. NEVER add: a wildcard on serve/funnel, a
+# file/dir/text: target, `funnel`, a node-changing subcommand (up/down/set/login/logout),
+# or any command that can spawn a shell or run arbitrary programs.
+#
+# __USER__ is replaced with the operating user (default: core) at install time by setup-host.sh.
+
+Cmnd_Alias CLAUDEBOX_HOST = /usr/bin/tailscale serve --bg --https=443 http\://127.0.0.1\:9090, \
+                            /usr/bin/tailscale serve status, \
+                            /usr/bin/tailscale serve status --json, \
+                            /usr/bin/tailscale status, \
+                            /usr/bin/tailscale status --json
+
+__USER__ ALL=(ALL) NOPASSWD: CLAUDEBOX_HOST

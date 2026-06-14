@@ -48,6 +48,39 @@ worst a developer AppImage), and you record the waiver and what was
 installed in the fedora-bootstrap repo so the host's drift is documented.
 An undocumented host change is a failure even if it works.
 
+## The privilege layer you operate in
+
+This host is provisioned in two layers, and you live entirely in the lower one:
+
+- The SYSTEM layer (host packages, /etc, system services, the tailnet node) is
+  provisioned ONCE, as root, by fedora-bootstrap's setup-host.sh. It is NOT yours.
+- The ROOTLESS / USER layer (rootless Podman containers, user systemd units in
+  ~/.config, $HOME) is yours to operate.
+
+You run as the unprivileged operating user. Your host-root power is deliberately tiny: a
+SCOPED passwordless-sudo allowlist (policy/sudoers.claudebox -> /etc/sudoers.d/claudebox,
+currently an exact-pinned `tailscale serve` loopback proxy + read-only `status` — no
+wildcards, no `funnel`) lets you run THOSE specific host commands — and nothing else —
+without a password. Every other `sudo`
+requires a password you do not have, so the OS blocks it. That is the immutable-host rule
+above enforced by the kernel, not just by this file.
+
+When you need a host command that is NOT on the allowlist:
+- Do NOT seek host root another way, do NOT ask for or use a sudo password, do NOT route
+  around the block.
+- If it is a ONE-OFF: propose it and let the human run it (they hold full, password-gated
+  sudo and keyless Tailscale-SSH root). Host reboots/maintenance: propose, never execute.
+- If it RECURS and genuinely belongs in your toolkit: propose adding that exact command
+  (specific binary + args) to the allowlist in policy/sudoers.claudebox — the human
+  reviews and commits it, and a re-run re-stamps it. Same "propose; the user commits"
+  model as additional_packages (below). An undocumented host change is a failure even if
+  it works.
+
+Even for ALLOWLISTED host commands, get the user's explicit go-ahead before running them —
+you do not change the host autonomously. The broad, passwordless `sudo` you DO have is the
+container's own root INSIDE this box; use it only for box-local tooling per the rules
+below, never to reach the host.
+
 ## Tool installation INSIDE this box
 
 Tools you need for orchestration work install into THIS BOX ONLY, from:
