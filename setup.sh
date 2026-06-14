@@ -8,16 +8,21 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 PHASE() { printf '\n==== %s ====\n' "$*"; }
 
 PHASE "1/8 host packages (Fedora repos + Tailscale's official repo)"
-tmp=$(mktemp)
-if sudo curl -fsSL https://pkgs.tailscale.com/stable/fedora/tailscale.repo -o "$tmp" \
-   && grep -q '^\[tailscale-stable\]' "$tmp"; then
-    sudo install -m 0644 "$tmp" /etc/yum.repos.d/tailscale.repo
-elif [ ! -s /etc/yum.repos.d/tailscale.repo ]; then
-    rm -f "$tmp"; echo "ERROR: could not fetch tailscale.repo and no existing copy present" >&2; exit 1
+# Tailscale's OFFICIAL vendor repo. Fetch as root straight into /etc/yum.repos.d (correct
+# owner + SELinux context) to a temp ".new" name dnf ignores, validate it's the real repo
+# file, then atomically move it into place — so a partial/failed fetch never poisons dnf.
+# Do NOT stage via a core-owned mktemp in /tmp: under SELinux, `sudo curl` writing to a
+# user-owned /tmp file fails with curl (23) "client returned ERROR on write".
+new=/etc/yum.repos.d/.tailscale.repo.new
+if sudo curl -fsSL https://pkgs.tailscale.com/stable/fedora/tailscale.repo -o "$new" \
+   && sudo grep -q '^\[tailscale-stable\]' "$new"; then
+    sudo mv -f "$new" /etc/yum.repos.d/tailscale.repo
+    sudo restorecon /etc/yum.repos.d/tailscale.repo 2>/dev/null || true
+elif sudo test -s /etc/yum.repos.d/tailscale.repo; then
+    sudo rm -f "$new"; echo ">> tailscale.repo fetch failed; keeping existing repo file" >&2
 else
-    echo ">> tailscale.repo fetch failed; keeping existing repo file" >&2
+    sudo rm -f "$new"; echo "ERROR: could not fetch tailscale.repo and no existing copy present" >&2; exit 1
 fi
-rm -f "$tmp"
 sudo dnf -y --setopt=install_weak_deps=False install \
     distrobox flatpak-session-helper podman tmux mosh openssh-server tailscale \
     cockpit cockpit-podman cockpit-files cockpit-storaged \
