@@ -22,6 +22,20 @@ printf 'export CONTAINER_HOST=unix:///run/user/%s/podman/podman.sock\n' "$host_u
     > /etc/profile.d/10-host-podman.sh
 chmod 0644 /etc/profile.d/10-host-podman.sh
 
+# In-box `claudebox-rebuild`: how Claude (or anyone in the box) asks the HOST to destroy+recreate
+# this box. The in-box agent has no host systemd access — its ONLY channel is a flag file in the
+# shared HOME, which the host's claudebox-rebuild.path watches across the bind mount. Writing the
+# flag ends THIS session shortly (the host tears the box down) and rebuilds with latest Claude Code.
+cat > /usr/local/bin/claudebox-rebuild <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p "$HOME/.local/state/claudebox"
+: > "$HOME/.local/state/claudebox/rebuild.request"
+echo "⟳ claudebox rebuild requested. This session will end shortly and the box will rebuild in the"
+echo "  background (~2-5 min: fresh image + latest Claude Code). Reconnect with: claude"
+EOF
+chmod 0755 /usr/local/bin/claudebox-rebuild
+
 # NOTE: deliberately NO systemctl/journalctl/loginctl/flatpak host-exec shims. They route through
 # host-spawn, which calls org.freedesktop.Flatpak.Development.HostCommand on the session bus — a method
 # only flatpak-session-helper provides, and its unit is PartOf=graphical-session.target, which never

@@ -103,6 +103,26 @@ Durability: tools worth keeping get added to distrobox.ini
 `additional_packages` in fedora-bootstrap (propose the edit; the user
 commits). Ad-hoc installs vanish on box rebuild — by design.
 
+## Keeping current — the box rebuilds, the host updates itself
+
+Claude Code + the box toolset come from official repos (Anthropic's `latest`
+channel + Fedora repos) at box-build time, and a package-manager install does
+NOT self-update — the box is kept current by REBUILDING it. A rebuild is cheap
+and your login SURVIVES (credentials live in $HOME, not the disposable box).
+
+You MAY request a rebuild: run `claudebox-rebuild` in this box. It writes a flag
+the host watches; the host then destroys and recreates this box from the pinned
+manifest — so THIS session ends shortly (reconnect with `claude`). This is
+sanctioned and safe: it is the box's own lifecycle, it regenerates the SAME
+canonical box from the root-owned manifest + policy (you cannot alter what gets
+built), and it touches nothing on the host. (A daily auto-rebuild and a host-side
+`claudebox-rebuild` command exist too — same result.)
+
+The HOST updates itself: dnf-automatic applies host package updates monthly. That
+is NOT your job — never run host `dnf`/updates (the allowlist forbids it; it would
+be host root). When an update needs a reboot to take effect, that is surfaced to
+the human — you may PROPOSE a reboot, never execute one.
+
 ## Operating notes
 
 - $HOME is the host's real home; /run/host is the host's root (read it

@@ -15,4 +15,13 @@ ck "box: podman reaches HOST engine"       "distrobox enter claudebox -- sh -lc 
 # and still exits 0). So PASS when the backend is Running (joined) OR pending auth — only a missing/
 # down daemon (no BackendState) fails. Use --json so we read the state, not the bare exit code.
 ck "tailnet: host joined (or pending browser-auth)" "tailscale status --json 2>/dev/null | grep BackendState | grep -qE 'Running|NeedsLogin|Starting|NeedsMachineAuth'"
+# box-update harness — all 3 trigger methods funnel into claudebox-rebuild-run.service
+ck "box-update: ask-Claude watcher enabled"        "systemctl --user is-enabled claudebox-rebuild.path"
+ck "box-update: daily refresh timer enabled"       "systemctl --user is-enabled claudebox-rebuild-daily.timer"
+ck "box-update: claudebox-rebuild command present"  "test -x ~/.local/bin/claudebox-rebuild"
+# host self-update — dnf-automatic on the monthly cadence
+ck "host: dnf-automatic timer enabled"             "systemctl is-enabled dnf5-automatic.timer"
+# DOCTRINE BOUNDARY: the in-box agent's scoped sudo must NOT grant host-mutating dnf (that would be
+# host root). -k clears any cached timestamp so a recent password-sudo can't mask a missing grant.
+ck "host: agent has NO passwordless dnf (immutable host)" "! sudo -kn /usr/bin/dnf --version"
 exit $fail

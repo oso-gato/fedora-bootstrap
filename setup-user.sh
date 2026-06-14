@@ -48,14 +48,144 @@ distrobox enter claudebox -- sudo bash "/run/host$HERE/claudebox-init.sh" "$(id 
 distrobox enter claudebox -- sudo mkdir -p /etc/claude-code
 distrobox enter claudebox -- sudo cp "/run/host$HERE/policy/CLAUDE.md" /etc/claude-code/CLAUDE.md
 distrobox enter claudebox -- sudo cp "/run/host$HERE/policy/managed-settings.json" /etc/claude-code/managed-settings.json
-mkdir -p "$HOME/.local/bin"
-# Force XDG_RUNTIME_DIR to core's OWN runtime dir so the wrapper works even when invoked via `su core` —
-# su keeps the prior user's value, so podman/distrobox would look in /run/user/0 and die with
-# "mkdir /run/user/0/libpod: permission denied". A normal SSH login already exports the right value, so this
-# is a no-op there; it just makes su-into-core behave identically. $(id -u) stays LITERAL in the emitted
-# wrapper (single-quoted printf format), so it resolves to core's uid each time the wrapper runs.
-printf '#!/usr/bin/env bash\nexport XDG_RUNTIME_DIR="/run/user/$(id -u)"\nexec distrobox enter claudebox -- bash -lc '\''exec /usr/bin/claude "$@"'\'' bash "$@"\n' > "$HOME/.local/bin/claude"
+mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.local/state/claudebox"
+
+# `claude` entry wrapper. XDG_RUNTIME_DIR is pinned so `su core` works (su keeps the prior user's
+# value, which would send rootless podman to /run/user/0 -> "mkdir /run/user/0/libpod: permission
+# denied"); a normal SSH login already has the right value, so it is a no-op there. It holds a SHARED
+# session lock (so the DAILY refresh can tell a session is live and defer), and on exit it (a) follows
+# a Claude-triggered rebuild, or (b) runs a daily refresh that was deferred while you worked — your
+# "quit -> it rebuilds". Emitted via a QUOTED heredoc so $(id -u)/"$@"/$HOME/$state stay LITERAL.
+cat > "$HOME/.local/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+state="$HOME/.local/state/claudebox"; mkdir -p "$state"
+# If a rebuild is already running, follow it instead of entering a half-built box.
+if systemctl --user is-active --quiet claudebox-rebuild-run.service 2>/dev/null; then
+    exec "$HOME/.local/bin/claudebox-rebuild" --watch-only
+fi
+# Hold a SHARED session lock for the session's lifetime so the daily refresh defers while you work.
+flock -s "$state/session.lock" distrobox enter claudebox -- bash -lc 'exec /usr/bin/claude "$@"' bash "$@"
+rc=$?
+# Post-session: (a) Claude triggered a rebuild -> follow it to completion; else (b) a daily refresh
+# was deferred while you worked AND no other session is active now -> rebuild now and follow it.
+if systemctl --user is-active --quiet claudebox-rebuild-run.service 2>/dev/null; then
+    exec "$HOME/.local/bin/claudebox-rebuild" --watch-only
+elif [ -e "$state/rebuild.pending" ] && flock -n -x "$state/session.lock" -c true 2>/dev/null; then
+    rm -f "$state/rebuild.pending"
+    echo ">> a daily claudebox refresh came due while you were working — rebuilding now…"
+    exec "$HOME/.local/bin/claudebox-rebuild"
+fi
+exit "$rc"
+EOF
 chmod +x "$HOME/.local/bin/claude"
+
+# `claudebox-rebuild` HOST command: deliberately rebuild the box from the host shell and follow it.
+# The rebuild runs as a DETACHED user service (claudebox-rebuild-run.service) so it outlives the box
+# it recreates; this command only triggers + tails it, so Ctrl-C is safe (the rebuild keeps going).
+cat > "$HOME/.local/bin/claudebox-rebuild" <<'EOF'
+#!/usr/bin/env bash
+# claudebox-rebuild              start a full box rebuild and follow it to completion
+# claudebox-rebuild --watch-only follow an already-running rebuild (used by the claude wrapper)
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+run=claudebox-rebuild-run.service
+follower=
+trap '[ -n "$follower" ] && kill "$follower" 2>/dev/null' EXIT INT TERM
+if [ "${1:-}" != "--watch-only" ]; then
+    systemctl --user reset-failed "$run" 2>/dev/null || true
+    echo ">> claudebox: starting rebuild — fresh image + latest Claude Code (~2-5 min)…"
+    systemctl --user start --no-block "$run"
+fi
+journalctl --user -u "$run" -f -n 0 --no-hostname 2>/dev/null & follower=$!
+for _ in $(seq 1 20); do systemctl --user is-active --quiet "$run" && break; sleep 0.5; done
+while systemctl --user is-active --quiet "$run"; do sleep 2; done
+sleep 1
+if systemctl --user is-failed --quiet "$run"; then
+    echo ">> claudebox rebuild FAILED — inspect: journalctl --user -u $run -e"
+    exit 1
+fi
+echo ">> claudebox rebuild COMPLETE — run 'claude' to reconnect (you're still logged in)."
+EOF
+chmod +x "$HOME/.local/bin/claudebox-rebuild"
+
+# Box-rebuild harness (NO schedule — rebuild is always deliberate). Three user units in core's
+# lingering systemd manager (linger is enabled by the root phase, so they run with no login and
+# OUTLIVE the box). Verified design (systemd.path/.service + flag file across the HOME bind mount):
+#   claudebox-rebuild.path     watches the in-box flag (PathExists), fires the handler
+#   claudebox-rebuild.service  consumes the flag, then fire-and-forgets the run service --no-block
+#   claudebox-rebuild-run.*    the actual destroy+recreate; started as its OWN unit so systemd's
+#                              cgroup teardown of the handler (and `distrobox rm -f` killing the box)
+#                              cannot kill the rebuild mid-flight. A fixed unit name serializes the
+#                              host-trigger and the agent-trigger for free.
+# A lingering user service inherits NO login shell, so the run unit hard-sets DBUS/PATH (XDG_RUNTIME_DIR
+# is provided by the manager but set defensively). %U=uid, %h=home are systemd specifiers (left literal).
+cat > "$HOME/.config/systemd/user/claudebox-rebuild-run.service" <<EOF
+[Unit]
+Description=Rebuild the claudebox Distrobox (destroy + recreate from the pinned manifest)
+After=podman.socket
+
+[Service]
+Type=oneshot
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:%h/.local/bin
+ExecStart=$HERE/box-rebuild.sh
+TimeoutStartSec=900
+EOF
+
+cat > "$HOME/.config/systemd/user/claudebox-rebuild.service" <<'EOF'
+[Unit]
+Description=Handle an in-box claudebox rebuild request (consume flag, launch detached rebuild)
+
+[Service]
+Type=oneshot
+# Consume the flag FIRST so the .path re-arms and cannot loop, THEN fire the detached rebuild.
+ExecStartPre=/usr/bin/rm -f %h/.local/state/claudebox/rebuild.request
+ExecStart=/usr/bin/systemctl --user start --no-block claudebox-rebuild-run.service
+EOF
+
+cat > "$HOME/.config/systemd/user/claudebox-rebuild.path" <<'EOF'
+[Unit]
+Description=Watch for an in-box claudebox rebuild request
+
+[Path]
+PathExists=%h/.local/state/claudebox/rebuild.request
+
+[Install]
+WantedBy=paths.target
+EOF
+
+# Method 1 — DAILY refresh (so the box never drifts even if you never ask). The timer's service does
+# NOT rebuild directly: claudebox-daily.sh rebuilds now if idle, else drops rebuild.pending and the
+# `claude` wrapper does it the moment you next exit. Either way a live session is never interrupted.
+# (Methods 2/3 are the on-demand triggers: #2 ask-Claude via the .path flag, #3 host claudebox-rebuild.)
+cat > "$HOME/.config/systemd/user/claudebox-rebuild-daily.service" <<EOF
+[Unit]
+Description=Daily claudebox refresh (rebuild if idle, else defer to session exit)
+
+[Service]
+Type=oneshot
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:%h/.local/bin
+ExecStart=$HERE/claudebox-daily.sh
+EOF
+
+cat > "$HOME/.config/systemd/user/claudebox-rebuild-daily.timer" <<'EOF'
+[Unit]
+Description=Daily claudebox refresh
+
+[Timer]
+OnCalendar=*-*-* 04:00
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable --now claudebox-rebuild.path claudebox-rebuild-daily.timer
 
 PHASE "user 4/4 verify"
 bash "$HERE/verify.sh"

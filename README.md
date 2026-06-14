@@ -248,14 +248,14 @@ files, networking, SELinux, logs, terminal.
 ## Inside claudebox — what the agent has
 
 `claudebox` is the **Distrobox container** where Claude Code and its tools live. **Nothing below is
-installed on the host** — the host carries only the one-line `claude` wrapper. The box is defined
-declaratively in `distrobox.ini` and built on the first `setup.sh` run; rebuild it anytime by re-running
-`setup.sh`.
+installed on the host** — the host carries only the `claude` + `claudebox-rebuild` wrappers and the
+rebuild units. The box is defined declaratively in `distrobox.ini` and built on the first `setup.sh`
+run; rebuild it anytime with `claudebox-rebuild` (or it auto-refreshes daily) — see **Staying current**.
 
 | Layer | What | Why |
 |---|---|---|
 | Base image | `quay.io/fedora/fedora-toolbox:44` (pinned) | Fedora 44 userspace |
-| Agent | **`claude-code`** → `/usr/bin/claude`, from Anthropic's official dnf repo | Claude Code CLI |
+| Agent | **`claude-code`** → `/usr/bin/claude`, from Anthropic's official dnf repo (**`latest`** channel) | Claude Code CLI — kept current by the daily box rebuild (day-one model access) |
 | Host bridge | `CONTAINER_HOST` → host rootless **podman** socket | drive the host's podman engine from inside the box (socket-based, works headless). Host *command* shims are deliberately omitted — they need `host-spawn` → `flatpak-session-helper`, which isn't running on a headless server; by policy the host is immutable and the agent doesn't run host systemd |
 | Dev tools | `git`, `gh`, `tmux`, `podman`, `socat`, `bubblewrap`, `fastfetch` | the agent's toolbox |
 | Policy (managed tier) | `/etc/claude-code/CLAUDE.md` + `managed-settings.json` | best-effort deny globs for host installs (defense-in-depth — the real gate is the sudo wall), `disableBypassPermissionsMode`, behavioural rules |
@@ -272,6 +272,33 @@ box, sources its login profile (so `CONTAINER_HOST` is set), and execs the real 
 connected to your terminal, in your current directory. First run is a one-time OAuth (or `distrobox
 enter claudebox -- claude setup-token` for a headless token, then export `CLAUDE_CODE_OAUTH_TOKEN` — a
 secret, never commit it).
+
+## Staying current — updates
+
+Two independent cadences keep the system fresh without babysitting:
+
+**The box (Claude Code + tools) — rebuilt, three ways.** Claude Code installs from Anthropic's
+`latest` channel, and a package-manager install does not self-update, so the box is kept current by
+*rebuilding* it: a fresh `distrobox assemble` reinstalls the latest CLI + tools, re-applies the host
+bridges + policy, and verifies. **Your Claude login survives** — credentials live in your `$HOME`, not
+the disposable box. The rebuild runs detached as a `core` `systemd` user service (so it outlives the
+box it replaces), and the triggering terminal streams live progress + a completion message:
+
+1. **Daily** — `claudebox-rebuild-daily.timer` (~04:00) refreshes the box. If a `claude` session is
+   active it does **not** interrupt: it defers and rebuilds the moment you next exit. The box never
+   drifts; live work is never yanked (concurrent sessions are handled — it only fires once all exit).
+2. **Ask Claude** — tell Claude to rebuild; it runs `claudebox-rebuild` inside the box, signalling the
+   host via a flag file its `.path` unit watches. This session ends; reconnect with `claude`.
+3. **Manual** — run `claudebox-rebuild` on the host; it starts + follows the rebuild inline.
+
+Force one anytime with `claudebox-rebuild`; watch any rebuild with
+`journalctl --user -u claudebox-rebuild-run -f`.
+
+**The host (OS packages) — dnf-automatic, monthly.** `dnf5-plugin-automatic` applies host package
+updates on the **15th of each month** and **never reboots** (doctrine: a human decides reboots). When
+an update needs a restart to take effect, a login notice says so (driven by `dnf needs-restarting`);
+reboot at your convenience. A major Fedora jump (44 → 45) stays a deliberate, separate
+`dnf system-upgrade` you run by hand.
 
 ## Privilege layers — what runs as root, what runs as the user
 
@@ -454,7 +481,8 @@ ssh-add -l
 | Host | openssh-server | Fedora repos | key-only public door + mosh bootstrap (Cloud default config is already key-only) |
 | Host | tailscale | Tailscale's official dnf repo | tailnet node + Tailscale SSH + serves Cockpit |
 | Host | cockpit, -podman, -files, -networkmanager, -selinux | Fedora repos | browser host management (containers, files, network, SELinux), tailnet-only |
-| Box | claude-code | Anthropic's official dnf repo | the manager — claudebox's purpose |
+| Host | dnf5-plugin-automatic | Fedora repos | unattended host package updates (monthly on the 15th; applies, never auto-reboots) |
+| Box | claude-code | Anthropic's official dnf repo (**`latest`** channel) | the manager — claudebox's purpose; refreshed by the daily box rebuild |
 | Box | host-spawn | Fedora repos | container side of distrobox-host-exec (no GitHub download — deterministic) |
 | Box | bubblewrap, socat | Fedora repos | Claude Code's Linux sandbox dependencies |
 | Box | podman (client) | Fedora repos | drives the HOST engine via CONTAINER_HOST socket |
@@ -466,16 +494,18 @@ ssh-add -l
 |---|---|
 | CLAUDE.md | repo-editing guide for Claude Code (read README first; Build Principles + Packages tables are binding; host-immutability doctrine; policy/* are the law stamped into the box) |
 | setup.sh | orchestrator (run as root): runs the system layer then the rootless layer in their correct identities |
-| setup-host.sh | **system layer**, as root — packages, /etc, system services, tailnet, creates `core` + its rootless prerequisites |
-| setup-user.sh | **rootless layer**, as `core` — user podman socket, ssh keys, claudebox, Claude policy, verify (no host privilege) |
+| setup-host.sh | **system layer**, as root — packages, /etc, system services, tailnet, host dnf-automatic, creates `core` + its rootless prerequisites |
+| setup-user.sh | **rootless layer**, as `core` — user podman socket, ssh keys, claudebox, Claude policy, the `claude` + `claudebox-rebuild` wrappers + the box-rebuild units, verify (no host privilege) |
 | sync-authorized-keys.sh | authorizes `core`'s **allowlisted** SSH keys from `github.com/<user>.keys` (fingerprint allowlist = the access policy; other keys ignored), tags each `environment="LOGIN_KEY=<device>"`; defensive (never wipes keys on a failed fetch) |
-| distrobox.ini | claudebox, declaratively (image pin, pre-init Anthropic repo, packages) |
-| claudebox-init.sh | claudebox host bridge (CONTAINER_HOST → host rootless podman socket), applied as the box's own root post-assemble over the quote-safe `distrobox enter -- sudo` channel — avoids distrobox's init_hook quote traps |
+| distrobox.ini | claudebox, declaratively (image pin, pre-init Anthropic repo on the `latest` channel, packages) |
+| box-rebuild.sh | the full box rebuild (`distrobox rm -f` → re-run setup-user.sh); run detached by `claudebox-rebuild-run.service` so it outlives the box it recreates — the target of all 3 update triggers |
+| claudebox-daily.sh | the daily-refresh **decision** (update method 1): rebuild now if idle, else defer so the `claude` wrapper rebuilds on session exit — never interrupts live work |
+| claudebox-init.sh | claudebox host bridge (CONTAINER_HOST → host rootless podman socket) + the in-box `claudebox-rebuild` command (method 2), applied as the box's own root post-assemble over the quote-safe `distrobox enter -- sudo` channel — avoids distrobox's init_hook quote traps |
 | cockpit-tailnet-serve.sh | installed to /usr/local/sbin; publishes Cockpit on the tailnet (`tailscale serve` :443 → loopback:9090, retrying until MagicDNS+HTTPS-certs are on) and writes `/etc/cockpit/cockpit.conf` with the node's MagicDNS Origin so the proxied login works |
 | policy/CLAUDE.md | Claude Code's binding law inside claudebox (mission: orchestrate, host immutable, source rules) |
 | policy/managed-settings.json | deny-rule guardrails (best-effort, defense-in-depth) + bypass-permissions disabled — non-overridable (managed tier) |
 | policy/sudoers.claudebox | scoped passwordless-sudo allowlist for the operating user (exact-pinned `tailscale serve` loopback proxy + read-only `status`; no wildcards, no `funnel`); grown by propose+commit; visudo-validated, stamped to /etc/sudoers.d/claudebox |
-| verify.sh | PASS/FAIL acceptance: sockets, box, claude, policy, host-engine reach, tailnet |
+| verify.sh | PASS/FAIL acceptance: sockets, box, claude, policy, host-engine reach, tailnet, the box-rebuild units + host dnf-automatic timer, and the doctrine boundary (agent has NO passwordless dnf) |
 | .github/workflows/refresh-release.yml | weekly CI (Fri): re-checks Fedora's latest stable + Hostinger's provisioned version, refreshes the README status line and the pinned releasever, committing only on change |
 
 ## Notes

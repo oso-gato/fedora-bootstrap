@@ -66,6 +66,7 @@ dnf -y -q --repo=tailscale-stable makecache >/dev/null 2>&1 || true
 # allowlist of what IS installed; an add-in that isn't listed simply isn't there (do NOT drop this flag).
 dnf -y --setopt=install_weak_deps=False install \
     distrobox flatpak-session-helper podman tmux mosh openssh-server tailscale \
+    dnf5-plugin-automatic \
     cockpit cockpit-podman cockpit-files \
     cockpit-networkmanager cockpit-selinux
 
@@ -132,6 +133,58 @@ systemctl daemon-reload
 systemctl enable --now sshd cockpit.socket tailscaled
 # A running socket keeps its old listener until restarted, so re-assert the loopback bind on re-runs too.
 systemctl restart cockpit.socket
+
+# Unattended host updates — dnf5-plugin-automatic (Fedora 44 is dnf5; the dnf4 'dnf-automatic' is
+# obsoleted). Apply ALL updates (upgrade_type=security is UNRELIABLE on Fedora — Bodhi security
+# metadata is incomplete, RH BZ#1770125), NEVER auto-reboot (doctrine: a human decides reboots). The
+# host override is /etc/dnf/automatic.conf (the dnf5 host-override path; vendor defaults live in
+# /usr/share/dnf5/dnf5-plugins/automatic.conf). This is the HOST cadence; the claudebox container
+# (which carries Claude Code) refreshes separately and daily via the rebuild harness (setup-user.sh).
+tee /etc/dnf/automatic.conf >/dev/null <<'EOS'
+[commands]
+upgrade_type = default
+download_updates = yes
+apply_updates = yes
+reboot = never
+random_sleep = 0
+
+[emitters]
+emit_via = stdio
+EOS
+# Run MONTHLY on the 15th (the vendor unit ships daily 06:00). An empty OnCalendar= first CLEARS the
+# shipped value (systemd list-directive reset), then the 15th is set; the vendor Persistent=true +
+# RandomizedDelaySec stay, so a run missed because the host was off catches up on next boot.
+install -d /etc/systemd/system/dnf5-automatic.timer.d
+tee /etc/systemd/system/dnf5-automatic.timer.d/schedule.conf >/dev/null <<'EOS'
+[Timer]
+OnCalendar=
+OnCalendar=*-*-15 06:00
+EOS
+
+# Reboot NOTIFIER (never reboots). Applied package updates do not take effect for running services or
+# the kernel until a restart; this surfaces that as a login motd so a human can decide. `dnf
+# needs-restarting` exits 0 = nothing needed (clear the notice), nonzero = reboot recommended (write
+# it). Re-checked ~2min after boot (clears the notice once you HAVE rebooted) and daily.
+install -d /etc/motd.d
+tee /etc/systemd/system/reboot-needed-notify.service >/dev/null <<'EOS'
+[Unit]
+Description=Surface "reboot recommended" after package updates (NEVER reboots)
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'dnf -q needs-restarting >/dev/null 2>&1 && rm -f /etc/motd.d/15-reboot-needed || echo "** A reboot is recommended to finish applying updates (kernel/libraries); reboot at your convenience. **" > /etc/motd.d/15-reboot-needed'
+EOS
+tee /etc/systemd/system/reboot-needed-notify.timer >/dev/null <<'EOS'
+[Unit]
+Description=Check whether a reboot is recommended (after boot + daily)
+[Timer]
+OnBootSec=2min
+OnCalendar=*-*-* 07:00
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOS
+systemctl daemon-reload
+systemctl enable --now dnf5-automatic.timer reboot-needed-notify.timer
 
 PHASE "host 5/7 ssh: permit only LOGIN_KEY from authorized_keys"
 # Whitelist ONLY the LOGIN_KEY variable (never the unsafe blanket `yes`, which would also
