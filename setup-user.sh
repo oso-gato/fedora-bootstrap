@@ -49,7 +49,12 @@ distrobox enter claudebox -- sudo mkdir -p /etc/claude-code
 distrobox enter claudebox -- sudo cp "/run/host$HERE/policy/CLAUDE.md" /etc/claude-code/CLAUDE.md
 distrobox enter claudebox -- sudo cp "/run/host$HERE/policy/managed-settings.json" /etc/claude-code/managed-settings.json
 mkdir -p "$HOME/.local/bin"
-printf '#!/usr/bin/env bash\nexec distrobox enter claudebox -- bash -lc '\''exec /usr/bin/claude "$@"'\'' bash "$@"\n' > "$HOME/.local/bin/claude"
+# Force XDG_RUNTIME_DIR to core's OWN runtime dir so the wrapper works even when invoked via `su core` —
+# su keeps the prior user's value, so podman/distrobox would look in /run/user/0 and die with
+# "mkdir /run/user/0/libpod: permission denied". A normal SSH login already exports the right value, so this
+# is a no-op there; it just makes su-into-core behave identically. $(id -u) stays LITERAL in the emitted
+# wrapper (single-quoted printf format), so it resolves to core's uid each time the wrapper runs.
+printf '#!/usr/bin/env bash\nexport XDG_RUNTIME_DIR="/run/user/$(id -u)"\nexec distrobox enter claudebox -- bash -lc '\''exec /usr/bin/claude "$@"'\'' bash "$@"\n' > "$HOME/.local/bin/claude"
 chmod +x "$HOME/.local/bin/claude"
 
 PHASE "user 4/4 verify"

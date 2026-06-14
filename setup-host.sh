@@ -146,19 +146,6 @@ EOS
 systemctl reload sshd 2>/dev/null || systemctl restart sshd
 
 PHASE "host 6/7 tailscale (host node + Tailscale SSH; Cockpit over tailnet)"
-if ! tailscale status >/dev/null 2>&1; then
-    if [ -n "${TS_AUTHKEY:-}" ]; then
-        tailscale up --ssh --auth-key="$TS_AUTHKEY"            # unattended join
-    else
-        echo ">> Tailscale needs browser auth. A https://login.tailscale.com/... link will"
-        echo ">> print on the NEXT line. Open it now and approve this node."
-        echo ">> (Or re-run with TS_AUTHKEY=tskey-... for an unattended join.)"
-        # --timeout bounds the wait for tailscaled to reach RUNNING; the node stays in
-        # NeedsLogin until you click the link, so this caps the auth hang. If you miss the
-        # window, `up` exits non-zero, `|| true` absorbs it, and a re-run no-ops (gated).
-        tailscale up --ssh --timeout=5m || true
-    fi
-fi
 # Routing posture — ON BY DEFAULT for this deployment: this box is meant to BE an exit node and to reach the
 # home LAN. Override per run with TS_EXIT_NODE=0 and/or TS_ACCEPT_ROUTES=0 to turn either off.
 #   accept-routes        : the VPS (and the host-netns containers — claudebox shares the host netns via
@@ -166,10 +153,29 @@ fi
 #                          LAN devices. (Consequence: the in-box agent can reach your LAN too.)
 #   advertise-exit-node  : the VPS offers itself as an exit node so your devices can egress via its public IP
 #                          (needs the IP forwarding below — Tailscale kb/1103).
-# Applied with `tailscale set` (not `up`): changes only these prefs + persists, never disturbing the --ssh from
-# join. Advertising/accepting is NOT enough by itself — one-time admin-console approvals still apply (below).
 ts_bool(){ case "${1:-}" in 0|false|FALSE|no|off) echo false;; *) echo true;; esac; }   # default TRUE; only 0/false/off => off
 ACCEPT_ROUTES="$(ts_bool "${TS_ACCEPT_ROUTES:-}")"; ADVERTISE_EXIT="$(ts_bool "${TS_EXIT_NODE:-}")"
+# Carry --accept-routes on the FIRST join so `up` never prints the transient "peers are advertising routes but
+# --accept-routes is false" snapshot (it would, if accept-routes flipped on only afterward). --advertise-exit-node
+# is deliberately NOT on `up` — it would warn IP forwarding is off (we enable that just below), so it rides the
+# `set`. `up` does not persist these flags across runs, so the `set` re-asserts them idempotently on every run.
+ts_up=(--ssh); [ "$ACCEPT_ROUTES" = true ] && ts_up+=(--accept-routes)
+if ! tailscale status >/dev/null 2>&1; then
+    if [ -n "${TS_AUTHKEY:-}" ]; then
+        tailscale up "${ts_up[@]}" --auth-key="$TS_AUTHKEY"   # unattended join
+    else
+        echo ">> Tailscale needs browser auth. A https://login.tailscale.com/... link will"
+        echo ">> print on the NEXT line. Open it now and approve this node."
+        echo ">> (Or re-run with TS_AUTHKEY=tskey-... for an unattended join.)"
+        # --timeout bounds the wait for tailscaled to reach RUNNING; the node stays in
+        # NeedsLogin until you click the link, so this caps the auth hang. If you miss the
+        # window, `up` exits non-zero, `|| true` absorbs it, and a re-run no-ops (gated).
+        tailscale up "${ts_up[@]}" --timeout=5m || true
+    fi
+fi
+# Re-assert the posture every run with `tailscale set` (not `up`): changes only these prefs + persists, never
+# disturbing the --ssh from join. Advertising/accepting is NOT enough by itself — one-time admin-console
+# approvals still apply (below).
 tailscale set --accept-routes="$ACCEPT_ROUTES" --advertise-exit-node="$ADVERTISE_EXIT" \
     || echo ">> 'tailscale set' deferred (node not logged in yet) — re-run setup.sh after completing the browser-auth link so the routing prefs land." >&2
 if [ "$ADVERTISE_EXIT" = true ]; then
