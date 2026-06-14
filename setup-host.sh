@@ -195,6 +195,15 @@ if [ "$(ts_bool "${TS_EXIT_NODE:-}")" = true ]; then
         firewall-cmd --permanent --add-masquerade && firewall-cmd --reload
     fi
 fi
+# Make the opt-in DISCOVERABLE: if this node isn't advertising an exit node, say so plainly — otherwise the
+# admin console shows "Use as exit node" GREYED OUT (the node never offered one) and it looks broken. This is
+# the #1 point of confusion; surface the exact one-command fix right here in the run output.
+if [ "$(ts_bool "${TS_EXIT_NODE:-}")" != true ]; then
+    echo ">> NOTE: exit node + accept-routes are OFF (the opt-in default), so this node is NOT advertising an"
+    echo ">> exit node — 'Use as exit node' will stay GREYED OUT in the admin console (nothing to approve)."
+    echo ">> To enable, run on THIS node:  tailscale set --advertise-exit-node --accept-routes  (then approve"
+    echo ">> it in the console), or redeploy with:  TS_ACCEPT_ROUTES=1 TS_EXIT_NODE=1 /opt/fedora-bootstrap/setup.sh"
+fi
 # Publish Cockpit on the tailnet AND make Cockpit work behind that proxy. cockpit.socket is now
 # loopback-only (host 4/7), so the ONLY way to reach Cockpit is this `tailscale serve` proxy (TLS at 443
 # on the tailnet -> http://127.0.0.1:9090). `serve --https` only works once the tailnet has MagicDNS +
