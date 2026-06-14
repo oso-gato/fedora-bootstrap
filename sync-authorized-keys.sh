@@ -41,7 +41,7 @@ fi
 n=0
 while IFS= read -r key; do
     [ -n "$key" ] || continue
-    fp="$(printf '%s\n' "$key" | ssh-keygen -lf /dev/stdin 2>/dev/null | awk '{print $2}')"
+    fp="$(printf '%s\n' "$key" | ssh-keygen -lf /dev/stdin 2>/dev/null | awk '{print $2}')" || fp=""
     [ -n "$fp" ] || continue                            # skip non-key lines
     slice="${fp#SHA256:}"; slice="SHA256:${slice:0:8}..."   # show only a small portion
     if name="$(label_for "$fp")"; then

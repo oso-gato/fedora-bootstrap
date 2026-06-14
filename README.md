@@ -16,7 +16,7 @@ Pick whichever you prefer — they reach the same place.
 **Option 1 — self-updating (never edit this one).** Reads the latest GA straight
 from Fedora's official, Beta-safe
 [`releases.json`](https://fedoraproject.org/releases.json) (GA shows as a bare
-integer `"44"`; a Beta shows as `"45 Beta"`, so an integer-only `max` never lands
+integer `"44"`; the regex matches only purely-integer `version` values, so any non-GA/pre-release entry (not a bare integer) is ignored and an integer-only `max` never lands
 on a pre-release) and caps the jump at +2:
 
 ```sh
@@ -115,7 +115,13 @@ The only manual steps. As root on a fresh Fedora Cloud instance:
 dnf -y install git
 useradd -m -G wheel core
 echo 'core ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/core
-su - core -c 'git clone https://github.com/oso-gato/fedora-bootstrap && cd fedora-bootstrap && ./setup.sh'
+if su - core -c 'git clone https://github.com/oso-gato/fedora-bootstrap && cd fedora-bootstrap && ./setup.sh' < /dev/null; then
+  echo 'setup.sh: all phases PASS.'
+else
+  echo '*** setup.sh did NOT finish all-PASS. If it printed a login.tailscale.com link,'
+  echo '*** open it once, then re-run:  su - core -c "cd ~/fedora-bootstrap && ./setup.sh" < /dev/null'
+  echo '*** Otherwise fix the cause shown above and re-run the same command.'
+fi
 passwd core      # optional, runs last — Cockpit/console password (SSH stays key-only)
 ```
 
@@ -128,10 +134,15 @@ already provide a cloud-init user (often `fedora`) — using it instead of creat
 
 `setup.sh` is idempotent and ordered (8 numbered phases: packages → services
 → ssh keys → tailscale → tmux-attach → claudebox assemble → Claude policy →
-verify). It pauses you exactly twice: the tailscale auth link (once per
-host) and Claude Code's first `claude` login. Re-run after any failure; it
-resumes safely. Rebuild the box anytime by re-running setup.sh (assemble is
-declarative; ad-hoc tools inside the box are disposable by design).
+verify). It pauses at most once during the run: the tailscale auth link (once
+per host; open it, then re-run setup.sh). Claude Code is installed but NOT logged
+in by setup.sh — the first time you run `claude` (the wrapper in ~/.local/bin) you
+complete OAuth once. On this headless VPS that first run prints a login URL: open
+it in your Mac browser, approve, and paste the returned code back into the SSH
+session; for unattended use mint a token with `distrobox enter claudebox -- claude
+setup-token` and export CLAUDE_CODE_OAUTH_TOKEN (a secret — never commit it). Re-run
+after any failure; it resumes safely. Rebuild the box anytime by re-running setup.sh
+(assemble is declarative; ad-hoc tools inside the box are disposable by design).
 
 **SSH keys & provenance.** Phase 3 pulls your public keys from
 `github.com/oso-gato.keys` (GitHub is the registry — no keys in this repo) and
