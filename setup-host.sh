@@ -66,7 +66,7 @@ dnf -y -q --repo=tailscale-stable makecache >/dev/null 2>&1 || true
 # allowlist of what IS installed; an add-in that isn't listed simply isn't there (do NOT drop this flag).
 dnf -y --setopt=install_weak_deps=False install \
     distrobox flatpak-session-helper podman tmux mosh openssh-server tailscale \
-    dnf5-plugin-automatic \
+    dnf5-plugin-automatic fail2ban \
     cockpit cockpit-podman cockpit-files \
     cockpit-networkmanager cockpit-selinux
 
@@ -186,7 +186,7 @@ EOS
 systemctl daemon-reload
 systemctl enable --now dnf5-automatic.timer reboot-needed-notify.timer
 
-PHASE "host 5/7 ssh: permit only LOGIN_KEY from authorized_keys"
+PHASE "host 5/7 ssh: permit only LOGIN_KEY from authorized_keys + fail2ban brute-force jail"
 # Whitelist ONLY the LOGIN_KEY variable (never the unsafe blanket `yes`, which would also
 # permit LD_PRELOAD et al.). The keys themselves are synced into the user's own ~/.ssh by
 # setup-user.sh (user layer).
@@ -197,6 +197,31 @@ tee /etc/ssh/sshd_config.d/20-login-key.conf >/dev/null <<'EOS'
 PermitUserEnvironment LOGIN_KEY
 EOS
 systemctl reload sshd 2>/dev/null || systemctl restart sshd
+
+# fail2ban: brute-force mitigation on the public sshd port (22). Fedora 44 has journald, so
+# `backend = auto` picks systemd (reads sshd's AUTHPRIV events from the journal — no rsyslog
+# needed on the host). tailnet CGNAT 100.64.0.0/10 is ignoreip'd so Tailscale-side logins
+# from your own devices are never throttled. Fedora Cloud Base ships no firewalld, so
+# `iptables-multiport` works directly via iptables-nft. Bantime 1h matches fedora-dev's
+# v1.1.9 jail for symmetric posture.
+install -d /etc/fail2ban/jail.d
+tee /etc/fail2ban/jail.d/sshd-fedora-bootstrap.local >/dev/null <<'EOS'
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+backend  = auto
+ignoreip = 127.0.0.1/8 ::1 100.64.0.0/10
+banaction = iptables-multiport
+
+[sshd]
+enabled = true
+port    = 22
+logpath = %(sshd_log)s
+EOS
+systemctl enable --now fail2ban.service
+# Re-assert config on re-runs (drop-in changes don't reload automatically).
+systemctl reload fail2ban.service 2>/dev/null || systemctl restart fail2ban.service
 
 PHASE "host 6/7 tailscale (host node + Tailscale SSH; Cockpit over tailnet)"
 # Routing posture — ON BY DEFAULT for this deployment: this box is meant to BE an exit node and to reach the

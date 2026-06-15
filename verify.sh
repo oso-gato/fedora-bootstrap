@@ -21,6 +21,8 @@ ck "box-update: daily refresh timer enabled"       "systemctl --user is-enabled 
 ck "box-update: claudebox-rebuild command present"  "test -x ~/.local/bin/claudebox-rebuild"
 # host self-update — dnf-automatic on the monthly cadence
 ck "host: dnf-automatic timer enabled"             "systemctl is-enabled dnf5-automatic.timer"
+# v1.1.9: brute-force jail on public sshd:22 — symmetric posture with fedora-dev's public ssh:4444.
+ck "host: fail2ban active (sshd jail)"             "systemctl is-active fail2ban.service && fail2ban-client status sshd"
 # DOCTRINE BOUNDARY: the in-box agent's scoped sudo must NOT grant host-mutating dnf (that would be
 # host root). -k clears any cached timestamp so a recent password-sudo can't mask a missing grant.
 ck "host: agent has NO passwordless dnf (immutable host)" "! sudo -kn /usr/bin/dnf --version"

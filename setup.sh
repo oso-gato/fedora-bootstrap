@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.1.8 (HOW DO I operational recipes added to host-claudebox policy; contradictions audit-fixed)
+# Version: 1.1.9 (host gains fail2ban brute-force jail on sshd; bootstrap drops fedora-dev env-file scaffold — fleet-wide consistent key-only ssh + no runtime secrets)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

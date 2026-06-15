@@ -269,24 +269,14 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     install -d -m 0755 "$HOME/.config/containers/systemd"
     install -m 0644 "$HOME/$_c/$_c.container" "$HOME/.config/containers/systemd/"
 
-    # (c) Env-file scaffold for runtime secrets the Quadlet reads via
-    # EnvironmentFile=. Create empty placeholder with 0600 mode if missing;
-    # operator populates before first start.
-    install -d -m 0700 "$HOME/.config/container-refresh"
-    if [ ! -e "$HOME/.config/container-refresh/$_c.env" ]; then
-        cat > "$HOME/.config/container-refresh/$_c.env" <<EOF
-# Runtime secrets for $_c (read by Quadlet's EnvironmentFile=). Mode 0600.
-# Populate the values, then: systemctl --user start $_c.service
-CORE_PASSWORD=
-# TS_AUTHKEY=tskey-... (optional — uncomment for unattended tailnet join)
-EOF
-        chmod 0600 "$HOME/.config/container-refresh/$_c.env"
-        echo "*** ACTION REQUIRED: populate $HOME/.config/container-refresh/$_c.env" >&2
-        echo "*** then: systemctl --user start $_c.service"                            >&2
-    fi
-
-    # (d) Enable the refresh + retry timers. The Quadlet-generated <name>.service
-    # is enabled separately by the operator (first start after env is populated).
+    # (c) Enable the refresh + retry timers. The Quadlet-generated <name>.service
+    # is enabled separately by the operator (or by the per-version upgrade
+    # subsection). v1.1.9: NO env-file scaffold — workload Quadlets no longer
+    # carry runtime secrets (fedora-dev's CORE_PASSWORD was eliminated; sshd is
+    # key-only with keys synced from github.com/<user>.keys). If a future
+    # workload re-introduces a runtime secret, prefer `podman secret` + Quadlet
+    # `Secret=` over env files. Stale ~/.config/container-refresh/*.env files
+    # from pre-v1.1.9 hosts are harmless (unread); operators may delete.
     systemctl --user enable --now \
         "workload-refresh@${_c}.timer" \
         "workload-refresh-retry@${_c}.timer"

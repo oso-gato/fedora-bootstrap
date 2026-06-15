@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.8** — host-claudebox policy gains HOW DO I... operational-recipes section (refresh workload, add to fleet, check fleet status, investigate deferring, rollback-via-SURFACE, propose change, signature-flip-via-SURFACE). Self-audited recipes against role boundaries — two recipes reframed from imperative-action to SURFACE-to-operator to honor busy-probe + propose-and-commit doctrine.
+Version: **1.1.9** — host gains a fail2ban brute-force jail on sshd (symmetric posture with the new fedora-dev v1.1.9 public ssh path); bootstrap drops the fedora-dev env-file scaffold (CORE_PASSWORD eliminated upstream — sshd is now key-only with keys synced from `github.com/<user>.keys` at every fedora-dev container start). Fleet-wide consistent: key-only ssh on both host and fedora-dev, no runtime secrets in workload Quadlets.
 
 ## Purpose
 
@@ -167,6 +167,96 @@ git pull --ff-only origin main
 ```
 
 (If you're jumping from a pre-v1.1.1 version, follow the v1.1.1 block above — it folds these doc-only patches in along the way; this subsection is just a record-of-no-action for hosts already at v1.1.1.)
+
+#### Upgrading to v1.1.9 (from v1.0.0)
+
+Two code changes, applied in lockstep with [`fedora-dev` v1.1.9](https://github.com/oso-gato/fedora-dev) for fleet-wide consistency:
+
+- **Host gains `fail2ban`** with an `sshd` jail (`backend = auto` so it reads from `journald`; tailnet CGNAT `100.64.0.0/10` is `ignoreip`'d). The host's public sshd on :22 now has the same brute-force posture as fedora-dev's new public sshd on host :4444.
+- **Bootstrap drops the env-file scaffold** for `fedora-dev`. Upstream `fedora-dev` v1.1.9 eliminates `CORE_PASSWORD` entirely (sshd is key-only; authorized_keys synced from `github.com/<user>.keys` at every container start) and adds public-IP paths: ssh on host `:4444` → container `:22`, mosh on UDP `61001-62000` (non-default range, chosen to NOT collide with the host's own public mosh-server which uses 60000-61000 on the same kernel UDP namespace). The Quadlet drops `EnvironmentFile=`; `~/.config/container-refresh/fedora-dev.env` becomes unused.
+
+**Assumptions about the starting state:**
+- Hosts at **v1.0.0 / v1.1.0** are running `fedora-dev` from raw `podman run` (pre-Quadlet). The block below stops it and starts the v1.1.9 Quadlet, exactly as v1.1.1 did. No CORE_PASSWORD is needed at any step.
+- Hosts at **v1.1.1 through v1.1.8** already have `fedora-dev.service` running with the old env-file Quadlet. The block detects that path and does `daemon-reload` + `restart` instead — `Pull=newer` fetches the v1.1.9 image and the new Quadlet (no `EnvironmentFile=`) takes effect on restart.
+
+`fedora-dev:latest` on GHCR must already point to the v1.1.9 manifest before you run this block (CI on `oso-gato/fedora-dev` builds + cosigns on push to main; check with `podman manifest inspect ghcr.io/oso-gato/fedora-dev:latest | jq .config.digest` against the v1.1.9 tag commit's CI run).
+
+**As root on the VPS:**
+
+```sh
+# 1. Standard upgrade flow — installs all deltas (workload-refresh harness if
+#    coming from pre-v1.1.1, fail2ban+jail in v1.1.9, env-scaffold drop in v1.1.9).
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+
+# 2. Re-apply the fedora-dev workload — pulls v1.1.9 image, applies new Quadlet.
+#    Branches by starting state: if the .service exists, daemon-reload + restart;
+#    otherwise stop-and-recreate the pre-Quadlet container (v1.0.0/v1.1.0 path).
+su - core -c '
+    if systemctl --user is-enabled fedora-dev.service >/dev/null 2>&1; then
+        # v1.1.1+ path: in-place Quadlet refresh.
+        systemctl --user daemon-reload
+        systemctl --user restart fedora-dev.service
+    else
+        # v1.0.0/v1.1.0 path: retire pre-Quadlet container, enable Quadlet'\''d one.
+        podman stop fedora-dev 2>/dev/null || true
+        podman rm   fedora-dev 2>/dev/null || true
+        systemctl --user daemon-reload
+        systemctl --user enable --now fedora-dev.service
+    fi
+'
+
+# 3. (Optional cleanup) Remove the now-unused env-file scaffold from prior versions.
+#    Harmless to leave in place — the v1.1.9 Quadlet has no EnvironmentFile= so the
+#    file is no longer read by anything.
+rm -f /home/core/.config/container-refresh/fedora-dev.env
+
+# 4. Verify host fail2ban + fedora-dev health.
+fail2ban-client status sshd | head -10
+su - core -c '
+    systemctl --user status fedora-dev.service --no-pager | head -20
+    podman ps --filter name=fedora-dev
+'
+```
+
+Expected after step 4: `fail2ban-client status sshd` shows `Currently banned: 0` (or some number) and `File list: /var/log/secure` (or the systemd-journal source) — the jail is active. `fedora-dev.service` shows `active (running)`, healthcheck `(healthy)` within ~30s on the new image.
+
+Functional probe each access path:
+
+```sh
+# From a client on the public internet (NOT the tailnet) — confirms public surface
+# survived the upgrade and uses the NEW ports:
+ssh -p 4444 core@<public-ip>                                  # key-only; one of github.com/<user>.keys
+mosh -p 61001:62000 --ssh='ssh -p 4444' core@<public-ip>     # public mosh range
+
+# From a tailnet device — confirms keyless Tailscale SSH still works:
+ssh core@<vps>.<tailnet>.ts.net
+```
+
+**Rollback** if v1.1.9 misbehaves (e.g., fedora-dev fails to come up healthy on the new image):
+
+```sh
+# (a) Revert /opt/fedora-bootstrap to v1.1.8 — drops fail2ban config + restores
+#     the env-file scaffold path.
+cd /opt/fedora-bootstrap
+git checkout v1.1.8
+./setup.sh < /dev/null
+
+# (b) Roll fedora-dev back to the prior image digest. workload-refresh.service
+#     records the prior digest in /home/core/.local/state/container-refresh/
+#     <name>.prev-digest; the auto-rollback path on health-failure already uses
+#     it, but you can also pin manually:
+su - core -c '
+    prev=$(cat ~/.local/state/container-refresh/fedora-dev.prev-digest 2>/dev/null)
+    [ -n "$prev" ] && podman tag "$prev" ghcr.io/oso-gato/fedora-dev:latest
+    systemctl --user daemon-reload
+    systemctl --user restart fedora-dev.service
+'
+# (If no prev-digest is recorded — first deploy at v1.1.9 — you can pull a
+# specific older tag with `podman pull ghcr.io/oso-gato/fedora-dev:<sha>`
+# and `podman tag` it as :latest.)
+```
 
 ---
 

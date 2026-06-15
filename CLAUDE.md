@@ -210,7 +210,7 @@ subsection.
 | policy/CLAUDE.md | host-claudebox runtime law (stamped at /etc/claude-code/CLAUDE.md inside the box) |
 | policy/managed-settings.json | deny-rule guardrails (defense-in-depth) + bypass-permissions disabled (managed tier) |
 | policy/sudoers.claudebox | scoped passwordless-sudo allowlist for the operating user; visudo-validated, stamped to /etc/sudoers.d/claudebox |
-| verify.sh | PASS/FAIL acceptance: sockets, box, claude, policy, host-engine reach, tailnet, box-rebuild units, workload-refresh timers, dnf-automatic timer, sudo doctrine boundary |
+| verify.sh | PASS/FAIL acceptance: sockets, box, claude, policy, host-engine reach, tailnet, box-rebuild units, workload-refresh timers, dnf-automatic timer, fail2ban sshd jail, sudo doctrine boundary |
 | .github/workflows/refresh-release.yml | weekly CI (Fri): re-checks Fedora's latest stable + Hostinger's provisioned version, refreshes README status line + pinned releasever |
 
 ## PACKAGES
@@ -226,6 +226,7 @@ subsection.
 | Host | tailscale | Tailscale's official dnf repo | tailnet node + Tailscale SSH + serves Cockpit |
 | Host | cockpit, -podman, -files, -networkmanager, -selinux | Fedora repos | browser host management (containers, files, network, SELinux), tailnet-only |
 | Host | dnf5-plugin-automatic | Fedora repos | unattended host package updates (15th monthly; applies, never auto-reboots) |
+| Host | fail2ban | Fedora repos | brute-force mitigation on the public sshd port (22). Reads sshd's AUTHPRIV events via journald (`backend = auto`); tailnet CGNAT 100.64.0.0/10 is `ignoreip`'d. Symmetric posture with the v1.1.9 fedora-dev image. |
 | Box | claude-code | Anthropic's official dnf repo (`latest` channel) | the manager — claudebox's purpose; refreshed daily by box rebuild |
 | Box | host-spawn | Fedora repos | container side of distrobox-host-exec (no GitHub download — deterministic) |
 | Box | bubblewrap, socat | Fedora repos | Claude Code's Linux sandbox dependencies |
