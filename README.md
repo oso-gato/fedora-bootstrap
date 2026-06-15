@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.1** — workload-container refresh harness (Quadlets + claudebox-lock deferral) added.
+Version: **1.1.2** — workload-container refresh harness (Quadlets + claudebox-lock deferral) added in v1.1.1; v1.1.2 adds the "Upgrading an existing host" convention.
 
 ## Purpose
 
@@ -226,6 +226,97 @@ each login's session after that tag, so every device lands in its own persistent
 (only the scoped `/etc/sudoers.d/claudebox` allowlist); the **required** `passwd core` sets
 its admin/`sudo` + Cockpit/console password — a password-gated `wheel` escalation for a human
 admin. SSH stays key-only regardless.
+
+## Upgrading an existing host to a new release
+
+### Convention (binding for every future release)
+
+Every release adds a subsection here documenting how to bring an existing
+deployed host up to that version. The pattern is invariant:
+
+1. **Standard upgrade flow** (always — idempotent):
+   ```sh
+   cd /opt/fedora-bootstrap
+   git pull --ff-only origin main
+   ./setup.sh < /dev/null
+   ```
+   `setup.sh` is fully idempotent: re-running on an existing host picks up
+   new phases, new files, new units, new policies, without disturbing existing
+   state. Volumes persist by name. Existing systemd units are re-stamped
+   (overwriting any drift).
+2. **Version-specific operator steps** (documented per release below) —
+   anything `setup.sh` can't or shouldn't do on its own: editing secret env
+   files, migrating from pre-Quadlet containers, retiring deprecated units,
+   confirming health.
+
+If a release contains BREAKING changes, the subsection MUST be titled
+"Upgrading to vX.Y.Z (from vA.B.C and later)" with the minimum supported
+prior version named. Otherwise: "Upgrading to vX.Y.Z (from any prior version)".
+
+### Upgrading to v1.1.1 (from any prior version)
+
+Adds the workload-container refresh harness, Quadlet-based deployment for
+`fedora-dev`, image-signature scaffolding, the restructured agent policy.
+The pre-v1.1.1 fedora-dev was started via raw `podman run` from `run.sh`;
+v1.1.1 replaces that with a Quadlet-generated `fedora-dev.service`. Named
+volumes (`fedora-dev-home`, `fedora-dev-state`) persist by name, so all
+in-volume state — Claude credentials, gh auth, in-flight projects, nested
+podman storage — carries over automatically.
+
+**As root on the VPS:**
+
+```sh
+# 1. Standard upgrade flow — picks up v1.1.1 code + new user 4/5 phase
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+
+# 2. Populate the new env-file scaffold for fedora-dev's runtime secrets.
+#    The Quadlet's EnvironmentFile= requires this file to exist with
+#    CORE_PASSWORD set before fedora-dev.service can start. Use the same
+#    CORE_PASSWORD you've been using; TS_AUTHKEY optional.
+nano /home/core/.config/container-refresh/fedora-dev.env
+
+# 3. Stop the pre-Quadlet fedora-dev container and start the Quadlet'd one.
+#    Container name collides; the old must come down before the new can come
+#    up. Named volumes persist by name — no data movement needed.
+su - core -c '
+    podman stop fedora-dev 2>/dev/null || true
+    podman rm   fedora-dev 2>/dev/null || true
+    systemctl --user daemon-reload
+    systemctl --user enable --now fedora-dev.service
+'
+
+# 4. Verify
+su - core -c '
+    systemctl --user status fedora-dev.service --no-pager | head -20
+    systemctl --user list-timers "workload-refresh@*" --no-pager
+    podman ps --filter name=fedora-dev
+'
+```
+
+**Expected after step 4:**
+
+- `fedora-dev.service` shows `active (running)`; healthcheck transitions to
+  healthy within ~30 seconds (`pgrep -x sshd && pgrep -x tailscaled` returns
+  zero inside the container).
+- Two `workload-refresh@fedora-dev` timers — `.timer` next-fires on the
+  upcoming 15th @ 04:00 ± 2h, `-retry@.timer` within the next hour.
+- `podman ps` shows fedora-dev as `Up` and `(healthy)`.
+
+**If something fails**, the old container can be brought back manually for
+inspection while you fix the issue:
+
+```sh
+su - core -c '
+    systemctl --user stop fedora-dev.service 2>/dev/null || true
+    cd ~/fedora-dev && CORE_PASSWORD=... ./run.sh
+'
+```
+
+(Replace `CORE_PASSWORD=...` with your actual password. This restores the
+pre-Quadlet flow.) Investigate via `journalctl --user -u fedora-dev.service`,
+then retry steps 2–4 once the issue is resolved.
 
 ## Using the host — get in and work
 
