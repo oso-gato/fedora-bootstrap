@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.2** — workload-container refresh harness (Quadlets + claudebox-lock deferral) added in v1.1.1; v1.1.2 adds the "Upgrading an existing host" convention.
+Version: **1.1.3** — workload-container refresh harness (v1.1.1); "Upgrading an existing host" convention (v1.1.2); convention section restructured to pure prose so the per-version code block is the unambiguous copy-paste target (v1.1.3).
 
 ## Purpose
 
@@ -231,27 +231,39 @@ admin. SSH stays key-only regardless.
 
 ### Convention (binding for every future release)
 
-Every release adds a subsection here documenting how to bring an existing
-deployed host up to that version. The pattern is invariant:
+This part is the rules for how upgrade docs get written, not commands to run.
+For an actual upgrade, jump to the per-version subsection below.
 
-1. **Standard upgrade flow** (always — idempotent):
-   ```sh
-   cd /opt/fedora-bootstrap
-   git pull --ff-only origin main
-   ./setup.sh < /dev/null
-   ```
-   `setup.sh` is fully idempotent: re-running on an existing host picks up
-   new phases, new files, new units, new policies, without disturbing existing
-   state. Volumes persist by name. Existing systemd units are re-stamped
-   (overwriting any drift).
-2. **Version-specific operator steps** (documented per release below) —
-   anything `setup.sh` can't or shouldn't do on its own: editing secret env
-   files, migrating from pre-Quadlet containers, retiring deprecated units,
-   confirming health.
+Every release MUST add a subsection here titled **"Upgrading to vX.Y.Z (from
+any prior version)"** — or **"Upgrading to vX.Y.Z (from vA.B.C and later)"**
+for breaking releases that require a minimum prior version.
 
-If a release contains BREAKING changes, the subsection MUST be titled
-"Upgrading to vX.Y.Z (from vA.B.C and later)" with the minimum supported
-prior version named. Otherwise: "Upgrading to vX.Y.Z (from any prior version)".
+Each subsection contains **one self-contained `sh` block** the operator pastes
+into the VPS's root terminal in a single go. The block always has these parts
+in order:
+
+- **Standard upgrade flow** (always first, always present): a `cd
+  /opt/fedora-bootstrap` → `git pull --ff-only origin main` → `./setup.sh <
+  /dev/null` sequence. `setup.sh` is fully idempotent — re-running on an
+  existing host picks up new phases, files, units, and policies without
+  disturbing existing state. Volumes persist by name; existing systemd units
+  are re-stamped, overwriting any drift.
+
+- **Version-specific operator steps** (only when needed): anything `setup.sh`
+  can't or shouldn't do on its own — editing secret env files, migrating from
+  pre-Quadlet containers, retiring deprecated units, etc. A purely-internal
+  release with no operator-visible changes can skip this entirely.
+
+- **Verification**: the exact commands to confirm the upgrade succeeded and
+  what their expected output looks like.
+
+- **Rollback recipe**: how to revert to the prior running state if the upgrade
+  fails midway.
+
+The standard upgrade flow is **never** broken out as its own code snippet in
+this Convention section — it is inlined as the first commands of every
+per-version block. That way the operator copies one block, pastes once, runs
+to completion. No assembly required at paste time.
 
 ### Upgrading to v1.1.1 (from any prior version)
 
