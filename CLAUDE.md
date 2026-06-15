@@ -107,3 +107,42 @@ heading is two-or-three lines max, human-facing, structurally:
 
 Nothing else goes between the top-level heading and the first per-version
 subsection.
+
+## BUILD PRINCIPLES (binding for every code change)
+
+| # | Principle | Rule |
+|---|---|---|
+| 1 | TARGET | Fedora Cloud Base, pinned latest stable (image tag in distrobox.ini, host assumptions documented in README). Bump deliberately, per rule 3. |
+| 2 | SOURCES | Host and box install only from: (a) Fedora repos via dnf (RPM); (b) the vendor's/developer's official RPM/dnf repo; (c) at worst a developer/vendor AppImage. Never curl-pipe-sh, language package managers onto PATH, tarballs onto PATH, third-party repos. Exceptions only by explicit user waiver recorded in the README Packages table. Current waivers: none. |
+| 3 | VERIFY FIRST | Fact-check any source/version against the live source before changing it. |
+| 4 | HOST MINIMAL & IMMUTABLE | The README's Packages table is the complete sanctioned host footprint. Anything else runs in a container or in claudebox. Host installs beyond it require an explicit user waiver, recorded there. |
+| 5 | NO SECRETS | No passwords, keys, or tokens in this repo, ever. Tailscale auth is interactive or via TS_AUTHKEY env at run time. |
+| 6 | GUARDRAILS ARE CODE | Claude Code's law lives in policy/ (enterprise tier: /etc/claude-code/ inside the box) and is re-stamped on every setup.sh run. Changing the rules = changing this repo. |
+| 7 | EXPOSURE | Public IP carries key-only ssh and mosh ONLY. Cockpit and every sensitive port are tailnet-only. etserver is never installed (replaced fleet-wide by mosh). |
+| 8 | VALIDATE | setup.sh ends with verify.sh; a bootstrap is done when every check PASSes. |
+| 9 | LEAST PRIVILEGE / LAYERS | Provisioning splits by identity: the SYSTEM layer (packages, /etc, system services) runs as root once via setup-host.sh; the ROOTLESS layer (podman, distrobox, Claude Code) runs as the operating user via setup-user.sh. The user is a password-gated `wheel` admin with NO blanket NOPASSWD; the in-box agent gets only a scoped passwordless allowlist (policy/sudoers.claudebox), grown solely by committing to the repo, and is OS-blocked from everything else (host installs stay hard-denied). Privileged files are written in place by root, never staged via a user-owned /tmp file. |
+
+## REPO FILE PURPOSES
+
+| File | Purpose |
+|---|---|
+| CLAUDE.md | this file — agent rules for editing this repo |
+| README.md | human-facing project doc (purpose, install, upgrade, use, reference) |
+| VERSION | repo's release version (single line, semver) |
+| setup.sh | orchestrator (run as root): runs the system layer then the rootless layer in their correct identities |
+| setup-host.sh | **system layer**, as root — packages, /etc, system services, tailnet, host dnf-automatic, creates `core` + its rootless prerequisites |
+| setup-user.sh | **rootless layer**, as `core` — user podman socket, ssh keys, claudebox, Claude policy, the `claude` + `claudebox-rebuild` wrappers + the box-rebuild units, workload-refresh harness, verify (no host privilege) |
+| sync-authorized-keys.sh | authorizes `core`'s allowlisted SSH keys from `github.com/<user>.keys` (fingerprint allowlist = the access policy; other keys ignored), tags each `environment="LOGIN_KEY=<device>"`; defensive (never wipes keys on a failed fetch) |
+| distrobox.ini | claudebox, declaratively (image pin, pre-init Anthropic repo on the `latest` channel, packages) |
+| box-rebuild.sh | the full claudebox rebuild (`distrobox rm -f` → re-run setup-user.sh); detached so it outlives the box it recreates |
+| claudebox-daily.sh | daily-refresh decision: rebuild now if idle, else defer to session exit |
+| claudebox-init.sh | claudebox host bridge (CONTAINER_HOST → host rootless podman socket) + in-box `claudebox-rebuild` command, applied post-assemble over the quote-safe `distrobox enter -- sudo` channel |
+| cockpit-tailnet-serve.sh | publishes Cockpit on the tailnet (`tailscale serve` :443 → loopback:9090) + writes `/etc/cockpit/cockpit.conf` for the proxied origin |
+| container-refresh.sh | per-workload refresh: busy-probe + pull + digest compare + `systemctl --user restart <name>.service` + rollback on health failure |
+| claudebox-busy-probe.sh | generic busy probe — `podman exec` + AND-check session.lock + box-rebuild.lock; exit 0/1/2 = idle/busy/broken |
+| systemd-units/ | instance templates for workload-refresh + retry |
+| policy/CLAUDE.md | host-claudebox runtime law (stamped at /etc/claude-code/CLAUDE.md inside the box) |
+| policy/managed-settings.json | deny-rule guardrails (defense-in-depth) + bypass-permissions disabled (managed tier) |
+| policy/sudoers.claudebox | scoped passwordless-sudo allowlist for the operating user; visudo-validated, stamped to /etc/sudoers.d/claudebox |
+| verify.sh | PASS/FAIL acceptance: sockets, box, claude, policy, host-engine reach, tailnet, box-rebuild units, workload-refresh timers, dnf-automatic timer, sudo doctrine boundary |
+| .github/workflows/refresh-release.yml | weekly CI (Fri): re-checks Fedora's latest stable + Hostinger's provisioned version, refreshes README status line + pinned releasever |

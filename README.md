@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.4** — release-doc convention moved from README into CLAUDE.md (agent-facing). README Upgrading intro is a short human-facing pointer only.
+Version: **1.1.5** — README scrubbed for human readability: Build Principles + Files tables moved to CLAUDE.md (agent-facing); Ecosystem + Workload + Privilege sections compressed; total ~705→~580 lines.
 
 ## Purpose
 
@@ -101,47 +101,39 @@ and Atomic hosts work as documented secondary paths.
 
 ## The ecosystem this host anchors
 
-1. **What the Fedora host does**
-   - **It spins up from this repo**: four root commands (Day 0 below), one
-     script, two clicks — then it is fully equipped.
-   - **It runs containers**: every major function is a Podman container
-     pulled from `ghcr.io/oso-gato/*` — nothing is installed onto the host
-     itself beyond this bootstrap's short, fixed package list.
-   - **It has claudebox to manage itself**: a Distrobox containing Claude
-     Code whose sole mission is host orchestration — pulling images,
-     spinning containers up and down, writing quadlets and runtime
-     configuration. It never builds, never develops, and treats the host as
-     immutable (policy/CLAUDE.md is the binding law, stamped into the box).
-   - **Every major function is a Podman container**, each from its own
-     GitHub repo with binding Build Principles, built by CI, published to
-     GHCR, pulled here. An image that exists only on this host is drift.
-   - **It has two development environments** — `debian-dev` (.deb/apt
-     world) and `fedora-dev` (RPM/dnf world) — containers where images and
-     projects are developed and validation-built with nested podman, then
-     pushed to GitHub for CI to build. Development never happens on the
-     host or in claudebox; deployment never happens from the dev boxes.
-   - **It carries my personal universe and second brain**: the desktop
-     containers (fedora-xrdp, fedora-tigervnc, fedora-kasm,
-     debian-kasm-tigervnc) run Claude Code with two primary interfaces —
-     **VS Code is the primary interface for the personal universe** (code,
-     projects, terminals), and **Obsidian is the primary interface for the
-     second brain** (the knowledge vault Claude Code reads and writes).
-     Sessions survive disconnects (RDP KillDisconnected / tmux).
+**The host runs containers, doesn't host applications.** Every major function
+is a podman container pulled from `ghcr.io/oso-gato/*`. Nothing else gets
+installed onto the host beyond this bootstrap's short package list. An image
+that exists only on this host (no repo, no CI behind it) is drift.
 
-2. **Remote access**
+**Container roles:**
 
-   | Door | From the public internet | From the tailnet |
-   |---|---|---|
-   | Host shell (ssh, mosh) | yes — key-only | yes (+ keyless Tailscale SSH) |
-   | Desktops (web: KasmVNC / noVNC / Guacamole) | yes — TLS + password | yes |
-   | Desktops (native RDP / VNC) | no | yes |
-   | Dev containers (ssh, mosh, Tailscale SSH) | no | yes |
-   | Cockpit | no | yes (tailscale serve) |
+- **claudebox** (this repo's product) — the host's own management agent. A
+  Distrobox containing Claude Code whose mission is host orchestration:
+  pulls images, runs containers, writes Quadlets and runtime configuration.
+  Never builds, never develops.
+- **fedora-dev / debian-dev** — development environments where container
+  images and projects are built and validation-tested with nested podman,
+  then pushed to GitHub for CI. Development happens here; deployment never
+  does.
+- **Desktop containers** (fedora-xrdp, fedora-tigervnc, fedora-kasm,
+  debian-kasm-tigervnc) — carry the personal universe and second brain. VS
+  Code is the primary interface for projects; Obsidian for the knowledge
+  vault. RDP KillDisconnected + tmux give session survival across disconnects.
 
-   The public IP exposes exactly two surfaces: the host's hardened shell
-   and the desktops' TLS web doors — and Guacamole already delivers a full
-   RDP session in the browser, so nothing native needs exposing. Every
-   shell login, on any door, lands in a persistent per-device tmux session (named by the authenticating key).
+**Remote access:**
+
+| Door | From the public internet | From the tailnet |
+|---|---|---|
+| Host shell (ssh, mosh) | yes — key-only | yes (+ keyless Tailscale SSH) |
+| Desktops (web: KasmVNC / noVNC / Guacamole) | yes — TLS + password | yes |
+| Desktops (native RDP / VNC) | no | yes |
+| Dev containers (ssh, mosh, Tailscale SSH) | no | yes |
+| Cockpit | no | yes (tailscale serve) |
+
+The public IP exposes exactly two surfaces: the host's hardened shell and the
+desktops' TLS web doors. Every shell login on any door lands in a persistent
+per-device tmux session named by the authenticating key.
 
 ## Day 0 — fresh VPS, root terminal
 
@@ -406,83 +398,24 @@ an update needs a restart to take effect, a login notice says so (driven by `dnf
 reboot at your convenience. A major Fedora jump (44 → 45) stays a deliberate, separate
 `dnf system-upgrade` you run by hand.
 
-**Workload containers (`fedora-dev`, `debian-dev`, downstream image containers)
-— monthly fleet refresh via Quadlets + claudebox-lock deferral.** Each
-workload container is deployed via a podman **Quadlet** (`<name>.container`
-shipped at the top of the container's own repo, copied by `setup-user.sh`
-to `~/.config/containers/systemd/`). systemd-generator emits `<name>.service`
-per container with `Notify=healthy`, `AutoUpdate=registry`, `HealthCmd=`,
-`Restart=always` — the standard upstream pattern.
+**Workload containers (fedora-dev today; debian-dev, downstream image
+containers to come) — monthly fleet refresh, 15th @ 04:00 local ± 2h
+jitter.** Each workload is deployed via a podman Quadlet (`<name>.container`
+shipped from its own repo, copied by `setup-user.sh` to
+`~/.config/containers/systemd/`). The host's workload-refresh harness pulls
+`:latest`, compares digests, and `systemctl --user restart <name>.service`
+to pick up the new image — but only if the in-container claudebox is idle
+(no live claude session, no in-flight box rebuild). Busy → deferred to an
+hourly retry timer until idle. New image fails healthcheck → automatic
+rollback by retagging `:latest` to the prior digest and restarting again.
 
-The refresh harness wraps each Quadlet with monthly trigger + busy probe +
-digest-compare + Quadlet-driven restart + image-rollback on health failure.
-Template-driven across the fleet: one systemd instance template, one probe,
-one refresh script. Adding a new workload container is a one-line edit to
-`WORKLOAD_CONTAINERS` in `setup-user.sh`; no new files.
-
-The pieces:
-
-| Piece | Generic across the fleet? |
-|---|---|
-| `~/.local/bin/container-refresh.sh` | yes — busy-probe + pull + digest-compare + `systemctl --user restart <name>.service` (Quadlet drives the restart) + rollback to prior digest on health failure |
-| `~/.local/bin/claudebox-busy-probe.sh <name>` | yes — `podman exec --user 1000:1000` into the container, AND-checks the two standard claudebox flocks; exit codes distinguish idle (0) / busy (1) / probe-broken (2) |
-| `~/.config/containers/systemd/<name>.container` | per-container Quadlet, shipped from the container's own repo |
-| `workload-refresh@<name>.service` + `.timer` | yes — instance template, `%i` substitutes container name |
-| `workload-refresh-retry@<name>.service` + `.timer` | yes — `ConditionPathExists`-gated hourly retry with ±15m jitter |
-
-Adding a workload container:
-
-```sh
-# 1. Uncomment the line in setup-user.sh's WORKLOAD_CONTAINERS array
-# 2. setup.sh re-run (root); the user phase:
-#    - clones github.com/oso-gato/<name> into ~/<name>/
-#    - copies ~/<name>/<name>.container into ~/.config/containers/systemd/
-#    - writes ~/.config/container-refresh/<name>.env scaffold (operator populates)
-#    - systemctl --user enable --now workload-refresh@<name>.timer \
-#                                    workload-refresh-retry@<name>.timer
-# 3. Populate the env file with CORE_PASSWORD (and optional TS_AUTHKEY)
-# 4. systemctl --user start <name>.service for first boot
-# 5. From the next 15th onward, refresh is automatic with busy-probe deferral
-```
-
-The uniform contract every workload container in this fleet must honor:
-
-- Published to **`ghcr.io/oso-gato/<name>:latest`** by its own CI.
-- Repo at **`github.com/oso-gato/<name>`** with an executable **`run.sh`** at the top.
-- Repo ships a **`<name>.container` Quadlet** at the top — declarative spec the host installs to `~/.config/containers/systemd/`.
-- Hosts an in-container claudebox using the **standard claudebox scripts** so
-  the lock paths are **`/home/core/.local/state/claudebox/{session,box-rebuild}.lock`**
-  inside the container.
-- Container's operator user is the generic **`core`** (Build Principle 5).
-
-These are the same conventions fedora-dev follows. Future workload containers
-inherit them through their own Build Principles tables.
-
-**Image signature verification.** Scaffolded but defaults to permissive
-(`insecureAcceptAnything` for `ghcr.io/oso-gato/*`). fedora-dev signs as of
-its `9180a24` commit (cosign keyless via GitHub Actions OIDC, attached to
-the immutable manifest digest). Once every workload CI signs, upgrade
-`~/.config/containers/policy.json` to `sigstoreSigned` per the comment block
-inside it. The scaffolding files — `~/.config/containers/policy.json` and
-`~/.config/containers/registries.d/ghcr-io.yaml` — are installed automatically
-by `setup-user.sh`.
-
-**Runtime secrets** for each workload container live in
-`~/.config/container-refresh/<name>.env` (mode 0600), read by the Quadlet
-via `EnvironmentFile=`. `setup-user.sh` creates an empty scaffold; the
-operator populates it once with `CORE_PASSWORD` (and optional `TS_AUTHKEY`)
-before the first `systemctl --user start <name>.service`.
-
-**Cadence:** 15th of each month @ 04:00 local ± 2h jitter. Hourly retry timer
-has ±15m jitter to spread fleet-wide retries across the hour. Trigger
-out-of-cadence with `systemctl --user start workload-refresh@<name>.service`
-(still respects probe).
-
-**Non-claudebox workloads** (a future database container, etc.) don't fit
-this template — they have no claudebox locks to probe. For those, write a
-separate `<name>-refresh.service` calling `container-refresh.sh` directly
-with a different (or empty) 4th argument. The generic `container-refresh.sh`
-is busy-probe-agnostic.
+Adding a workload to the fleet is a one-line edit to setup-user.sh's
+`WORKLOAD_CONTAINERS=()` array, then re-run `setup.sh`. The contract a
+workload container's repo must honor (image at `ghcr.io/oso-gato/<name>:latest`,
+`<name>.container` Quadlet shipped at the top, in-container claudebox at the
+standard lock paths, operator user `core`) is documented in
+[CLAUDE.md](CLAUDE.md). Image signature verification is scaffolded; defaults
+permissive until every workload CI signs via cosign.
 
 ## Privilege layers — what runs as root, what runs as the user
 
@@ -516,25 +449,12 @@ The only escalation is *inside* the box (the container's own root, not the host'
 | stamp the Claude policy into the box | the box's root, not the host's |
 | write `~/.local/bin/claude`; run `verify.sh` | `core`'s own |
 
-**The principles this enforces:**
+**What this enforces:**
 
-- **Least privilege.** Each action runs in its native identity. The system phase needs root
-  once; the user phase needs no broad host privilege — so `core` carries **no `NOPASSWD:ALL`**.
-  A human admin keeps a *password-gated* `wheel` escalation; the in-box Claude Code gets only a
-  **scoped passwordless allowlist** (`/etc/sudoers.d/claudebox`, from `policy/sudoers.claudebox`
-  — currently an exact-pinned `tailscale serve` loopback proxy + read-only `status`, no wildcards,
-  no `funnel`) and is OS-blocked from everything else.
-- **Immutable host, enforced by the OS.** Outside its small allowlist `core` has no passwordless
-  root, so the Claude Code running as `core` cannot modify the host — the `policy/CLAUDE.md` rule
-  "never modify the host" is backed by the kernel, not only the policy file. The agent grows its
-  allowlist only by *proposing* a command you commit to `policy/sudoers.claudebox` (the same
-  "propose; you commit" model as box packages).
-- **No cross-privilege file handoffs.** Privileged files are written *in place* in their
-  system directory by root (correct SELinux context); nothing is staged in a `core`-owned
-  `/tmp` file and handed to root (the SELinux `tmp_t` mislabel / `curl 23` failure class is
-  designed out, not patched).
-- **Clean failure domains.** A system failure surfaces in the root phase; a rootless failure
-  in the user phase — no SELinux denial masquerading as a user-script bug.
+- **Least privilege.** `core` has no `NOPASSWD:ALL`. A human admin escalates via password-gated `wheel` sudo. The in-box Claude Code gets only the scoped allowlist in `policy/sudoers.claudebox` (currently a pinned `tailscale serve` line + read-only `tailscale status`) — OS-blocked from anything else.
+- **Immutable host, kernel-enforced.** "Never modify the host" is backed by the absence of passwordless root, not just the policy file. To grow the agent's allowlist: propose a line, you commit, setup re-stamps it. Same "propose; you commit" model as box packages.
+- **Privileged files written in place by root** with correct SELinux context — never staged via a `core`-owned `/tmp` file.
+- **Clean failure domains.** System failures surface in the root phase, rootless failures in the user phase. No misattributed SELinux denials.
 
 ## Tailscale routing — LAN access & exit node
 
@@ -639,20 +559,6 @@ Verify the agent is live and offering your keys in the chosen order:
 ssh-add -l
 ```
 
-## Build Principles (binding — follow verbatim for any change to this repo)
-
-| # | Principle | Rule |
-|---|---|---|
-| 1 | TARGET | Fedora Cloud Base, pinned latest stable (image tag in distrobox.ini, host assumptions documented here). Bump deliberately, per rule 3. |
-| 2 | SOURCES | Host and box install only from: (a) Fedora repos via dnf (RPM); (b) the vendor's/developer's official RPM/dnf repo; (c) at worst a developer/vendor AppImage. Never curl-pipe-sh, language package managers onto PATH, tarballs onto PATH, third-party repos. Exceptions only by explicit user waiver recorded in the Packages table. Current waivers: none. |
-| 3 | VERIFY FIRST | Fact-check any source/version against the live source before changing it. |
-| 4 | HOST MINIMAL & IMMUTABLE | The host package list below is the complete sanctioned host footprint. Anything else runs in a container or in claudebox. Host installs beyond this list require an explicit user waiver, recorded here. |
-| 5 | NO SECRETS | No passwords, keys, or tokens in this repo, ever. Tailscale auth is interactive or via TS_AUTHKEY env at run time. |
-| 6 | GUARDRAILS ARE CODE | Claude Code's law lives in policy/ (enterprise tier: /etc/claude-code/ inside the box) and is re-stamped on every setup.sh run. Changing the rules = changing this repo. |
-| 7 | EXPOSURE | Public IP carries key-only ssh and mosh ONLY. Cockpit and every sensitive port are tailnet-only. etserver is never installed (replaced fleet-wide by mosh). |
-| 8 | VALIDATE | setup.sh ends with verify.sh; a bootstrap is done when every check PASSes. |
-| 9 | LEAST PRIVILEGE / LAYERS | Provisioning splits by identity: the SYSTEM layer (packages, /etc, system services) runs as root once via setup-host.sh; the ROOTLESS layer (podman, distrobox, Claude Code) runs as the operating user via setup-user.sh. The user is a password-gated `wheel` admin with NO blanket NOPASSWD; the in-box agent gets only a scoped passwordless allowlist (policy/sudoers.claudebox), grown solely by committing to the repo, and is OS-blocked from everything else (host installs stay hard-denied). Privileged files are written in place by root, never staged via a user-owned /tmp file. |
-
 ## Packages
 
 | Tier | Package | Source | Why |
@@ -671,26 +577,6 @@ ssh-add -l
 | Box | bubblewrap, socat | Fedora repos | Claude Code's Linux sandbox dependencies |
 | Box | podman (client) | Fedora repos | drives the HOST engine via CONTAINER_HOST socket |
 | Box | git, gh, tmux, fastfetch | Fedora repos | orchestration toolset (repos, GHCR auth, sessions) |
-
-## Files
-
-| File | Purpose |
-|---|---|
-| CLAUDE.md | repo-editing guide for Claude Code (read README first; Build Principles + Packages tables are binding; host-immutability doctrine; policy/* are the law stamped into the box) |
-| setup.sh | orchestrator (run as root): runs the system layer then the rootless layer in their correct identities |
-| setup-host.sh | **system layer**, as root — packages, /etc, system services, tailnet, host dnf-automatic, creates `core` + its rootless prerequisites |
-| setup-user.sh | **rootless layer**, as `core` — user podman socket, ssh keys, claudebox, Claude policy, the `claude` + `claudebox-rebuild` wrappers + the box-rebuild units, verify (no host privilege) |
-| sync-authorized-keys.sh | authorizes `core`'s **allowlisted** SSH keys from `github.com/<user>.keys` (fingerprint allowlist = the access policy; other keys ignored), tags each `environment="LOGIN_KEY=<device>"`; defensive (never wipes keys on a failed fetch) |
-| distrobox.ini | claudebox, declaratively (image pin, pre-init Anthropic repo on the `latest` channel, packages) |
-| box-rebuild.sh | the full box rebuild (`distrobox rm -f` → re-run setup-user.sh); run detached by `claudebox-rebuild-run.service` so it outlives the box it recreates — the target of all 3 update triggers |
-| claudebox-daily.sh | the daily-refresh **decision** (update method 1): rebuild now if idle, else defer so the `claude` wrapper rebuilds on session exit — never interrupts live work |
-| claudebox-init.sh | claudebox host bridge (CONTAINER_HOST → host rootless podman socket) + the in-box `claudebox-rebuild` command (method 2), applied as the box's own root post-assemble over the quote-safe `distrobox enter -- sudo` channel — avoids distrobox's init_hook quote traps |
-| cockpit-tailnet-serve.sh | installed to /usr/local/sbin; publishes Cockpit on the tailnet (`tailscale serve` :443 → loopback:9090, retrying until MagicDNS+HTTPS-certs are on) and writes `/etc/cockpit/cockpit.conf` with the node's MagicDNS Origin so the proxied login works |
-| policy/CLAUDE.md | Claude Code's binding law inside claudebox (mission: orchestrate, host immutable, source rules) |
-| policy/managed-settings.json | deny-rule guardrails (best-effort, defense-in-depth) + bypass-permissions disabled — non-overridable (managed tier) |
-| policy/sudoers.claudebox | scoped passwordless-sudo allowlist for the operating user (exact-pinned `tailscale serve` loopback proxy + read-only `status`; no wildcards, no `funnel`); grown by propose+commit; visudo-validated, stamped to /etc/sudoers.d/claudebox |
-| verify.sh | PASS/FAIL acceptance: sockets, box, claude, policy, host-engine reach, tailnet, the box-rebuild units + host dnf-automatic timer, and the doctrine boundary (agent has NO passwordless dnf) |
-| .github/workflows/refresh-release.yml | weekly CI (Fri): re-checks Fedora's latest stable + Hostinger's provisioned version, refreshes the README status line and the pinned releasever, committing only on change |
 
 ## Notes
 
