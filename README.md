@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.7** — Upgrading subsection made explicit about v1.0.0 OR v1.1.0 starting points (both supported by the same block); doc-only patches v1.1.2–v1.1.7 documented as a single consolidated subsection; CLAUDE.md release-doc convention extended to allow consolidation for runs of doc-only patches.
+Version: **1.1.8** — host-claudebox policy gains HOW DO I... operational-recipes section (refresh workload, add to fleet, check fleet status, investigate deferring, rollback-via-SURFACE, propose change, signature-flip-via-SURFACE). Self-audited recipes against role boundaries — two recipes reframed from imperative-action to SURFACE-to-operator to honor busy-probe + propose-and-commit doctrine.
 
 ## Purpose
 
@@ -107,7 +107,7 @@ Each release below has one self-contained code block to paste into the VPS root 
 
 > The rules governing what goes in each per-version subsection live in [CLAUDE.md](CLAUDE.md) (agent-facing).
 
-#### Upgrading to v1.1.1 (from v1.0.0 or v1.1.0)
+#### Upgrading to v1.1.1 (from v1.0.0)
 
 Adds the workload-container refresh harness, Quadlet-based deployment for `fedora-dev`, image-signature scaffolding, the restructured agent policy. The pre-v1.1.1 fedora-dev was started via raw `podman run` from `run.sh`; v1.1.1 replaces that with a Quadlet-generated `fedora-dev.service`. Named volumes (`fedora-dev-home`, `fedora-dev-state`) persist by name, so all in-volume state — Claude credentials, gh auth, in-flight projects, nested podman storage — carries over automatically.
 
@@ -156,9 +156,9 @@ su - core -c '
 '
 ```
 
-#### Upgrading to v1.1.2 through v1.1.7 (from v1.1.1)
+#### Upgrading to v1.1.2 through v1.1.8 (from v1.1.1)
 
-Documentation-only patches: README restructured into the operator-focused four-section shape, release-doc convention written down, binding agent tables (Build Principles, Packages, REPO FILE PURPOSES) consolidated in [CLAUDE.md](CLAUDE.md). No code changes; no version-specific operator steps. The standard upgrade flow alone is sufficient:
+Documentation + agent-policy patches: README restructured into the operator-focused four-section shape, release-doc convention written down, binding agent tables (Build Principles, Packages, REPO FILE PURPOSES) consolidated in [CLAUDE.md](CLAUDE.md), v1.0.0-baseline guarantee added to release-doc convention (v1.1.7), HOW DO I operational recipes added to the host-claudebox policy file (v1.1.8). No code changes; no version-specific operator steps. The standard upgrade flow alone is sufficient (and the next claudebox-rebuild on the host picks up the new in-box policy):
 
 ```sh
 cd /opt/fedora-bootstrap

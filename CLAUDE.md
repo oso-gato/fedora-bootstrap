@@ -59,9 +59,59 @@ EVERY release adds a subsection inside it. Prior versions' subsections are
 historical record — never modify them after their tag is pushed.
 
 Subsection title:
-- `"Upgrading to vX.Y.Z (from any prior version)"` — default
-- `"Upgrading to vX.Y.Z (from vA.B.C and later)"` — only for BREAKING
-  releases that require a minimum prior version (name the minimum)
+- `"Upgrading to vX.Y.Z (from v1.0.0)"` — default. v1.0.0 is the binding
+  baseline; every code-bearing release MUST support starting from there.
+- `"Upgrading to vX.Y.Z (from vA.B.C and later)"` — ONLY when the release
+  genuinely cannot support v1.0.0 as a starting point (destructive
+  migration, removed-then-restored capability, etc.). REQUIRES surfacing
+  the constraint to the user BEFORE writing the subsection.
+- `"Upgrading to vX.Y.Z through vX.Y.W (from v<last code-bearing>)"` —
+  consolidated doc-only patch runs; presumes the user already followed
+  the prior code-bearing release's subsection.
+
+## v1.0.0 BASELINE GUARANTEE (binding)
+
+By default, every per-version subsection for a code-bearing release MUST
+support v1.0.0 as a valid starting point. `setup.sh` is designed to be
+idempotent across the entire version history — re-running on a v1.0.0
+host installs all intermediate deltas (every `setup-host.sh` + every
+`setup-user.sh` phase) in a single pass, and the per-release operator
+steps (env file population, container migration, etc.) compose with the
+same standard upgrade flow.
+
+This is a HARD default, not a soft suggestion. When drafting a new
+release's upgrade subsection:
+
+1. Default the heading to `(from v1.0.0)`.
+2. Verify mentally (or by walking the diff against v1.0.0) that the
+   `setup.sh` re-run + the version-specific operator steps cleanly take
+   a v1.0.0 host to the new version. If yes, ship it.
+3. If you discover the upgrade GENUINELY cannot start from v1.0.0
+   (because some intermediate release performed a destructive migration
+   the new setup.sh can no longer redo, or because of an OS-level
+   constraint that broke a prior assumption): **STOP. Do not write the
+   subsection.** Surface the constraint to the user with:
+   - what the specific blocking factor is
+   - the minimum starting point that works
+   - whether a multi-step upgrade path (v1.0.0 → vA.B.C → new) can be
+     documented as a workaround
+   Let the user decide whether to relax `from v1.0.0`, document a
+   multi-step path, or refactor setup.sh to restore v1.0.0 starting
+   compatibility.
+
+If the heading reads `(from vA.B.C and later)` for any reason other than
+"the user explicitly accepted that this release cannot support v1.0.0",
+that is a violation of this rule.
+
+Examples named explicitly:
+- `"Upgrading to v1.1.1 (from v1.0.0)"` — code-bearing release; v1.0.0
+  fully supported per the analysis in the prose intro.
+- `"Upgrading to v1.1.2 through v1.1.7 (from v1.1.1)"` — consolidated
+  doc-only patch run, presumes v1.1.1.
+- `"Upgrading to v2.0.0 (from v1.5.0 and later)"` — hypothetical breaking
+  release where v1.0.0 cannot be a starting point because v1.5.0
+  permanently migrated something that v2.0.0 needs to be already migrated.
+  This kind of heading REQUIRES the prior user-discussion step.
 
 Subsection structure, in this order:
 

@@ -114,3 +114,107 @@ Task mentions any of:
 - `<name>.env` files at `~/.config/container-refresh/<name>.env` (mode 0600) carry runtime secrets the Quadlet reads via `EnvironmentFile=`. setup-user.sh creates scaffolds with empty values; operator populates before first `systemctl --user start <name>.service`.
 - `.pending` marker grown by appending timestamps; count > 24 hourly retries = stuck busy or compromised lock state (see REFRESH IS NOT A SECURITY BOUNDARY).
 - Host reboots / OS major upgrades / dnf-system-upgrade: not yours. Propose; human decides.
+
+## HOW DO I... (operational recipes)
+
+If a procedure you need isn't here, default to STOP-AND-SURFACE.
+
+### Refresh a workload container now (don't wait for the 15th)
+
+```sh
+NAME=fedora-dev                                                # or any in WORKLOAD_CONTAINERS
+systemctl --user start workload-refresh@${NAME}.service
+journalctl --user -u workload-refresh@${NAME}.service -f       # watch
+# Busy probe still applies — if a session is active inside ${NAME}, the refresh defers.
+```
+
+### Add a new workload container to the fleet
+
+Before proposing the array edit, verify the candidate honors the FLEET CONTRACT (six points above). If any fails, FIRST propose the conformance fix in the workload's own repo, then come back here.
+
+```sh
+cd ~/<your fedora-bootstrap clone>
+$EDITOR setup-user.sh             # uncomment the <name> entry in WORKLOAD_CONTAINERS=()
+git commit -am "fleet: add <name>"
+gh pr create --title "fleet: add <name>" --body "<contract verification + why>"
+# After human merge: the human re-runs setup.sh as root. setup clones the workload
+# repo, copies its Quadlet, writes ~/.config/container-refresh/<name>.env scaffold,
+# enables both timers. Operator populates the env file, then:
+#   systemctl --user start <name>.service
+```
+
+### Check fleet status (all workloads at a glance)
+
+```sh
+systemctl --user list-timers 'workload-refresh@*'              # next-firing per container
+ls -la ~/.local/state/container-refresh/ 2>/dev/null           # *.pending = deferred refresh
+podman ps --filter label=io.containers.autoupdate=registry \
+    --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'       # health + image per workload
+```
+
+### Investigate why a workload's refresh has been deferring
+
+```sh
+NAME=fedora-dev
+cat ~/.local/state/container-refresh/${NAME}.pending 2>/dev/null   # appended timestamps per defer
+journalctl --user -u workload-refresh@${NAME}.service --since '2 days ago' --no-pager | tail -50
+# Probe the in-container locks directly to see which one is held:
+podman exec --user 1000:1000 ${NAME} bash -c '
+    flock -n -x /home/core/.local/state/claudebox/session.lock     -c true; echo "session.lock probe=$?"
+    flock -n -x /home/core/.local/state/claudebox/box-rebuild.lock -c true; echo "box-rebuild.lock probe=$?"
+'
+# Probe exit 0 = lock is acquirable (idle); exit 1 = held (busy).
+# If > 24 hourly retries deferred: re-read REFRESH IS NOT A SECURITY BOUNDARY before doing anything.
+```
+
+### Roll a workload back to a prior image — SURFACE, don't act
+
+The workload-refresh harness already auto-rolls-back on healthcheck failure (retag :latest to prior digest, restart). If a manual rollback is needed beyond that — STOP AND SURFACE to the operator. Do NOT:
+
+- `podman tag` `:latest` locally to a prior digest and `systemctl restart`. This bypasses the busy-probe (DO NOT list above) and the next refresh re-pulls upstream `:latest` and overrides your retag anyway.
+- Edit `<name>.container` in `~/.config/containers/systemd/` directly. It gets overwritten on next `setup.sh` re-run.
+
+The DURABLE fix paths (operator + propose-and-commit):
+
+1. **Fix the upstream image**: open a PR in the workload's own repo (e.g. `oso-gato/fedora-dev`) reverting the bad commit; CI republishes `:latest` with the prior content; the next refresh pulls the corrected image.
+2. **Pin by digest in the Quadlet** (more invasive): propose a PR in the workload's own repo changing `Image=ghcr.io/oso-gato/<name>:latest` to `Image=ghcr.io/oso-gato/<name>@sha256:<prior digest>`. Operator merges; the host's monthly refresh picks up the pinned digest.
+
+Recipe for the agent: gather the evidence (what's broken, which prior digest worked) and write a SURFACE message naming the option + the diff that should be PR'd. The operator decides which path and runs it.
+
+### Force MY OWN rebuild (claudebox-on-host)
+
+```sh
+claudebox-rebuild     # this session ends; reconnect with `claude` after ~2-5 min
+```
+
+### Propose a change to the bootstrap (setup, policy, units, scripts)
+
+```sh
+cd ~/<your fedora-bootstrap clone>
+$EDITOR <file>
+git commit -am "<scope>: <subject>"
+gh pr create
+# After human merge: human re-runs setup.sh as root on the VPS to apply.
+# DO NOT edit live-installed scripts in ~/.local/bin/ or ~/.config/systemd/user/ —
+# they're overwritten on next setup.sh re-run anyway.
+```
+
+### Image-signature verification — SURFACE, don't flip
+
+`~/.config/containers/policy.json` defaults to permissive (`insecureAcceptAnything` for `ghcr.io/oso-gato/*`). Flipping a workload to `sigstoreSigned` is a deliberate operator-gate decision, not an agent action — it requires confirming the workload's CI actually signs every push (cosign + GitHub Actions OIDC), and a wrongly-flipped policy blocks the monthly refresh until reverted.
+
+The agent's role here:
+
+1. **Detect signing readiness** for a workload (e.g. by reading the workload's `.github/workflows/build.yml` to confirm `id-token: write` + `cosign sign` step exist).
+2. **SURFACE to the operator** a one-line readiness report per workload: signed / not yet signed / verification policy currently permissive vs enforcing.
+3. If the operator decides to flip: propose the change as a PR to bootstrap's `setup-user.sh` (which writes `policy.json` from a template), OR document it as a manual one-time operator step in the bootstrap README's Upgrading section. The operator runs the edit + a `podman pull --quiet` verification on the VPS itself.
+
+Do NOT live-edit `~/.config/containers/policy.json` on the host. The change wouldn't be reflected in the repo (drift), and a regression breaks every monthly refresh until found.
+
+### Check claudebox-on-host's own scheduled rebuilds
+
+```sh
+systemctl --user list-timers 'claudebox-rebuild*'
+journalctl --user -u claudebox-rebuild-run.service --since '2 days ago' | tail -40
+ls -la ~/.local/state/claudebox/                          # rebuild.pending = deferred
+```
