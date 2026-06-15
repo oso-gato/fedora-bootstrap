@@ -2,14 +2,18 @@
 
 ## BEFORE ANY CHANGE
 
-Read README.md. The "Build Principles" and "Packages" tables are BINDING.
-policy/CLAUDE.md + policy/managed-settings.json + policy/sudoers.claudebox are
-the law stamped into the host claudebox — editing them in THIS repo is the
-ONLY way they change.
+Read README.md for human-facing context (what this bootstrap is, what it
+provides, how operators use and maintain it). THIS file (CLAUDE.md) carries
+the binding agent-facing tables (BUILD PRINCIPLES, REPO FILE PURPOSES,
+PACKAGES) and the release/doc procedures.
 
-Host immutability is the core doctrine: README.md's host package list is the
+`policy/CLAUDE.md` + `policy/managed-settings.json` + `policy/sudoers.claudebox`
+are the law stamped into the host claudebox at runtime — editing them in
+THIS repo is the ONLY way they change.
+
+Host immutability is the core doctrine: the PACKAGES table below is the
 complete sanctioned host footprint. Never grow it without an explicit user
-waiver recorded in the Packages table.
+waiver recorded as a new row.
 
 The managed-settings.json deny list is best-effort defense-in-depth only —
 argument-shaped Bash deny rules are prefix-fragile (dnf5, /usr/bin/dnf,
@@ -113,9 +117,9 @@ subsection.
 | # | Principle | Rule |
 |---|---|---|
 | 1 | TARGET | Fedora Cloud Base, pinned latest stable (image tag in distrobox.ini, host assumptions documented in README). Bump deliberately, per rule 3. |
-| 2 | SOURCES | Host and box install only from: (a) Fedora repos via dnf (RPM); (b) the vendor's/developer's official RPM/dnf repo; (c) at worst a developer/vendor AppImage. Never curl-pipe-sh, language package managers onto PATH, tarballs onto PATH, third-party repos. Exceptions only by explicit user waiver recorded in the README Packages table. Current waivers: none. |
+| 2 | SOURCES | Host and box install only from: (a) Fedora repos via dnf (RPM); (b) the vendor's/developer's official RPM/dnf repo; (c) at worst a developer/vendor AppImage. Never curl-pipe-sh, language package managers onto PATH, tarballs onto PATH, third-party repos. Exceptions only by explicit user waiver recorded as a new row in the PACKAGES table below. Current waivers: none. |
 | 3 | VERIFY FIRST | Fact-check any source/version against the live source before changing it. |
-| 4 | HOST MINIMAL & IMMUTABLE | The README's Packages table is the complete sanctioned host footprint. Anything else runs in a container or in claudebox. Host installs beyond it require an explicit user waiver, recorded there. |
+| 4 | HOST MINIMAL & IMMUTABLE | The PACKAGES table below is the complete sanctioned host footprint. Anything else runs in a container or in claudebox. Host installs beyond it require an explicit user waiver, recorded as a new row. |
 | 5 | NO SECRETS | No passwords, keys, or tokens in this repo, ever. Tailscale auth is interactive or via TS_AUTHKEY env at run time. |
 | 6 | GUARDRAILS ARE CODE | Claude Code's law lives in policy/ (enterprise tier: /etc/claude-code/ inside the box) and is re-stamped on every setup.sh run. Changing the rules = changing this repo. |
 | 7 | EXPOSURE | Public IP carries key-only ssh and mosh ONLY. Cockpit and every sensitive port are tailnet-only. etserver is never installed (replaced fleet-wide by mosh). |
@@ -146,3 +150,25 @@ subsection.
 | policy/sudoers.claudebox | scoped passwordless-sudo allowlist for the operating user; visudo-validated, stamped to /etc/sudoers.d/claudebox |
 | verify.sh | PASS/FAIL acceptance: sockets, box, claude, policy, host-engine reach, tailnet, box-rebuild units, workload-refresh timers, dnf-automatic timer, sudo doctrine boundary |
 | .github/workflows/refresh-release.yml | weekly CI (Fri): re-checks Fedora's latest stable + Hostinger's provisioned version, refreshes README status line + pinned releasever |
+
+## PACKAGES
+
+| Tier | Package | Source | Why required |
+|---|---|---|---|
+| Host | podman | Fedora repos (preinstalled on Cloud) | the container engine — the host's purpose |
+| Host | distrobox | Fedora repos | runs claudebox (declarative via distrobox.ini); installs workload Quadlets |
+| Host | flatpak-session-helper | Fedora repos | host side of distrobox-host-exec (D-Bus activated; not preinstalled on Cloud) |
+| Host | tmux | Fedora repos | persistence layer — every remote login attaches a tmux session; outlives box rebuilds + tailscaled restarts |
+| Host | mosh | Fedora repos | roaming-resilient public remote shell (UDP, AEAD; bootstraps over sshd) |
+| Host | openssh-server | Fedora repos | key-only public door + mosh bootstrap (Cloud default config is already key-only) |
+| Host | tailscale | Tailscale's official dnf repo | tailnet node + Tailscale SSH + serves Cockpit |
+| Host | cockpit, -podman, -files, -networkmanager, -selinux | Fedora repos | browser host management (containers, files, network, SELinux), tailnet-only |
+| Host | dnf5-plugin-automatic | Fedora repos | unattended host package updates (15th monthly; applies, never auto-reboots) |
+| Box | claude-code | Anthropic's official dnf repo (`latest` channel) | the manager — claudebox's purpose; refreshed daily by box rebuild |
+| Box | host-spawn | Fedora repos | container side of distrobox-host-exec (no GitHub download — deterministic) |
+| Box | bubblewrap, socat | Fedora repos | Claude Code's Linux sandbox dependencies |
+| Box | podman (client) | Fedora repos | drives the HOST engine via CONTAINER_HOST socket |
+| Box | git, gh, tmux, fastfetch | Fedora repos | orchestration toolset (repos, GHCR auth, sessions) |
+
+Current waivers: none. Adding a package = add a row + edit setup-host.sh /
+distrobox.ini accordingly + PR.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.1.5 (README human-readability scrub; Build Principles + Files moved to CLAUDE.md)
+# Version: 1.1.6 (README operator-focused restructure; Packages + binding rules consolidated in CLAUDE.md)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
