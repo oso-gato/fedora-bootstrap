@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.6** — README restructured as an operator-focused project doc (Purpose → Outcomes → Using → Operating → Design appendix). Detailed implementation reference (Packages table, privilege-layer tables, Build Principles) lives in [CLAUDE.md](CLAUDE.md).
+Version: **1.1.7** — Upgrading subsection made explicit about v1.0.0 OR v1.1.0 starting points (both supported by the same block); doc-only patches v1.1.2–v1.1.7 documented as a single consolidated subsection; CLAUDE.md release-doc convention extended to allow consolidation for runs of doc-only patches.
 
 ## Purpose
 
@@ -107,9 +107,16 @@ Each release below has one self-contained code block to paste into the VPS root 
 
 > The rules governing what goes in each per-version subsection live in [CLAUDE.md](CLAUDE.md) (agent-facing).
 
-#### Upgrading to v1.1.1 (from any prior version)
+#### Upgrading to v1.1.1 (from v1.0.0 or v1.1.0)
 
 Adds the workload-container refresh harness, Quadlet-based deployment for `fedora-dev`, image-signature scaffolding, the restructured agent policy. The pre-v1.1.1 fedora-dev was started via raw `podman run` from `run.sh`; v1.1.1 replaces that with a Quadlet-generated `fedora-dev.service`. Named volumes (`fedora-dev-home`, `fedora-dev-state`) persist by name, so all in-volume state — Claude credentials, gh auth, in-flight projects, nested podman storage — carries over automatically.
+
+**Both v1.0.0 and v1.1.0 starting points are supported by the same upgrade block.** `setup.sh` is fully idempotent:
+
+- **From v1.0.0** → installs the v1.1.0 deltas (claudebox 3-way rebuild mechanism + host dnf-automatic + Anthropic `latest`-channel switch) AND the v1.1.1 deltas (workload-refresh harness + signature scaffolding + restructured policy) in a single setup.sh re-run.
+- **From v1.1.0** → re-stamps existing claudebox-rebuild state (idempotent no-op) and installs only the v1.1.1 delta.
+
+The version-specific operator steps below (env file population, container switch) are identical for both starting points.
 
 **As root on the VPS:**
 
@@ -148,6 +155,18 @@ su - core -c '
     cd ~/fedora-dev && CORE_PASSWORD=... ./run.sh
 '
 ```
+
+#### Upgrading to v1.1.2 through v1.1.7 (from v1.1.1)
+
+Documentation-only patches: README restructured into the operator-focused four-section shape, release-doc convention written down, binding agent tables (Build Principles, Packages, REPO FILE PURPOSES) consolidated in [CLAUDE.md](CLAUDE.md). No code changes; no version-specific operator steps. The standard upgrade flow alone is sufficient:
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+```
+
+(If you're jumping from a pre-v1.1.1 version, follow the v1.1.1 block above — it folds these doc-only patches in along the way; this subsection is just a record-of-no-action for hosts already at v1.1.1.)
 
 ---
 

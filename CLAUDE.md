@@ -99,6 +99,18 @@ NEVER:
   the prior subsection AND links to that note from the new release's
   subsection.
 
+CONSOLIDATION ALLOWED for runs of doc-only patches:
+- When a series of consecutive patch releases (e.g. v1.1.2 through v1.1.7)
+  contains NO code changes — only README/CLAUDE.md/docs refinements — a
+  SINGLE combined subsection titled "Upgrading to v1.1.X through v1.1.Y
+  (from v1.1.<lower>)" is acceptable in place of one subsection per
+  patch. The combined subsection still follows the standard shape (prose
+  intro stating "documentation-only patches", one code block with the
+  standard upgrade flow, no version-specific steps section since there
+  are none). When the next code-bearing release ships (e.g. v1.2.0 or
+  v1.1.8 with actual code), the consolidated subsection is CLOSED — the
+  new release gets its own full subsection.
+
 ## README "UPGRADING" INTRO SHAPE
 
 The intro under the top-level "Upgrading an existing host to a new release"
