@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.3** — workload-container refresh harness (v1.1.1); "Upgrading an existing host" convention (v1.1.2); convention section restructured to pure prose so the per-version code block is the unambiguous copy-paste target (v1.1.3).
+Version: **1.1.4** — release-doc convention moved from README into CLAUDE.md (agent-facing). README Upgrading intro is a short human-facing pointer only.
 
 ## Purpose
 
@@ -229,41 +229,13 @@ admin. SSH stays key-only regardless.
 
 ## Upgrading an existing host to a new release
 
-### Convention (binding for every future release)
+Each release below has a subsection with one self-contained code block to
+paste into the VPS root terminal as `root`. Find your target version and
+follow its subsection — that's the entire upgrade.
 
-This part is the rules for how upgrade docs get written, not commands to run.
-For an actual upgrade, jump to the per-version subsection below.
-
-Every release MUST add a subsection here titled **"Upgrading to vX.Y.Z (from
-any prior version)"** — or **"Upgrading to vX.Y.Z (from vA.B.C and later)"**
-for breaking releases that require a minimum prior version.
-
-Each subsection contains **one self-contained `sh` block** the operator pastes
-into the VPS's root terminal in a single go. The block always has these parts
-in order:
-
-- **Standard upgrade flow** (always first, always present): a `cd
-  /opt/fedora-bootstrap` → `git pull --ff-only origin main` → `./setup.sh <
-  /dev/null` sequence. `setup.sh` is fully idempotent — re-running on an
-  existing host picks up new phases, files, units, and policies without
-  disturbing existing state. Volumes persist by name; existing systemd units
-  are re-stamped, overwriting any drift.
-
-- **Version-specific operator steps** (only when needed): anything `setup.sh`
-  can't or shouldn't do on its own — editing secret env files, migrating from
-  pre-Quadlet containers, retiring deprecated units, etc. A purely-internal
-  release with no operator-visible changes can skip this entirely.
-
-- **Verification**: the exact commands to confirm the upgrade succeeded and
-  what their expected output looks like.
-
-- **Rollback recipe**: how to revert to the prior running state if the upgrade
-  fails midway.
-
-The standard upgrade flow is **never** broken out as its own code snippet in
-this Convention section — it is inlined as the first commands of every
-per-version block. That way the operator copies one block, pastes once, runs
-to completion. No assembly required at paste time.
+> The rules governing what goes in each per-version subsection live in
+> [CLAUDE.md](CLAUDE.md) (agent-facing; only relevant when the model adds a
+> subsection during a release).
 
 ### Upgrading to v1.1.1 (from any prior version)
 
