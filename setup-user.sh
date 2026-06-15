@@ -12,18 +12,18 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 PHASE() { printf '\n==== %s ====\n' "$*"; }
 
-PHASE "user 1/4 rootless podman socket"
+PHASE "user 1/5 rootless podman socket"
 # The user manager + bus were brought up by the root phase (setup-host.sh); this just
 # enables the per-user podman API socket the box drives via CONTAINER_HOST.
 [ -S "$XDG_RUNTIME_DIR/bus" ] || { echo "FATAL: user D-Bus ($XDG_RUNTIME_DIR/bus) is not up — run the SYSTEM phase (setup.sh as root / setup-host.sh) first." >&2; exit 1; }
 systemctl --user enable --now podman.socket
 
-PHASE "user 2/4 ssh keys (from github.com/${GH_KEYS_USER:-oso-gato}.keys, tagged per device)"
+PHASE "user 2/5 ssh keys (from github.com/${GH_KEYS_USER:-oso-gato}.keys, tagged per device)"
 # Writes THIS user's own ~/.ssh/authorized_keys (user layer; no host privilege). GitHub
 # is the key registry — no keys in this repo. Re-running resyncs.
 bash "$HERE/sync-authorized-keys.sh"
 
-PHASE "user 3/4 claudebox (declarative assemble from distrobox.ini) + Claude policy"
+PHASE "user 3/5 claudebox (declarative assemble from distrobox.ini) + Claude policy"
 cd "$HERE" && distrobox assemble create --file distrobox.ini
 echo ">> first enter builds the box (dnf install claude-code from Anthropic + init hooks) — this can take a minute"
 distrobox enter claudebox -- true   # triggers distrobox-init; fails loudly HERE, not mislabeled later
@@ -187,5 +187,112 @@ EOF
 systemctl --user daemon-reload
 systemctl --user enable --now claudebox-rebuild.path claudebox-rebuild-daily.timer
 
-PHASE "user 4/4 verify"
+PHASE "user 4/5 workload-container refresh (Quadlets + claudebox-lock deferral)"
+
+# THE FLEET. Each entry is a claudebox-pattern workload container honoring:
+#   - GHCR-published at ghcr.io/oso-gato/<name>:latest
+#   - Repo at github.com/oso-gato/<name> with executable run.sh AND a
+#     <name>.container Quadlet at the repo top
+#   - In-container claudebox at the standard lock paths
+#     (/home/core/.local/state/claudebox/{session,box-rebuild}.lock)
+#   - Operator user `core` (uid 1000)
+WORKLOAD_CONTAINERS=(
+    fedora-dev
+    # debian-dev      # uncomment when shipped
+    # fedora-xrdp     # uncomment when shipped
+    # fedora-kasm     # uncomment when shipped
+)
+
+# ---- generic helpers (one source of truth for the fleet) ----
+install -m 0755 "$HERE/container-refresh.sh"    "$HOME/.local/bin/container-refresh.sh"
+install -m 0755 "$HERE/claudebox-busy-probe.sh" "$HOME/.local/bin/claudebox-busy-probe.sh"
+
+# ---- systemd template units (refresh trigger + retry) ----
+install -m 0644 "$HERE/systemd-units/workload-refresh@.service"        "$HOME/.config/systemd/user/"
+install -m 0644 "$HERE/systemd-units/workload-refresh@.timer"          "$HOME/.config/systemd/user/"
+install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.service"  "$HOME/.config/systemd/user/"
+install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.timer"    "$HOME/.config/systemd/user/"
+
+# ---- image signature verification scaffolding ----
+# Default policy: trust ghcr.io/oso-gato/* unconditionally. Comment block at
+# the bottom of policy.json explains how to upgrade to sigstoreSigned once each
+# workload CI signs images via cosign + GitHub Actions OIDC.
+install -d -m 0755 "$HOME/.config/containers"
+install -d -m 0755 "$HOME/.config/containers/registries.d"
+if [ ! -e "$HOME/.config/containers/policy.json" ]; then
+    cat > "$HOME/.config/containers/policy.json" <<'EOF'
+{
+    "default": [{ "type": "reject" }],
+    "transports": {
+        "docker": {
+            "ghcr.io/oso-gato": [
+                {
+                    "type": "insecureAcceptAnything",
+                    "//": "TODO: upgrade to sigstoreSigned once all workload CIs sign. Replace this stanza with:",
+                    "//upgrade": "{ \"type\": \"sigstoreSigned\", \"keyPath\": \"/etc/containers/cosign-pub-keys/oso-gato.pub\" } OR keyless: { \"type\": \"sigstoreSigned\", \"signedIdentity\": { \"type\": \"matchRepoDigestOrExact\" }, \"fulcio\": { \"caData\": \"...\", \"oidcIssuer\": \"https://token.actions.githubusercontent.com\", \"subjectEmail\": \"...\" } }"
+                }
+            ],
+            "": [{ "type": "reject" }]
+        }
+    }
+}
+EOF
+fi
+if [ ! -e "$HOME/.config/containers/registries.d/ghcr-io.yaml" ]; then
+    cat > "$HOME/.config/containers/registries.d/ghcr-io.yaml" <<'EOF'
+docker:
+    ghcr.io:
+        use-sigstore-attachments: true
+EOF
+fi
+
+systemctl --user daemon-reload
+
+# ---- per-container provisioning ----
+for _c in "${WORKLOAD_CONTAINERS[@]}"; do
+    # (a) Clone the container's repo (idempotent). NO `|| true` on the pull
+    # so any genuine pull failure surfaces (security: silent fast-forward
+    # refusal could hide a force-push attack).
+    if [ ! -d "$HOME/$_c/.git" ]; then
+        git clone "https://github.com/oso-gato/$_c" "$HOME/$_c"
+    else
+        (cd "$HOME/$_c" && git pull --ff-only origin main)
+    fi
+
+    # (b) Install the container's Quadlet into systemd's user search path.
+    # Enforces the fleet contract: every workload repo MUST ship <name>.container.
+    if [ ! -f "$HOME/$_c/$_c.container" ]; then
+        echo "FATAL: $HOME/$_c/$_c.container missing — workload contract violation" >&2
+        echo "  (every workload container repo must ship a podman Quadlet at the top)" >&2
+        exit 1
+    fi
+    install -d -m 0755 "$HOME/.config/containers/systemd"
+    install -m 0644 "$HOME/$_c/$_c.container" "$HOME/.config/containers/systemd/"
+
+    # (c) Env-file scaffold for runtime secrets the Quadlet reads via
+    # EnvironmentFile=. Create empty placeholder with 0600 mode if missing;
+    # operator populates before first start.
+    install -d -m 0700 "$HOME/.config/container-refresh"
+    if [ ! -e "$HOME/.config/container-refresh/$_c.env" ]; then
+        cat > "$HOME/.config/container-refresh/$_c.env" <<EOF
+# Runtime secrets for $_c (read by Quadlet's EnvironmentFile=). Mode 0600.
+# Populate the values, then: systemctl --user start $_c.service
+CORE_PASSWORD=
+# TS_AUTHKEY=tskey-... (optional — uncomment for unattended tailnet join)
+EOF
+        chmod 0600 "$HOME/.config/container-refresh/$_c.env"
+        echo "*** ACTION REQUIRED: populate $HOME/.config/container-refresh/$_c.env" >&2
+        echo "*** then: systemctl --user start $_c.service"                            >&2
+    fi
+
+    # (d) Enable the refresh + retry timers. The Quadlet-generated <name>.service
+    # is enabled separately by the operator (first start after env is populated).
+    systemctl --user enable --now \
+        "workload-refresh@${_c}.timer" \
+        "workload-refresh-retry@${_c}.timer"
+done
+
+systemctl --user daemon-reload
+
+PHASE "user 5/5 verify"
 bash "$HERE/verify.sh"

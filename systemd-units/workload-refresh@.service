@@ -1,0 +1,20 @@
+[Unit]
+Description=Refresh workload container %i if its image changed
+Documentation=https://github.com/oso-gato/fedora-bootstrap
+Wants=podman.socket
+After=podman.socket
+
+[Service]
+Type=oneshot
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:%h/.local/bin
+# Single argument — the script self-routes by container name. No eval, no
+# quoted-string passing of the probe command. The script calls the busy-probe
+# directly.
+ExecStart=%h/.local/bin/container-refresh.sh %i
+# Deferral (exit 10) is treated as success — the retry timer handles it.
+SuccessExitStatus=10
+# Pull + restart + healthcheck wait can take longer than the default 90s for
+# fat images. Allow up to 30 min before systemd considers the unit hung.
+TimeoutStartSec=1800

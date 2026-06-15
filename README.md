@@ -1,5 +1,36 @@
 # fedora-bootstrap
 
+Version: **1.1.1** — workload-container refresh harness (Quadlets + claudebox-lock deferral) added.
+
+## Purpose
+
+`fedora-bootstrap` provisions a Fedora Cloud host and installs the **host's
+claudebox** — the Claude Code agent that operates the container fleet on
+that host. It is one half of a strict two-agent pipeline:
+
+- **the host's claudebox** (this repo's product) — where Claude Code DEPLOYS
+  and OPERATES container images on the Fedora VPS. Pulls images from
+  `ghcr.io/oso-gato/<name>:latest`, recreates running containers from each
+  image's `run.sh` via the workload-refresh harness, manages the systemd
+  user units that keep them healthy. It NEVER builds images.
+- **`fedora-dev`** (and future `debian-dev`, downstream image repos) — where
+  Claude Code DEVELOPS and VALIDATION-BUILDS those images. Their output is
+  pushed git commits; CI publishes to GHCR.
+
+The handoff is one-way and explicit:
+
+```
+image source developed in fedora-dev → pushed to GitHub → CI builds →
+ghcr.io/oso-gato/<name>:latest → the host's claudebox pulls + recreates
+via the workload-refresh harness on a monthly cadence
+```
+
+A container running on the host with no published image, no repo, and no CI
+behind it is drift. Don't create them. If a task appears to require building
+or modifying the source of an image, that work belongs to the image's own
+claudebox (inside `fedora-dev` for Fedora-based images, inside `debian-dev`
+for Debian-based) — not here.
+
 ## Fedora Cloud Update
 
 <!-- HOSTINGER_STATUS_START : auto-generated every Friday by .github/workflows/refresh-release.yml — do not edit by hand -->
@@ -299,6 +330,84 @@ updates on the **15th of each month** and **never reboots** (doctrine: a human d
 an update needs a restart to take effect, a login notice says so (driven by `dnf needs-restarting`);
 reboot at your convenience. A major Fedora jump (44 → 45) stays a deliberate, separate
 `dnf system-upgrade` you run by hand.
+
+**Workload containers (`fedora-dev`, `debian-dev`, downstream image containers)
+— monthly fleet refresh via Quadlets + claudebox-lock deferral.** Each
+workload container is deployed via a podman **Quadlet** (`<name>.container`
+shipped at the top of the container's own repo, copied by `setup-user.sh`
+to `~/.config/containers/systemd/`). systemd-generator emits `<name>.service`
+per container with `Notify=healthy`, `AutoUpdate=registry`, `HealthCmd=`,
+`Restart=always` — the standard upstream pattern.
+
+The refresh harness wraps each Quadlet with monthly trigger + busy probe +
+digest-compare + Quadlet-driven restart + image-rollback on health failure.
+Template-driven across the fleet: one systemd instance template, one probe,
+one refresh script. Adding a new workload container is a one-line edit to
+`WORKLOAD_CONTAINERS` in `setup-user.sh`; no new files.
+
+The pieces:
+
+| Piece | Generic across the fleet? |
+|---|---|
+| `~/.local/bin/container-refresh.sh` | yes — busy-probe + pull + digest-compare + `systemctl --user restart <name>.service` (Quadlet drives the restart) + rollback to prior digest on health failure |
+| `~/.local/bin/claudebox-busy-probe.sh <name>` | yes — `podman exec --user 1000:1000` into the container, AND-checks the two standard claudebox flocks; exit codes distinguish idle (0) / busy (1) / probe-broken (2) |
+| `~/.config/containers/systemd/<name>.container` | per-container Quadlet, shipped from the container's own repo |
+| `workload-refresh@<name>.service` + `.timer` | yes — instance template, `%i` substitutes container name |
+| `workload-refresh-retry@<name>.service` + `.timer` | yes — `ConditionPathExists`-gated hourly retry with ±15m jitter |
+
+Adding a workload container:
+
+```sh
+# 1. Uncomment the line in setup-user.sh's WORKLOAD_CONTAINERS array
+# 2. setup.sh re-run (root); the user phase:
+#    - clones github.com/oso-gato/<name> into ~/<name>/
+#    - copies ~/<name>/<name>.container into ~/.config/containers/systemd/
+#    - writes ~/.config/container-refresh/<name>.env scaffold (operator populates)
+#    - systemctl --user enable --now workload-refresh@<name>.timer \
+#                                    workload-refresh-retry@<name>.timer
+# 3. Populate the env file with CORE_PASSWORD (and optional TS_AUTHKEY)
+# 4. systemctl --user start <name>.service for first boot
+# 5. From the next 15th onward, refresh is automatic with busy-probe deferral
+```
+
+The uniform contract every workload container in this fleet must honor:
+
+- Published to **`ghcr.io/oso-gato/<name>:latest`** by its own CI.
+- Repo at **`github.com/oso-gato/<name>`** with an executable **`run.sh`** at the top.
+- Repo ships a **`<name>.container` Quadlet** at the top — declarative spec the host installs to `~/.config/containers/systemd/`.
+- Hosts an in-container claudebox using the **standard claudebox scripts** so
+  the lock paths are **`/home/core/.local/state/claudebox/{session,box-rebuild}.lock`**
+  inside the container.
+- Container's operator user is the generic **`core`** (Build Principle 5).
+
+These are the same conventions fedora-dev follows. Future workload containers
+inherit them through their own Build Principles tables.
+
+**Image signature verification.** Scaffolded but defaults to permissive
+(`insecureAcceptAnything` for `ghcr.io/oso-gato/*`). fedora-dev signs as of
+its `9180a24` commit (cosign keyless via GitHub Actions OIDC, attached to
+the immutable manifest digest). Once every workload CI signs, upgrade
+`~/.config/containers/policy.json` to `sigstoreSigned` per the comment block
+inside it. The scaffolding files — `~/.config/containers/policy.json` and
+`~/.config/containers/registries.d/ghcr-io.yaml` — are installed automatically
+by `setup-user.sh`.
+
+**Runtime secrets** for each workload container live in
+`~/.config/container-refresh/<name>.env` (mode 0600), read by the Quadlet
+via `EnvironmentFile=`. `setup-user.sh` creates an empty scaffold; the
+operator populates it once with `CORE_PASSWORD` (and optional `TS_AUTHKEY`)
+before the first `systemctl --user start <name>.service`.
+
+**Cadence:** 15th of each month @ 04:00 local ± 2h jitter. Hourly retry timer
+has ±15m jitter to spread fleet-wide retries across the hour. Trigger
+out-of-cadence with `systemctl --user start workload-refresh@<name>.service`
+(still respects probe).
+
+**Non-claudebox workloads** (a future database container, etc.) don't fit
+this template — they have no claudebox locks to probe. For those, write a
+separate `<name>-refresh.service` calling `container-refresh.sh` directly
+with a different (or empty) 4th argument. The generic `container-refresh.sh`
+is busy-probe-agnostic.
 
 ## Privilege layers — what runs as root, what runs as the user
 

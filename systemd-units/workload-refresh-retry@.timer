@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly retry of deferred refresh for workload container %i
+
+[Timer]
+OnCalendar=hourly
+# Spread fleet-wide hourly retries over 15 minutes so multiple containers'
+# retries don't all hit GHCR at :00 on the dot.
+RandomizedDelaySec=15m
+Persistent=false
+Unit=workload-refresh-retry@%i.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=Retry deferred refresh of workload container %i (fires only when pending)
+Documentation=https://github.com/oso-gato/fedora-bootstrap
+# The whole unit no-ops when no refresh was deferred for this container —
+# clean journalctl, no noise.
+ConditionPathExists=%h/.local/state/container-refresh/%i.pending
+Wants=podman.socket
+After=podman.socket
+
+[Service]
+Type=oneshot
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:%h/.local/bin
+ExecStart=%h/.local/bin/container-refresh.sh %i
+SuccessExitStatus=10
+TimeoutStartSec=1800

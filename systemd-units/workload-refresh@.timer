@@ -1,0 +1,13 @@
+[Unit]
+Description=Monthly refresh of workload container %i (15th, with claudebox-lock deferral)
+
+[Timer]
+# 15th of each month at 04:00 local time, plus up to 2h random jitter so
+# the entire workload-container fleet doesn't all hit GHCR at the same minute.
+OnCalendar=*-*-15 04:00
+RandomizedDelaySec=2h
+Persistent=true
+Unit=workload-refresh@%i.service
+
+[Install]
+WantedBy=timers.target
