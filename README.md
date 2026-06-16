@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.9** — host gains a fail2ban brute-force jail on sshd (symmetric posture with the new fedora-dev v1.1.9 public ssh path); bootstrap drops the fedora-dev env-file scaffold (CORE_PASSWORD eliminated upstream — sshd is now key-only with keys synced from `github.com/<user>.keys` at every fedora-dev container start). Fleet-wide consistent: key-only ssh on both host and fedora-dev, no runtime secrets in workload Quadlets.
+Version: **1.1.10** — Tailscale exit-node fix. `--advertise-exit-node` now rides the authenticated `tailscale up` join (IP forwarding enabled first) instead of a follow-up `tailscale set`, the timeout/`set` failures are no longer swallowed, and the host verifies the node reached `Running` with the route advertised before declaring success — a stuck login now aborts loudly under `set -e`. Closes a latent bug (present since v1.0.0) where a slow interactive login outran the old `--timeout=5m || true`, leaving the node logged out with the exit node never advertised (greyed-out in the admin console) while the bootstrap still reported "all layers PASS". Also documents the `autoApprovers` + tagged-auth-key zero-touch exit-node path. Prior: v1.1.9 — host fail2ban sshd jail; fedora-dev env-file scaffold dropped (fleet-wide key-only ssh, no runtime secrets).
 
 ## Purpose
 
@@ -258,6 +258,34 @@ su - core -c '
 # and `podman tag` it as :latest.)
 ```
 
+#### Upgrading to v1.1.10 (from v1.0.0)
+
+One code change, in `setup-host.sh`'s Tailscale phase (host 6/7) — no `fedora-dev` / workload action and no operator env steps. The standard upgrade flow carries it:
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+```
+
+**What changed.** `--advertise-exit-node` (and `--accept-routes`) now ride the authenticated `tailscale up` join, with IP forwarding enabled *before* the join, instead of a separate `tailscale set` afterward. The old order let a slow browser login outrun `--timeout=5m`: `up` timed out (swallowed by `|| true`), the racing `set` then ran against a not-yet-`Running` node (swallowed by `|| echo`), and the exit node was never advertised to the control plane — greyed-out in the admin console — yet the bootstrap still printed "all layers PASS". The fix carries the advertise on the join, stops swallowing failure (a stuck login now aborts loudly under `set -e`), and verifies the node reached `Running` with the route advertised before declaring success.
+
+**How the re-run behaves**, depending on the host's current Tailscale state:
+
+- **Logged out** (`tailscale status` → `NeedsLogin` — the symptom of the old bug): the re-run prints a fresh `https://login.tailscale.com/...` link. Open it and approve the node; the advertise lands as part of that login.
+- **Already up** (`Running`): the idempotent `tailscale set` re-asserts the advertise against the live node and it propagates immediately — no re-login.
+
+Then approve the exit node once (admin console → Machines → *this VPS* → Edit route settings → ✓ Use as exit node), or skip that click fleet-wide with `autoApprovers` — see [Tailscale routing](#tailscale-routing-lan-access--exit-node).
+
+**Verify:**
+
+```sh
+tailscale status --json | grep -E 'BackendState|"Online"'   # want: "Running" / true
+tailscale debug prefs   | grep -A2 AdvertiseRoutes          # want: 0.0.0.0/0 and ::/0
+```
+
+Then, on each client that should egress through the VPS: `tailscale set --exit-node=<vps> --exit-node-allow-lan-access`.
+
 ---
 
 ## Operating the host (as the maintainer)
@@ -316,6 +344,16 @@ Defaults: the VPS advertises itself as an exit node AND accepts subnet routes fr
 | Reach the LAN through the VPS | Ensure IP forwarding is on the LAN router (not this VPS) | the router host |
 | Use this VPS as an exit node | Approve the exit node | admin console → Machines → *this VPS* → Edit route settings → ✓ Use as exit node |
 | Use this VPS as an exit node | Opt in per client device | `tailscale set --exit-node=<vps> --exit-node-allow-lan-access` on each |
+
+**Zero-touch approval (skip the console click).** "Approve the exit node" above is manual because an interactively-joined node isn't trusted to self-approve. To eliminate it fleet-wide, join hosts with a **tagged** auth key (`TS_AUTHKEY=tskey-…` carrying e.g. `tag:server`) and add an `autoApprovers` rule to the tailnet policy file (admin console → Access controls):
+
+```json
+"autoApprovers": {
+    "exitNode": ["tag:server"]
+}
+```
+
+A `tag:server` host that advertises an exit node is then approved automatically at join — no per-host click. Caveat (Tailscale): auto-approval only fires when the tailnet *first* receives the advertisement, so the tag must be present at join — use the `TS_AUTHKEY` path, not interactive login, for those hosts.
 
 To run a containerized service as its own tailnet device (its own MagicDNS name): use the official `tailscale/tailscale` image in userspace mode with `TS_AUTHKEY` + `TS_HOSTNAME` + persistent `TS_STATE_DIR` volume. Don't advertise container subnets from the VPS.
 

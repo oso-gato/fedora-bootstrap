@@ -233,33 +233,11 @@ PHASE "host 6/7 tailscale (host node + Tailscale SSH; Cockpit over tailnet)"
 #                          (needs the IP forwarding below — Tailscale kb/1103).
 ts_bool(){ case "${1:-}" in 0|false|FALSE|no|off) echo false;; *) echo true;; esac; }   # default TRUE; only 0/false/off => off
 ACCEPT_ROUTES="$(ts_bool "${TS_ACCEPT_ROUTES:-}")"; ADVERTISE_EXIT="$(ts_bool "${TS_EXIT_NODE:-}")"
-# Carry --accept-routes on the FIRST join so `up` never prints the transient "peers are advertising routes but
-# --accept-routes is false" snapshot (it would, if accept-routes flipped on only afterward). --advertise-exit-node
-# is deliberately NOT on `up` — it would warn IP forwarding is off (we enable that just below), so it rides the
-# `set`. `up` does not persist these flags across runs, so the `set` re-asserts them idempotently on every run.
-ts_up=(--ssh); [ "$ACCEPT_ROUTES" = true ] && ts_up+=(--accept-routes)
-if ! tailscale status >/dev/null 2>&1; then
-    if [ -n "${TS_AUTHKEY:-}" ]; then
-        tailscale up "${ts_up[@]}" --auth-key="$TS_AUTHKEY"   # unattended join
-    else
-        echo ">> Tailscale needs browser auth. A https://login.tailscale.com/... link will"
-        echo ">> print on the NEXT line. Open it now and approve this node."
-        echo ">> (Or re-run with TS_AUTHKEY=tskey-... for an unattended join.)"
-        # --timeout bounds the wait for tailscaled to reach RUNNING; the node stays in
-        # NeedsLogin until you click the link, so this caps the auth hang. If you miss the
-        # window, `up` exits non-zero, `|| true` absorbs it, and a re-run no-ops (gated).
-        tailscale up "${ts_up[@]}" --timeout=5m || true
-    fi
-fi
-# Re-assert the posture every run with `tailscale set` (not `up`): changes only these prefs + persists, never
-# disturbing the --ssh from join. Advertising/accepting is NOT enough by itself — one-time admin-console
-# approvals still apply (below).
-tailscale set --accept-routes="$ACCEPT_ROUTES" --advertise-exit-node="$ADVERTISE_EXIT" \
-    || echo ">> 'tailscale set' deferred (node not logged in yet) — re-run setup.sh after completing the browser-auth link so the routing prefs land." >&2
+# Enable IP forwarding BEFORE the join. The kernel only forwards packets for an exit node when this is on
+# (Tailscale kb/1103), and `tailscale up --advertise-exit-node` warns when it is off — turning it on here is
+# what lets --advertise-exit-node ride the authenticated `up` itself (below) with no warning. Written to the
+# system-owned dir (correct SELinux context); idempotent.
 if [ "$ADVERTISE_EXIT" = true ]; then
-    # An exit node FORWARDS packets; the kernel only does that with IP forwarding on (Tailscale kb/1103;
-    # `tailscale up --advertise-exit-node` itself warns when it is off). Write it in place to the
-    # system-owned dir (correct SELinux context) and apply now. Idempotent.
     printf 'net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n' > /etc/sysctl.d/99-tailscale.conf
     sysctl -p /etc/sysctl.d/99-tailscale.conf >/dev/null
     # Fedora Cloud Base ships NO firewalld, so this is normally a no-op. Only if firewalld is actually
@@ -268,9 +246,52 @@ if [ "$ADVERTISE_EXIT" = true ]; then
     if systemctl is-active --quiet firewalld; then
         firewall-cmd --permanent --add-masquerade && firewall-cmd --reload
     fi
-    echo ">> Tailscale: advertising as an exit node (default ON). One-time admin-console step remains —"
-    echo ">> Machines > this VPS > Edit route settings > check 'Use as exit node'. Then on each client:"
-    echo ">>   tailscale set --exit-node=<this-VPS> --exit-node-allow-lan-access"
+fi
+# Carry EVERY routing pref on the join so they apply atomically as part of authentication. --accept-routes
+# on the join also avoids the transient "peers are advertising routes but --accept-routes is false" snapshot.
+# CRITICAL: --advertise-exit-node MUST ride `up`, not a follow-up `tailscale set`. A post-`up` `set` can run
+# before the node reaches Running (slow browser auth, pending device approval) and silently no-op — leaving the
+# exit node UN-ADVERTISED and greyed-out in the admin console while the script still reports PASS. Sending it on
+# `up` registers the advertised route with the control plane during login, so it always shows up for approval.
+ts_up=(--ssh)
+[ "$ACCEPT_ROUTES" = true ] && ts_up+=(--accept-routes)
+[ "$ADVERTISE_EXIT" = true ] && ts_up+=(--advertise-exit-node)
+if ! tailscale status >/dev/null 2>&1; then
+    if [ -n "${TS_AUTHKEY:-}" ]; then
+        tailscale up "${ts_up[@]}" --auth-key="$TS_AUTHKEY"   # unattended join
+    else
+        echo ">> Tailscale needs browser auth. A https://login.tailscale.com/... link will"
+        echo ">> print on the NEXT line. Open it now and approve this node."
+        echo ">> (Or re-run with TS_AUTHKEY=tskey-... for an unattended join.)"
+        # Bounded wait for RUNNING, but failure is NOT swallowed: under set -e a timeout aborts the script so
+        # the orchestrator's "investigate the failure" branch fires instead of a false PASS. (The old
+        # `--timeout=5m || true` ate the timeout, then a racing `set` ate its own failure — that double-swallow
+        # is what shipped half-configured nodes with the exit node never advertised.)
+        tailscale up "${ts_up[@]}" --timeout=10m
+    fi
+fi
+# Re-assert idempotently on every run (covers the already-up re-run path + pref drift). With forwarding already
+# on and the node Running by now, this neither warns nor races.
+tailscale set --accept-routes="$ACCEPT_ROUTES" --advertise-exit-node="$ADVERTISE_EXIT" \
+    || echo ">> 'tailscale set' deferred (node not logged in?) — re-run setup.sh after completing browser-auth." >&2
+if [ "$ADVERTISE_EXIT" = true ]; then
+    # Verify the node is actually LOGGED IN and the advertise reached the control plane. Checking local prefs
+    # alone is a false positive: `tailscale set` writes AdvertiseRoutes even on a logged-out (NeedsLogin) node,
+    # so the route shows locally yet never propagates and the admin console keeps the exit node greyed. Gate on
+    # BackendState=Running AND the advertised default route.
+    # `tailscale debug prefs` is an unstable debug surface, but it is the only route-level signal for an
+    # advertised-but-unapproved route; match EITHER default route since --advertise-exit-node advertises both
+    # 0.0.0.0/0 and ::/0 (an IPv4-only match would false-fail an IPv6-present output).
+    if tailscale status --json 2>/dev/null | grep -q '"BackendState":[[:space:]]*"Running"' \
+       && tailscale debug prefs 2>/dev/null | grep -Eq '0\.0\.0\.0/0|::/0'; then
+        echo ">> Tailscale: advertising as an exit node (default ON). One-time admin-console step remains —"
+        echo ">> Machines > this VPS > Edit route settings > check 'Use as exit node'. Then on each client:"
+        echo ">>   tailscale set --exit-node=<this-VPS> --exit-node-allow-lan-access"
+    else
+        echo "ERROR: node is not logged in (BackendState != Running) or the exit-node route is not advertised." >&2
+        echo "       Complete the browser-auth link so the node reaches Running, then re-run setup.sh." >&2
+        exit 1
+    fi
 fi
 # Publish Cockpit on the tailnet AND make Cockpit work behind that proxy. cockpit.socket is now
 # loopback-only (host 4/7), so the ONLY way to reach Cockpit is this `tailscale serve` proxy (TLS at 443

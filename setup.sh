@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.1.9 (host gains fail2ban brute-force jail on sshd; bootstrap drops fedora-dev env-file scaffold — fleet-wide consistent key-only ssh + no runtime secrets)
+# Version: 1.1.10 (tailscale exit-node fix: --advertise-exit-node rides the authenticated `up` join with IP forwarding enabled first, failure no longer swallowed, and a post-join Running+route verify — closes a latent bug where a slow interactive login left the node logged out with the exit node never advertised yet bootstrap reporting PASS)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
