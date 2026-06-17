@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.1.13 (rollback de-flap: container-refresh.sh's auto-rollback now clears .pending and writes a separate <name>.rolled-back marker instead of keeping .pending — the retry timer is gated on .pending and the registry :latest is still the bad image, so the old behavior re-pulled it hourly and re-flapped the rollback. The rollback now sticks until the next monthly cycle or operator action.)
+# Version: 1.1.14 (SELinux permissive-first: setup-host.sh moves a disabled host to SELINUX=permissive + schedules a one-time relabel (/.autorelabel). Fedora's default is enforcing but provider VPS images often ship it disabled (this host's was, set at provision — not by us). Never auto-reboots, never downgrades an already-enabled host, never sets enforcing automatically; the operator reboots, soaks in permissive, then flips to enforcing. The fedora-dev container stays SELinux-exempt (label=disable). Requires a reboot.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

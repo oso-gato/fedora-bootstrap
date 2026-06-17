@@ -186,6 +186,34 @@ EOS
 systemctl daemon-reload
 systemctl enable --now dnf5-automatic.timer reboot-needed-notify.timer
 
+# ---- SELinux: ensure at least PERMISSIVE. Fedora's default is enforcing, but
+# provider VPS images often ship SELINUX=disabled (this host did — set at provision,
+# not by us). We move disabled -> permissive and schedule a one-time filesystem
+# relabel; the operator reboots, soaks in permissive (reviewing `ausearch -m avc`),
+# then flips to enforcing MANUALLY once clean. Doctrine: NEVER auto-reboot, NEVER
+# downgrade an already permissive/enforcing host, and never set enforcing here.
+# Permissive-first is safe: it logs denials without blocking, so a mislabel from an
+# interrupted relabel can't wedge boot. The fedora-dev workload container stays
+# SELinux-exempt by design (label=disable — nested rootless podman needs it).
+selc=/etc/selinux/config
+if [ -f "$selc" ]; then
+    selcur=$(sed -n 's/^SELINUX=\([a-z]*\).*/\1/p' "$selc" | head -1)
+    case "$selcur" in
+        enforcing)  echo ">> SELinux already enforcing — leaving as-is." ;;
+        permissive) echo ">> SELinux already permissive — leaving as-is (flip to enforcing after soak)." ;;
+        *)  sed -i 's/^SELINUX=.*/SELINUX=permissive/' "$selc"
+            restorecon "$selc" 2>/dev/null || true
+            touch /.autorelabel
+            echo ">> SELinux was '${selcur:-unset}' -> set PERMISSIVE + scheduled a one-time relabel (/.autorelabel)."
+            echo ">> ACTION REQUIRED: REBOOT to apply — a full filesystem relabel runs on next boot (can be slow)."
+            echo ">>   After reboot: 'getenforce' should say Permissive. Soak, then review:"
+            echo ">>     sudo ausearch -m avc -ts recent     (empty = clean)"
+            echo ">>   To enforce once clean: set SELINUX=enforcing in $selc and reboot (no relabel needed)." ;;
+    esac
+else
+    echo ">> no $selc (SELinux userspace absent?) — skipping SELinux config." >&2
+fi
+
 PHASE "host 5/7 ssh: permit only LOGIN_KEY from authorized_keys + fail2ban brute-force jail"
 # Whitelist ONLY the LOGIN_KEY variable (never the unsafe blanket `yes`, which would also
 # permit LD_PRELOAD et al.). The keys themselves are synced into the user's own ~/.ssh by

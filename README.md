@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.13** — Rollback de-flap. `container-refresh.sh`'s auto-rollback now clears `.pending` and writes a separate `<name>.rolled-back` marker instead of keeping `.pending`: the hourly retry timer is gated on `.pending`, and after a rollback the registry `:latest` is still the bad image, so the old behavior re-pulled it every hour and re-flapped the rollback. The rollback now sticks until the next monthly cycle or operator action. Prior: v1.1.12 — refresh-safety + update-cadence docs (the 3 update points + the `Pull=missing` rollback comment).
+Version: **1.1.14** — SELinux permissive-first. `setup-host.sh` now moves a SELinux-disabled host to `SELINUX=permissive` and schedules a one-time relabel — Fedora's default is enforcing, but this VPS's provider image shipped it disabled (set at provision, not by us). It never auto-reboots, never downgrades an already-enabled host, and never sets `enforcing` on its own; the operator reboots, soaks in permissive (reviewing `ausearch -m avc`), then flips to `enforcing`. The `fedora-dev` container stays SELinux-exempt (`label=disable` — nested rootless podman needs it). **Requires a reboot** — see "Upgrading to v1.1.14". Prior: v1.1.13 — rollback de-flap (`.rolled-back` marker, no hourly re-pull).
 
 ## Purpose
 
@@ -363,6 +363,41 @@ git pull --ff-only origin main
 ```
 
 After a rollback you'll now see `~/.local/state/container-refresh/<name>.rolled-back` and no `<name>.pending` — the bad `:latest` is not retried until the next monthly cycle or a manual `systemctl --user start workload-refresh@<name>.service`.
+
+#### Upgrading to v1.1.14 (from v1.0.0)
+
+Turns SELinux back on (Fedora's default; this VPS's provider image shipped it disabled). `setup-host.sh` moves a disabled host to **permissive** and schedules a one-time relabel — it never auto-reboots, never downgrades an already-enabled host, and never sets `enforcing` (you do that after soaking). The `fedora-dev` container stays SELinux-exempt (`label=disable`). **This release requires a reboot** — the relabel runs on next boot.
+
+**Before you start:** take a Hostinger **snapshot** (hPanel → VPS → Snapshots) — hypervisor-level rollback if anything misbehaves. SELinux is enablable here because the VPS is KVM (own kernel) with no in-guest provider agent to conflict with.
+
+**As root on the VPS:**
+
+```sh
+# 1. Standard upgrade flow — installs the setup-host.sh SELinux step + re-stamps policy.
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+# setup.sh sets SELINUX=permissive + touches /.autorelabel, then prints
+# "ACTION REQUIRED: REBOOT". It does NOT reboot for you.
+
+# 2. Reboot to apply — a full filesystem relabel runs on next boot (can take minutes).
+reboot
+
+# 3. After it returns, confirm permissive and soak:
+getenforce                         # expect: Permissive
+sudo ausearch -m avc -ts recent    # review denials (empty = clean); soak a few days
+
+# 4. Once clean, flip to enforcing (no relabel needed this time):
+sudo sed -i 's/^SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config
+sudo reboot                        # after this: getenforce -> Enforcing
+```
+
+Expected after step 3: `getenforce` = `Permissive`, all services healthy, `verify.sh` PASSes (fedora-dev is unaffected — it's `label=disable`d). If `ausearch` shows denials tied to a service, fix labels (`restorecon -Rv <path>`) before enforcing.
+
+**Rollback** if SELinux causes trouble: restore the Hostinger snapshot, or revert to disabled —
+```sh
+sudo sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config && sudo reboot
+```
 
 ---
 
