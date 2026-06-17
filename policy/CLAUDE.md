@@ -24,7 +24,8 @@ OUT:  a running, (healthy) container started via that image's run.sh
 ## DO NOT
 
 - `podman build`. Building belongs in the image's own claudebox (fedora-dev for Fedora, debian-dev for Debian, etc.).
-- Develop image source (Containerfile / install.sh / entrypoint of any image). That work is in the image's own claudebox.
+- Develop or edit anything in an image repo other than `fedora-bootstrap` — Containerfile / install.sh / entrypoint **and README / docs / CI**. That work is in the image's own claudebox.
+- Open a PR or push a branch against any repo other than `fedora-bootstrap`. Image repos (their README / docs and CI too, not just source) are owned by that image's own claudebox: for those I **surface a proposed diff**; the operator (or that box) opens the PR.
 - Hand-roll `podman pull/stop/rm/run.sh` against workload containers. Bypasses the busy-probe; may kill mid-flight Claude work or a mid-flight box rebuild.
 - Delete `~/.local/state/container-refresh/<name>.pending` to "unstick" a deferred refresh. Investigate WHY busy never clears.
 - Force-recreate while busy. No `--force` exists; do not add one.
@@ -62,7 +63,7 @@ Ad-hoc edits to `~/.local/bin/`, `~/.config/systemd/user/`, `/etc`, `/usr` do no
 - Lock files at `/home/core/.local/state/claudebox/{session,box-rebuild}.lock`
 - Operator user `core` (uid 1000)
 
-Before adding `<name>` to array: verify all 6. If any fails, FIRST propose conformance fix to that container's repo. Then propose array edit.
+Before adding `<name>` to array: verify all 6. If any fails, FIRST **surface a proposed conformance diff for that container's repo** — the operator or that image's own claudebox opens the PR; I do not. Then propose the array edit (a `fedora-bootstrap` PR, which I do open).
 
 ## WORKLOAD REFRESH MECHANISM
 
@@ -99,7 +100,8 @@ Do not wait for the 15th. Refresh updates the image; it does not evict the attac
 Task mentions any of:
 
 - "build", "develop", "modify Containerfile / install.sh / entrypoint"
-- editing source of any image repo (other than `fedora-bootstrap` itself)
+- editing **any file** in an image repo other than `fedora-bootstrap` — source **or** README / docs / CI
+- about to offer to open a PR whose target repo is **not** `fedora-bootstrap`
 - `podman build`, language-package installs, compilers
 - changes to host system layer beyond the sudo allowlist
 
@@ -111,7 +113,7 @@ Task mentions any of:
 - `/run/host` = host's root filesystem. Read-only convention.
 - `gh auth` state persists in `$HOME/.config/gh/` (shared via bind mount).
 - Image signature verification is **SCAFFOLDED but NOT ENFORCING**. `~/.config/containers/policy.json` permits `ghcr.io/oso-gato/*` via `insecureAcceptAnything` until every workload CI signs via cosign + GitHub Actions OIDC. fedora-dev signs as of v1.1.1 of this bootstrap; flip to `sigstoreSigned` for `ghcr.io/oso-gato/fedora-dev` after verifying the signing workflow runs green. Until other workloads also sign, leave the rest permissive. Operator action: edit `~/.config/containers/policy.json` per its comment block.
-- `<name>.env` files at `~/.config/container-refresh/<name>.env` (mode 0600) carry runtime secrets the Quadlet reads via `EnvironmentFile=`. setup-user.sh creates scaffolds with empty values; operator populates before first `systemctl --user start <name>.service`.
+- **Runtime secrets (v1.1.9+):** workload Quadlets no longer carry runtime secrets via `EnvironmentFile=`, and setup-user.sh no longer creates `~/.config/container-refresh/<name>.env` scaffolds. fedora-dev's `CORE_PASSWORD` was eliminated — sshd is key-only, authorized_keys synced from `github.com/oso-gato.keys` at every container start. A future workload needing a runtime secret should use `podman secret create <name>-<key> -` + a Quadlet `Secret=` directive, not an env file. Stale pre-v1.1.9 `*.env` files are harmless (unread) and may be deleted.
 - `.pending` marker grown by appending timestamps; count > 24 hourly retries = stuck busy or compromised lock state (see REFRESH IS NOT A SECURITY BOUNDARY).
 - Host reboots / OS major upgrades / dnf-system-upgrade: not yours. Propose; human decides.
 
@@ -130,7 +132,7 @@ journalctl --user -u workload-refresh@${NAME}.service -f       # watch
 
 ### Add a new workload container to the fleet
 
-Before proposing the array edit, verify the candidate honors the FLEET CONTRACT (six points above). If any fails, FIRST propose the conformance fix in the workload's own repo, then come back here.
+Before proposing the array edit, verify the candidate honors the FLEET CONTRACT (six points above). If any fails, FIRST **surface a proposed conformance diff for the workload's own repo** (the operator or that box opens the PR), then come back here.
 
 ```sh
 cd ~/<your fedora-bootstrap clone>

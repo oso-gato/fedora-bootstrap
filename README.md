@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.10** — Tailscale exit-node fix. `--advertise-exit-node` now rides the authenticated `tailscale up` join (IP forwarding enabled first) instead of a follow-up `tailscale set`, the timeout/`set` failures are no longer swallowed, and the host verifies the node reached `Running` with the route advertised before declaring success — a stuck login now aborts loudly under `set -e`. Closes a latent bug (present since v1.0.0) where a slow interactive login outran the old `--timeout=5m || true`, leaving the node logged out with the exit node never advertised (greyed-out in the admin console) while the bootstrap still reported "all layers PASS". Also documents the `autoApprovers` + tagged-auth-key zero-touch exit-node path. Prior: v1.1.9 — host fail2ban sshd jail; fedora-dev env-file scaffold dropped (fleet-wide key-only ssh, no runtime secrets).
+Version: **1.1.11** — Image-pull fix + agent-policy corrections. `setup-user.sh` no longer writes a `policy.json` carrying JSON `"//"` comment keys, which podman's strict `containers/image` parser rejected — failing **every** image pull (`Unknown key "//"`, exit 125) and thereby breaking `fedora-dev` startup and all monthly `workload-refresh` pulls fleet-wide; the template now emits clean JSON, with the sigstore-upgrade guidance moved to shell comments. The host-claudebox law (`policy/CLAUDE.md`) also gets two corrections: the stale `EnvironmentFile=`/env-scaffold fact (dropped in v1.1.9) is fixed, and the agent's PR-authority is sharpened to by-repo — it opens PRs only against `fedora-bootstrap` and surfaces diffs for image repos (code and docs alike). Existing hosts need a one-time `policy.json` repair — re-running `setup.sh` won't fix an already-written file; see "Upgrading to v1.1.11". Prior: v1.1.10 — Tailscale exit-node fix (`--advertise-exit-node` rides the authenticated join, failures no longer swallowed, post-join Running+route verify).
 
 ## Purpose
 
@@ -285,6 +285,60 @@ tailscale debug prefs   | grep -A2 AdvertiseRoutes          # want: 0.0.0.0/0 an
 ```
 
 Then, on each client that should egress through the VPS: `tailscale set --exit-node=<vps> --exit-node-allow-lan-access`.
+
+#### Upgrading to v1.1.11 (from v1.0.0)
+
+Fixes a fleet-wide image-pull breakage, plus two host-claudebox policy corrections:
+
+- **`setup-user.sh` no longer writes an invalid `policy.json`.** The signature-policy template carried JSON "comment" keys (`"//"`, `"//upgrade"`). podman's `containers/image` policy parser is strict and rejects unknown keys, so **every** image pull failed with `invalid policy in ".../policy.json": Unknown key "//"` (exit 125) — breaking `fedora-dev` startup and every monthly `workload-refresh` pull. The template now emits clean JSON; the sigstore-upgrade guidance moved to shell comments. Semantics unchanged (default reject; `ghcr.io/oso-gato` permissive).
+- **`policy/CLAUDE.md`** (the host-claudebox law, re-stamped into the box on every `setup.sh` run): the stale `EnvironmentFile=`/env-scaffold fact (removed in v1.1.9) is corrected, and the agent's PR-authority is sharpened to by-repo — the agent opens PRs only against `fedora-bootstrap`; for image repos (code *and* docs) it surfaces a diff for the operator.
+
+**This needs a one-time operator step on existing hosts.** `setup-user.sh` writes `policy.json` only `if [ ! -e ]`, so the standard `setup.sh` re-run does **not** repair an already-broken file — existing hosts must rewrite it once (step 2 below; idempotent and harmless if yours was already clean, e.g. a fresh v1.0.0→v1.1.11 install where step 1 wrote the corrected template). Until it's fixed, all GHCR pulls on the host fail.
+
+**As root on the VPS:**
+
+```sh
+# 1. Standard upgrade flow — installs the corrected setup-user.sh template and
+#    re-stamps policy/CLAUDE.md into the box. Does NOT touch an existing policy.json.
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+
+# 2. Repair the existing policy.json — drop the "//" comment keys podman rejects.
+#    Backs up first; validates the rewritten file parses. Run as core (owns the file).
+su - core -c '
+    f=~/.config/containers/policy.json
+    [ -f "$f" ] && cp "$f" "$f.bak"
+    cat > "$f" <<JSON
+{
+    "default": [{ "type": "reject" }],
+    "transports": {
+        "docker": {
+            "ghcr.io/oso-gato": [{ "type": "insecureAcceptAnything" }],
+            "": [{ "type": "reject" }]
+        }
+    }
+}
+JSON
+    python3 -m json.tool "$f" >/dev/null && echo "policy.json OK"
+'
+
+# 3. Bring fedora-dev up — the pull now succeeds. (reset-failed clears any
+#    crash-loop left from the broken state before starting.)
+su - core -c '
+    systemctl --user reset-failed fedora-dev.service 2>/dev/null || true
+    systemctl --user start fedora-dev.service
+    podman ps --filter name=fedora-dev --format "table {{.Names}}\t{{.Status}}"
+'
+```
+
+Expected after step 3: `podman pull` of `ghcr.io/oso-gato/fedora-dev:latest` succeeds (no `Unknown key` error) and `fedora-dev` shows `Up … (healthy)` within ~30s.
+
+**Rollback** (the `policy.json` fix is data, not code — this reverts only it):
+
+```sh
+su - core -c 'f=~/.config/containers/policy.json; [ -f "$f.bak" ] && mv "$f.bak" "$f"'
+```
 
 ---
 

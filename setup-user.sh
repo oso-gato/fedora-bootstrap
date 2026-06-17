@@ -214,9 +214,21 @@ install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.service"  "$HOME/.c
 install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.timer"    "$HOME/.config/systemd/user/"
 
 # ---- image signature verification scaffolding ----
-# Default policy: trust ghcr.io/oso-gato/* unconditionally. Comment block at
-# the bottom of policy.json explains how to upgrade to sigstoreSigned once each
-# workload CI signs images via cosign + GitHub Actions OIDC.
+# Default policy: trust ghcr.io/oso-gato/* unconditionally (insecureAcceptAnything).
+#
+# DO NOT add JSON "comment" keys (e.g. "//") inside policy.json: podman's
+# containers/image policy parser is strict and REJECTS unknown keys, which makes
+# EVERY image pull fail with `invalid policy ... Unknown key "//"` (exit 125).
+# Upgrade guidance lives here, in shell comments, NOT in the emitted JSON.
+#
+# To enforce signatures once every workload CI signs via cosign + GitHub Actions
+# OIDC, replace the ghcr.io/oso-gato stanza below with either:
+#   keyPath: { "type": "sigstoreSigned", "keyPath": "/etc/containers/cosign-pub-keys/oso-gato.pub" }
+#   keyless: { "type": "sigstoreSigned",
+#              "signedIdentity": { "type": "matchRepoDigestOrExact" },
+#              "fulcio": { "caData": "...",
+#                          "oidcIssuer": "https://token.actions.githubusercontent.com",
+#                          "subjectEmail": "..." } }
 install -d -m 0755 "$HOME/.config/containers"
 install -d -m 0755 "$HOME/.config/containers/registries.d"
 if [ ! -e "$HOME/.config/containers/policy.json" ]; then
@@ -225,13 +237,7 @@ if [ ! -e "$HOME/.config/containers/policy.json" ]; then
     "default": [{ "type": "reject" }],
     "transports": {
         "docker": {
-            "ghcr.io/oso-gato": [
-                {
-                    "type": "insecureAcceptAnything",
-                    "//": "TODO: upgrade to sigstoreSigned once all workload CIs sign. Replace this stanza with:",
-                    "//upgrade": "{ \"type\": \"sigstoreSigned\", \"keyPath\": \"/etc/containers/cosign-pub-keys/oso-gato.pub\" } OR keyless: { \"type\": \"sigstoreSigned\", \"signedIdentity\": { \"type\": \"matchRepoDigestOrExact\" }, \"fulcio\": { \"caData\": \"...\", \"oidcIssuer\": \"https://token.actions.githubusercontent.com\", \"subjectEmail\": \"...\" } }"
-                }
-            ],
+            "ghcr.io/oso-gato": [{ "type": "insecureAcceptAnything" }],
             "": [{ "type": "reject" }]
         }
     }
