@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.1.12 (refresh-safety + update-cadence docs: document the 3 update mechanisms precisely — quitting a session fires the daily claudebox rebuild immediately, but a deferred monthly whole-container refresh resumes on the hourly retry once idle, NOT on session exit; correct the container-refresh.sh rollback comment to match the fedora-dev Quadlet's Pull=missing fix that makes auto-rollback actually revert. Host-side doc/comment-only; companion code fixes live in oso-gato/fedora-dev.)
+# Version: 1.1.13 (rollback de-flap: container-refresh.sh's auto-rollback now clears .pending and writes a separate <name>.rolled-back marker instead of keeping .pending — the retry timer is gated on .pending and the registry :latest is still the bad image, so the old behavior re-pulled it hourly and re-flapped the rollback. The rollback now sticks until the next monthly cycle or operator action.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

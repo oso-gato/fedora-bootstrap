@@ -74,7 +74,7 @@ Timer:    workload-refresh@<name>.timer          *-*-15 04:00 ± 2h jitter
 Probe:    claudebox-busy-probe.sh <name>          AND(session.lock, box-rebuild.lock) via podman exec --user 1000:1000
 Idle:     pull → digest-compare → systemctl --user restart <name>.service (Quadlet does pull+stop+start+healthcheck-wait)
 Healthy after restart:   rm .pending, exit 0
-Unhealthy after restart: retag :latest to PRIOR digest, restart again, KEEP .pending for visibility, exit 1
+Unhealthy after restart: retag :latest to PRIOR digest, restart again; on success clear .pending + write a separate `.rolled-back` marker (does NOT re-arm the hourly retry — :latest is still bad), exit 1
 Busy:     append timestamp to ~/.local/state/container-refresh/<name>.pending, exit 10
 Probe broken: same .pending append, exit 2 (operator alert)
 Retry:    workload-refresh-retry@<name>.timer    hourly ± 15m, ConditionPathExists-gated
@@ -114,7 +114,7 @@ Task mentions any of:
 - `gh auth` state persists in `$HOME/.config/gh/` (shared via bind mount).
 - Image signature verification is **SCAFFOLDED but NOT ENFORCING**. `~/.config/containers/policy.json` permits `ghcr.io/oso-gato/*` via `insecureAcceptAnything` until every workload CI signs via cosign + GitHub Actions OIDC. fedora-dev signs as of v1.1.1 of this bootstrap; flip to `sigstoreSigned` for `ghcr.io/oso-gato/fedora-dev` after verifying the signing workflow runs green. Until other workloads also sign, leave the rest permissive. Operator action: edit `~/.config/containers/policy.json` per its comment block.
 - **Runtime secrets (v1.1.9+):** workload Quadlets no longer carry runtime secrets via `EnvironmentFile=`, and setup-user.sh no longer creates `~/.config/container-refresh/<name>.env` scaffolds. fedora-dev's `CORE_PASSWORD` was eliminated — sshd is key-only, authorized_keys synced from `github.com/oso-gato.keys` at every container start. A future workload needing a runtime secret should use `podman secret create <name>-<key> -` + a Quadlet `Secret=` directive, not an env file. Stale pre-v1.1.9 `*.env` files are harmless (unread) and may be deleted.
-- `.pending` marker grown by appending timestamps; count > 24 hourly retries = stuck busy or compromised lock state (see REFRESH IS NOT A SECURITY BOUNDARY).
+- `.pending` marker grown by appending timestamps; count > 24 hourly retries = stuck busy or compromised lock state (see REFRESH IS NOT A SECURITY BOUNDARY). A successful auto-rollback instead clears `.pending` and writes a separate `<name>.rolled-back` marker, so it does NOT re-arm the hourly retry into a re-pull flap of the still-bad `:latest`.
 - Host reboots / OS major upgrades / dnf-system-upgrade: not yours. Propose; human decides.
 
 ## HOW DO I... (operational recipes)

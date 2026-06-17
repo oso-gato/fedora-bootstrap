@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.12** — Refresh-safety + update-cadence docs. Documents the three update mechanisms precisely (see "What auto-updates, and when"): quitting a session fires the daily *claudebox* rebuild immediately, but a deferred *monthly whole-container* refresh resumes on the hourly retry once the box is idle — **NOT** on session exit. Corrects the `container-refresh.sh` rollback comment to match the workload Quadlet's `Pull=missing` (the companion fix in `oso-gato/fedora-dev` that makes the harness's auto-rollback actually revert instead of re-pulling the bad image). Host-side is doc/comment-only — no operator action beyond the standard `setup.sh` re-run. Prior: v1.1.11 — policy.json comment-key fix (fleet-wide image-pull breakage) + agent-policy corrections.
+Version: **1.1.13** — Rollback de-flap. `container-refresh.sh`'s auto-rollback now clears `.pending` and writes a separate `<name>.rolled-back` marker instead of keeping `.pending`: the hourly retry timer is gated on `.pending`, and after a rollback the registry `:latest` is still the bad image, so the old behavior re-pulled it every hour and re-flapped the rollback. The rollback now sticks until the next monthly cycle or operator action. Prior: v1.1.12 — refresh-safety + update-cadence docs (the 3 update points + the `Pull=missing` rollback comment).
 
 ## Purpose
 
@@ -351,6 +351,18 @@ git pull --ff-only origin main
 ```
 
 The companion `oso-gato/fedora-dev` fixes (`Pull=missing` so auto-rollback reverts, a readiness healthcheck, and the honest SELinux docs) ride in via the monthly image refresh, or apply one now with `su - core -c 'systemctl --user start workload-refresh@fedora-dev.service'` once they're on `:latest`.
+
+#### Upgrading to v1.1.13 (from v1.0.0)
+
+A small `container-refresh.sh` fix: after a successful auto-rollback the harness now clears `.pending` and writes a separate `<name>.rolled-back` marker instead of keeping `.pending`. The hourly retry timer is gated on `.pending`, and after a rollback the registry `:latest` is still the bad image — the old behavior re-pulled it every hour and re-flapped the rollback. No operator steps; the standard upgrade flow re-installs `container-refresh.sh` and re-stamps `policy/CLAUDE.md`:
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+```
+
+After a rollback you'll now see `~/.local/state/container-refresh/<name>.rolled-back` and no `<name>.pending` — the bad `:latest` is not retried until the next monthly cycle or a manual `systemctl --user start workload-refresh@<name>.service`.
 
 ---
 

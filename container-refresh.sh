@@ -89,7 +89,7 @@ fi
 echo "[$name] image changed ($prior_id → $new_id); restarting $name.service via Quadlet…"
 if systemctl --user restart "$name.service"; then
     echo "[$name] refreshed and healthy."
-    rm -f "$pending"
+    rm -f "$pending" "$state/$name.rolled-back"
     exit 0
 fi
 
@@ -102,9 +102,14 @@ if [ -n "$prior_id" ]; then
     # restart re-pulled the bad registry :latest and silently defeated the rollback.)
     if podman tag "$prior_id" "$image" && systemctl --user restart "$name.service"; then
         echo "[$name] rolled back; prior image is healthy again." >&2
-        # KEEP the pending marker — the human needs to know a rollback happened.
-        # The marker contents are timestamps; appending one more so the count grows.
-        date -Iseconds >> "$pending"
+        # Record the rollback WITHOUT re-arming the hourly retry: the retry timer
+        # is ConditionPathExists-gated on $pending, and the registry :latest is
+        # still the bad image — an hourly retry would re-pull it and re-flap the
+        # rollback. Clear $pending; drop a separate <name>.rolled-back marker for
+        # operator visibility. The next monthly cycle (or the operator) re-attempts,
+        # by when upstream :latest may be fixed.
+        rm -f "$pending"
+        date -Iseconds >> "$state/$name.rolled-back"
         exit 1
     fi
     echo "[$name] ROLLBACK FAILED — container down; investigate manually" >&2
