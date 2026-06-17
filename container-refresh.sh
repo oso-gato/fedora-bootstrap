@@ -96,8 +96,10 @@ fi
 # Health-gate failed → rollback to the prior image.
 echo "[$name] new image did NOT reach healthy → rolling back to $prior_id" >&2
 if [ -n "$prior_id" ]; then
-    # Retag :latest locally to the prior digest. The Quadlet's Pull=newer
-    # respects the local resolution — the next start uses our retagged image.
+    # Retag :latest locally to the prior digest. The workload Quadlet sets
+    # Pull=missing (NOT newer), so this restart uses our retagged LOCAL image and
+    # does not re-pull — the rollback actually reverts. (With Pull=newer this
+    # restart re-pulled the bad registry :latest and silently defeated the rollback.)
     if podman tag "$prior_id" "$image" && systemctl --user restart "$name.service"; then
         echo "[$name] rolled back; prior image is healthy again." >&2
         # KEEP the pending marker — the human needs to know a rollback happened.

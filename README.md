@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.11** — Image-pull fix + agent-policy corrections. `setup-user.sh` no longer writes a `policy.json` carrying JSON `"//"` comment keys, which podman's strict `containers/image` parser rejected — failing **every** image pull (`Unknown key "//"`, exit 125) and thereby breaking `fedora-dev` startup and all monthly `workload-refresh` pulls fleet-wide; the template now emits clean JSON, with the sigstore-upgrade guidance moved to shell comments. The host-claudebox law (`policy/CLAUDE.md`) also gets two corrections: the stale `EnvironmentFile=`/env-scaffold fact (dropped in v1.1.9) is fixed, and the agent's PR-authority is sharpened to by-repo — it opens PRs only against `fedora-bootstrap` and surfaces diffs for image repos (code and docs alike). Existing hosts need a one-time `policy.json` repair — re-running `setup.sh` won't fix an already-written file; see "Upgrading to v1.1.11". Prior: v1.1.10 — Tailscale exit-node fix (`--advertise-exit-node` rides the authenticated join, failures no longer swallowed, post-join Running+route verify).
+Version: **1.1.12** — Refresh-safety + update-cadence docs. Documents the three update mechanisms precisely (see "What auto-updates, and when"): quitting a session fires the daily *claudebox* rebuild immediately, but a deferred *monthly whole-container* refresh resumes on the hourly retry once the box is idle — **NOT** on session exit. Corrects the `container-refresh.sh` rollback comment to match the workload Quadlet's `Pull=missing` (the companion fix in `oso-gato/fedora-dev` that makes the harness's auto-rollback actually revert instead of re-pulling the bad image). Host-side is doc/comment-only — no operator action beyond the standard `setup.sh` re-run. Prior: v1.1.11 — policy.json comment-key fix (fleet-wide image-pull breakage) + agent-policy corrections.
 
 ## Purpose
 
@@ -340,6 +340,18 @@ Expected after step 3: `podman pull` of `ghcr.io/oso-gato/fedora-dev:latest` suc
 su - core -c 'f=~/.config/containers/policy.json; [ -f "$f.bak" ] && mv "$f.bak" "$f"'
 ```
 
+#### Upgrading to v1.1.12 (from v1.0.0)
+
+Documentation + comment-only on the host side — no functional code change to the bootstrap, no version-specific operator steps. Clarifies the update-cadence docs (which mechanism quitting a session does and doesn't accelerate — see "What auto-updates, and when") and corrects the `container-refresh.sh` rollback comment to match the workload Quadlet's `Pull=missing`. The standard upgrade flow re-stamps `policy/CLAUDE.md` into the box:
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+```
+
+The companion `oso-gato/fedora-dev` fixes (`Pull=missing` so auto-rollback reverts, a readiness healthcheck, and the honest SELinux docs) ride in via the monthly image refresh, or apply one now with `su - core -c 'systemctl --user start workload-refresh@fedora-dev.service'` once they're on `:latest`.
+
 ---
 
 ## Operating the host (as the maintainer)
@@ -379,7 +391,7 @@ A browser dashboard for the host: podman containers, files, networking, SELinux,
 |---|---|---|---|
 | Host OS packages | Monthly, 15th | `dnf-automatic.timer` | applies updates, **never reboots** (you decide; a login notice fires when needed) |
 | claudebox (CLI + tools) | Daily, ~04:00 | in-host `claudebox-rebuild-daily.timer` | defers if a `claude` session is active; rebuilds on next session exit |
-| Workload containers (fedora-dev, etc.) | Monthly, 15th @ 04:00 ± 2h | `workload-refresh@<name>.timer` | pulls latest from GHCR, recreates only if changed, defers via in-container busy probe; hourly retry if deferred; rollback to prior digest if new image fails healthcheck |
+| Workload containers (fedora-dev, etc.) | Monthly, 15th @ 04:00 ± 2h | `workload-refresh@<name>.timer` | pulls latest from GHCR, recreates only if changed; defers via the in-container busy probe while a `claude` session (or box rebuild) is live; **resumes on the hourly retry timer once idle — NOT on session exit**; rolls back to the prior digest if the new image fails its healthcheck |
 | Major Fedora release jump (44→45) | Manual | `dnf system-upgrade` you run by hand | deliberate, separate; see "Fedora Cloud Update" above |
 
 **Force a refresh now**:
@@ -387,6 +399,8 @@ A browser dashboard for the host: podman containers, files, networking, SELinux,
 - Workload container: `systemctl --user start workload-refresh@<name>.service` (still respects busy probe).
 
 Watch any rebuild: `journalctl --user -u claudebox-rebuild-run -f` or `journalctl --user -u workload-refresh@<name>.service -f`.
+
+> **Does quitting a session trigger a deferred update?** For the **daily claudebox rebuild** — yes: the deferred rebuild fires the moment you exit (the `claude` wrapper does it). For the **monthly whole-container refresh** — no: quitting does not advance it; it re-attempts on the next **hourly retry** (`workload-refresh-retry@<name>.timer`, ±15m) once the in-container busy probe sees the box idle. So quitting accelerates the box rebuild, not the monthly container refresh.
 
 ### Tailscale routing (LAN access + exit node)
 

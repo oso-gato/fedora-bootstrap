@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.1.11 (policy.json comment-key fix: drop the "//" JSON comment keys that podman's strict containers/image policy parser rejects — they failed every image pull with `Unknown key "//"` (exit 125), breaking fedora-dev startup and all workload-refresh pulls fleet-wide; emit clean JSON, sigstore-upgrade guidance moved to shell comments. Plus agent-policy doc fixes in policy/CLAUDE.md: stale EnvironmentFile=/env-scaffold fact corrected, PR-authority boundary sharpened to by-repo.)
+# Version: 1.1.12 (refresh-safety + update-cadence docs: document the 3 update mechanisms precisely — quitting a session fires the daily claudebox rebuild immediately, but a deferred monthly whole-container refresh resumes on the hourly retry once idle, NOT on session exit; correct the container-refresh.sh rollback comment to match the fedora-dev Quadlet's Pull=missing fix that makes auto-rollback actually revert. Host-side doc/comment-only; companion code fixes live in oso-gato/fedora-dev.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

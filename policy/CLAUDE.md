@@ -171,7 +171,7 @@ podman exec --user 1000:1000 ${NAME} bash -c '
 
 ### Roll a workload back to a prior image — SURFACE, don't act
 
-The workload-refresh harness already auto-rolls-back on healthcheck failure (retag :latest to prior digest, restart). If a manual rollback is needed beyond that — STOP AND SURFACE to the operator. Do NOT:
+The workload-refresh harness already auto-rolls-back on healthcheck failure (retag :latest to prior digest, restart). This is reliable because the workload Quadlet is `Pull=missing` — the restart uses the retagged LOCAL image and does not re-pull (with `Pull=newer` the restart re-pulled the bad `:latest` and silently defeated the rollback). If a manual rollback is needed beyond that — STOP AND SURFACE to the operator. Do NOT:
 
 - `podman tag` `:latest` locally to a prior digest and `systemctl restart`. This bypasses the busy-probe (DO NOT list above) and the next refresh re-pulls upstream `:latest` and overrides your retag anyway.
 - Edit `<name>.container` in `~/.config/containers/systemd/` directly. It gets overwritten on next `setup.sh` re-run.
