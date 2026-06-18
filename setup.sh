@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.1.15 (dependency hygiene — leaf over metapackage: install fail2ban-server, NOT the fail2ban metapackage that hard-pulls fail2ban-firewalld->firewalld + fail2ban-sendmail->esmtp; ban backend nftables[type=multiport] on this nft-native host. Removes the firewalld whose stock zone had silently blocked mosh's UDP after a reboot. See README "Upgrading to v1.1.15". Prior: v1.1.14 SELinux permissive-first.)
+# Version: 1.1.16 (docs-only: relocate the v1.1.1-v1.1.14 upgrade history to UPGRADING.md to keep README scannable + correct the v1.1.9 manual-rollback recipe's non-existent .prev-digest reference. No code/host change. Prior: v1.1.15 dependency hygiene — leaf fail2ban-server, nft-only banaction.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

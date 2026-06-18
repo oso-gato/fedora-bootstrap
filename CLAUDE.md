@@ -56,7 +56,7 @@ pointing back to the issue.
 
 README has a top-level section "Upgrading an existing host to a new release".
 EVERY release adds a subsection inside it. Prior versions' subsections are
-historical record — never modify them after their tag is pushed.
+historical record — never modify them after their tag is pushed. TWO additive (never-rewriting) exceptions: (1) **RELOCATION** — older subsections may be moved verbatim to `UPGRADING.md` to keep README scannable; leave the latest 1–2 subsections + a pointer in README, content unchanged. (2) **dated SAFETY-CORRECTION note** — a `> **⚠️ Corrected in vX.Y.Z:**` callout may be appended beside a subsection that documents something factually wrong or unsafe, pointing to the corrected procedure in the current release's subsection. Never silently rewrite the original steps.
 
 Subsection title:
 - `"Upgrading to vX.Y.Z (from v1.0.0)"` — default. v1.0.0 is the binding
@@ -194,6 +194,7 @@ subsection.
 |---|---|
 | CLAUDE.md | this file — agent rules for editing this repo |
 | README.md | human-facing project doc (purpose, install, upgrade, use, reference) |
+| UPGRADING.md | archived per-version upgrade subsections — older releases relocated from README per the RELEASE-DOC CONVENTION; README keeps the latest 1–2 + a pointer |
 | VERSION | repo's release version (single line, semver) |
 | setup.sh | orchestrator (run as root): runs the system layer then the rootless layer in their correct identities |
 | setup-host.sh | **system layer**, as root — packages, /etc, system services, tailnet, host dnf-automatic, creates `core` + its rootless prerequisites |
@@ -226,7 +227,7 @@ subsection.
 | Host | tailscale | Tailscale's official dnf repo | tailnet node + Tailscale SSH + serves Cockpit |
 | Host | cockpit, -podman, -files, -networkmanager, -selinux | Fedora repos | **Deliberate management interface (maintainer-specified) for this headless VPS.** Fedora Server is headless by design and Cockpit is the official web console for remote admin: it uses the system's own APIs/CLI (no parallel agent or drifting state), is browser-reachable from any OS, and has **zero idle footprint** — socket-activated via `cockpit.socket`, never running in the background (see cockpit-project.org). Exposure is **tailnet-ONLY by design** (loopback-bound + tailscale-serve proxy; never public — Build Principle 7). The `cockpit` aggregator is a **deliberately-retained metapackage** (Build Principle 4 recorded exception): its hard deps (`cockpit-bridge`/`-system`/`-ws`) are exactly the console core and all used; add-in Recommends are blocked by `install_weak_deps=False`, so no unused baggage lands. |
 | Host | dnf5-plugin-automatic | Fedora repos | unattended host package updates (15th monthly; applies, never auto-reboots) |
-| Host | fail2ban-server | Fedora repos | brute-force mitigation on the public sshd port (22). Reads sshd's AUTHPRIV events via journald (`backend = auto`); tailnet CGNAT 100.64.0.0/10 is `ignoreip`'d; bans via `nftables[type=multiport]`. The **leaf** package, NOT the `fail2ban` metapackage (whose hard deps pull `fail2ban-firewalld`→`firewalld` + `fail2ban-sendmail`→`esmtp`, all unused — see Build Principle 4). Jail posture (bantime 1h, CGNAT `ignoreip`) matches the v1.1.9 fedora-dev jail — note fedora-dev likely installs the same metapackage and needs the equivalent leaf fix in its own repo. |
+| Host | fail2ban-server | Fedora repos | brute-force mitigation on the public sshd port (22). Reads sshd's AUTHPRIV events via journald (`backend = auto`); tailnet CGNAT 100.64.0.0/10 is `ignoreip`'d; bans via `nftables[type=multiport]`. The **leaf** package, NOT the `fail2ban` metapackage (whose hard deps pull `fail2ban-firewalld`→`firewalld` + `fail2ban-sendmail`→`esmtp`, all unused — see Build Principle 4). Jail posture (bantime 1h, CGNAT `ignoreip`) matches the v1.1.9 fedora-dev jail. (fedora-dev shipped the equivalent leaf `fail2ban-server` fix on its main — commit 9312b19; nft-only banaction alignment is tracked in fedora-dev PR #7.) |
 | Box | claude-code | Anthropic's official dnf repo (`latest` channel) | the manager — claudebox's purpose; refreshed daily by box rebuild |
 | Box | host-spawn | Fedora repos | container side of distrobox-host-exec (no GitHub download — deterministic) |
 | Box | bubblewrap, socat | Fedora repos | Claude Code's Linux sandbox dependencies |
