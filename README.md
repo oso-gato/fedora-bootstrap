@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.16** — Docs-only: relocate the v1.1.1–v1.1.14 upgrade history to [UPGRADING.md](UPGRADING.md) (the README had become ~55% upgrade-log) and correct the v1.1.9 manual-rollback recipe (it cited a `.prev-digest` file the refresh harness never writes). No host change. Prior: v1.1.15 — dependency hygiene (leaf `fail2ban-server`, nft-only banaction).
+Version: **1.1.17** — Docs-only: refresh the agent-facing CLAUDE.md cross-repo note (fedora-dev shipped its nft-only banaction fix to main — both repos are now nft-native). No host change. Prior: v1.1.16 — README de-bloat + v1.1.9 rollback-recipe correction.
 
 ## Purpose
 
@@ -153,6 +153,10 @@ su - core -c '
 ```
 
 **Rollback** (docs-only — nothing to revert on the host): `git checkout` the prior commit to restore the old README layout; no host state is affected.
+
+#### Upgrading to v1.1.17 (from v1.0.0)
+
+Documentation-only — **no host action required**. Refreshes an agent-facing `CLAUDE.md` cross-repo note (the fail2ban-server PACKAGES row) now that `fedora-dev` shipped its nft-only banaction fix to main — both repos are now nft-native. `git pull` to get the updated docs; nothing to apply. Rollback: none needed (no host state touched).
 
 ---
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.1.16 (docs-only: relocate the v1.1.1-v1.1.14 upgrade history to UPGRADING.md to keep README scannable + correct the v1.1.9 manual-rollback recipe's non-existent .prev-digest reference. No code/host change. Prior: v1.1.15 dependency hygiene — leaf fail2ban-server, nft-only banaction.)
+# Version: 1.1.17 (docs-only: refresh the agent-facing CLAUDE.md cross-repo note now that fedora-dev shipped its nft-only banaction fix to main — both repos nft-native. No code/host change. Prior: v1.1.16 README de-bloat + v1.1.9 rollback-recipe correction.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
