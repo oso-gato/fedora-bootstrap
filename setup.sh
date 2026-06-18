@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.1.14 (SELinux permissive-first: setup-host.sh moves a disabled host to SELINUX=permissive + schedules a one-time relabel (/.autorelabel). Fedora's default is enforcing but provider VPS images often ship it disabled (this host's was, set at provision — not by us). Never auto-reboots, never downgrades an already-enabled host, never sets enforcing automatically; the operator reboots, soaks in permissive, then flips to enforcing. The fedora-dev container stays SELinux-exempt (label=disable). Requires a reboot.)
+# Version: 1.1.15 (dependency hygiene — leaf over metapackage: install fail2ban-server, NOT the fail2ban metapackage that hard-pulls fail2ban-firewalld->firewalld + fail2ban-sendmail->esmtp; ban backend nftables[type=multiport] on this nft-native host. Removes the firewalld whose stock zone had silently blocked mosh's UDP after a reboot. See README "Upgrading to v1.1.15". Prior: v1.1.14 SELinux permissive-first.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

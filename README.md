@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.14** — SELinux permissive-first. `setup-host.sh` now moves a SELinux-disabled host to `SELINUX=permissive` and schedules a one-time relabel — Fedora's default is enforcing, but this VPS's provider image shipped it disabled (set at provision, not by us). It never auto-reboots, never downgrades an already-enabled host, and never sets `enforcing` on its own; the operator reboots, soaks in permissive (reviewing `ausearch -m avc`), then flips to `enforcing`. The `fedora-dev` container stays SELinux-exempt (`label=disable` — nested rootless podman needs it). **Requires a reboot** — see "Upgrading to v1.1.14". Prior: v1.1.13 — rollback de-flap (`.rolled-back` marker, no hourly re-pull).
+Version: **1.1.15** — Dependency hygiene (leaf over metapackage). The host was installing the `fail2ban` **metapackage**, whose hard deps silently pulled in `firewalld` (via `fail2ban-firewalld`) + an MTA (`esmtp` via `fail2ban-sendmail`) — none used. That latent `firewalld` started on a reboot with a stock zone that blocked mosh's UDP. This installs the leaf `fail2ban-server` (ban backend `nftables[type=multiport]`) and removes the firewall as the unintended dependency it was — see "Upgrading to v1.1.15". Prior: v1.1.14 — SELinux permissive-first.
 
 ## Purpose
 
@@ -399,6 +399,31 @@ Expected after step 3: `getenforce` = `Permissive`, all services healthy, `verif
 sudo sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config && sudo reboot
 ```
 
+#### Upgrading to v1.1.15 (from v1.0.0)
+
+Dependency-hygiene fix (Build Principle 4 — leaf over metapackage). Hosts provisioned since v1.1.9 installed the `fail2ban` **metapackage**, whose hard dependencies silently pulled in `firewalld` (via `fail2ban-firewalld`) plus an MTA (`esmtp` via `fail2ban-sendmail`) — none of which the host uses. That latent `firewalld`, enabled-on-install, started on the first reboot after it landed (the v1.1.14 relabel reboot) with a stock zone that blocks mosh's UDP — the classic "connected to mosh-server … waiting for UDP traffic". This release installs the leaf `fail2ban-server`, switches the ban backend to the host-native `nftables[type=multiport]` (the box has no `iptables`), and has `setup.sh` **converge the footprint** — marking the daemon user-owned and removing the metapackage + its `firewalld`/`esmtp` baggage. On a fresh v1.0.0 host (which never had the metapackage) that convergence is a clean no-op. No reboot required. (Rides on top of v1.1.14; if you're not yet on v1.1.14, its SELinux reboot step applies too.)
+
+**As root on the VPS:**
+
+```sh
+# 1. Standard upgrade flow. setup.sh installs fail2ban-server (leaf) + the nftables[type=multiport]
+#    banaction AND idempotently removes the legacy fail2ban-metapackage baggage (firewalld/esmtp) if
+#    present — no manual cleanup. It marks fail2ban-server + fail2ban-selinux user-owned BEFORE the
+#    removal so the cleanup can't cascade the daemon out. A fresh host no-ops the removal.
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+
+# 2. Verify.
+systemctl is-active fail2ban.service         # expect: active
+sudo fail2ban-client status sshd             # expect: sshd jail up (banning via nftables)
+rpm -q firewalld >/dev/null 2>&1 && echo "WARN: firewalld still present" || echo "firewalld removed ✓"
+```
+
+Expected after step 2: `fail2ban` is `active`, its `sshd` jail is listed, `firewalld` is gone, and mosh reconnects (UDP 60000–61000 no longer filtered). `verify.sh` PASSes — including its new `firewalld absent (leaf footprint)` check and the backend-agnostic fail2ban check (`fail2ban.service` + `fail2ban-client status sshd`, both shipped by `fail2ban-server`).
+
+**Rollback** (no data migration — fully reconstructable, works after a partial run): `sudo dnf install -y fail2ban` reinstates the prior package set (the metapackage pulls `fail2ban-server` + `firewalld` + `esmtp` back); for just the jail daemon, `sudo dnf install -y fail2ban-server && sudo systemctl enable --now fail2ban`. Note a later `setup.sh` re-run re-converges to the leaf footprint by design, so a durable revert means pinning an older checkout.
+
 ---
 
 ## Operating the host (as the maintainer)
@@ -428,7 +453,9 @@ First run prints a one-time OAuth URL (open in your browser, paste the code back
 
 A browser dashboard for the host: podman containers, files, networking, SELinux, logs, terminal.
 
-- Reachable **only over the tailnet** — `cockpit.socket` is bound to loopback; the only ingress is the tailscale-serve proxy.
+**Why it's here (design rationale).** Cockpit is the **deliberately-chosen management interface** for this headless VPS, not an incidental install. Fedora Server is headless by design — no GUI, only a text console — and [Cockpit](https://cockpit-project.org/) is the project's official answer for remote administration: an *"easy-to-use, integrated, glanceable, open web-based interface for your servers"* that **uses the system's own APIs and CLI tooling** (no parallel agent, no drifting state), is reachable from any browser on any OS, makes the host discoverable without memorising commands, and — decisive for a minimal host — has **zero idle footprint**: it doesn't run in the background; `cockpit.socket` activates it on demand via systemd socket activation. The `cockpit` aggregator metapackage is therefore a *recorded* Build Principle 4 exception (its hard deps are exactly the console core; add-in Recommends are blocked by `install_weak_deps=False`).
+
+- Reachable **only over the tailnet** — by design (Build Principle 7): `cockpit.socket` is bound to loopback and the sole ingress is the tailscale-serve proxy. It is **never** published on the public IP.
 - **One-time tailnet setup**: in the Tailscale admin console enable **DNS → MagicDNS** and **HTTPS Certificates**. Within ~60s the host auto-publishes Cockpit.
 - **Open** `https://<vps>.<tailnet>.ts.net/`, log in as `core` with your `passwd core` password.
 
@@ -530,7 +557,7 @@ Turn a fresh Fedora Cloud VPS into a container-as-app fleet that an LLM agent op
 
 ### Design principles
 
-1. **Host immutability.** A short fixed package list is the complete sanctioned host footprint. Anything else runs in a container. Growing the list requires an explicit waiver recorded in CLAUDE.md's Build Principles.
+1. **Host immutability & minimal packages.** A short fixed package list is the complete sanctioned host footprint. Anything else runs in a container. Growing the list requires an explicit waiver recorded in CLAUDE.md's Build Principles. Within the list, always install the most specific (leaf) package rather than a convenience metapackage — `install_weak_deps=False` blocks optional Recommends but not a metapackage's hard Requires, so a metapackage can silently pull components you never use. Use a metapackage only for a recorded architectural reason; when in doubt, verify its hard deps and flag for review.
 2. **Container-as-app.** Each major function is its own image with its own repo, CI, and Quadlet. An image that exists only on this host (no repo, no CI behind it) is drift.
 3. **Two-agent pipeline.** Dev containers BUILD images; host claudebox DEPLOYS them. Strict separation; the boundary is enforced by per-agent `policy/CLAUDE.md` rules.
 4. **Least privilege, kernel-enforced.** `core` user is password-gated `wheel` admin; in-box agent has scoped passwordless sudo for exactly the pinned commands in `policy/sudoers.claudebox` (currently `tailscale serve` loopback + read-only `tailscale status`). Everything else is OS-blocked.
