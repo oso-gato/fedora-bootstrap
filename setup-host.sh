@@ -294,7 +294,8 @@ if [ -f "$selc" ]; then
             echo ARMED > "$selmark"
             systemctl enable selinux-enforce.timer selinux-postenforce.timer >/dev/null 2>&1 || true
             echo ">> SELinux ARMED for one-time automated convergence to ENFORCING (was '${selcur:-unset}')."
-            echo ">> ACTION REQUIRED: REBOOT to launch the chain — everything after is automatic:"
+            echo ">> ACTION REQUIRED: REBOOT to launch the chain. On Day-0 'passwd core && reboot' folds the"
+            echo ">>   required password set into the launch. Everything after the reboot is automatic:"
             echo ">>   reboot -> relabel in permissive -> auto-reboot -> ~15min soak + fail-closed auto-confirm"
             echo ">>   -> enforcing -> auto-reboot -> health check (auto-reverts to permissive if unhealthy)."
             echo ">>   Take a Hostinger snapshot first. Opt out with: SELINUX_TARGET=permissive ./setup.sh"

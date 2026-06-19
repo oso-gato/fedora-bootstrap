@@ -74,7 +74,7 @@ Both reboot the host twice (offline transaction, then into the new release). App
 
 ### Day 0 — fresh VPS
 
-As root on a fresh Fedora Cloud instance:
+As root on a fresh Fedora Cloud instance (take a Hostinger snapshot first — the last line reboots the host into the automated SELinux convergence):
 
 ```sh
 dnf -y upgrade --refresh
@@ -85,8 +85,10 @@ if /opt/fedora-bootstrap/setup.sh < /dev/null; then
 else
   echo '*** investigate the failure (login.tailscale.com link? scoped sudoers? see verify.sh output above) and re-run /opt/fedora-bootstrap/setup.sh < /dev/null'
 fi
-passwd core      # REQUIRED — sets core's admin/sudo + Cockpit/console password
+passwd core && reboot   # REQUIRED — set core's admin/sudo + Cockpit/console password; on SUCCESS the host reboots to launch the v1.2.0 SELinux convergence (runs hands-off from there). A mismatched/cancelled passwd does NOT reboot — just re-run this line.
 ```
+
+The `< /dev/null` on `setup.sh` is load-bearing: it keeps setup from reading the terminal so your pasted `passwd core` line isn't swallowed. `passwd core && reboot` makes the one unavoidable manual step (the password — never stored in the repo) also the trigger: on a successful set, the host reboots and the SELinux chain takes over (relabel → soak → enforcing → post-enforce check, two further automatic reboots, ~20–25 min). `setup.sh` itself never reboots; the reboot lives in your command, gated on the password. To stay permissive instead, run `SELINUX_TARGET=permissive /opt/fedora-bootstrap/setup.sh < /dev/null` and drop the `&& reboot`.
 
 `setup.sh` is fully idempotent. It runs as root and orchestrates two layers in their correct identities:
 
