@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.0 (SELinux: one-time AUTOMATED disabled->enforcing convergence — permissive-first relabel -> ~15min fail-closed soak -> enforcing -> post-enforce health check with auto-revert to permissive; setup-stamped self-disarming system units; SELINUX_TARGET=permissive opts out. Prior: v1.1.17 docs-only.)
+# Version: 1.2.1 (policy: the in-box agent is now the fedora-bootstrap MAINTAINER — commit + push to main + tag directly; the host-apply gate stays operator-gated (setup.sh as root + reboot — agent has no host root). Doc/policy only. Prior: v1.2.0 SELinux auto-enforce convergence.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
