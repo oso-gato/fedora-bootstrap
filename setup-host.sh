@@ -193,30 +193,116 @@ EOS
 systemctl daemon-reload
 systemctl enable --now dnf5-automatic.timer reboot-needed-notify.timer
 
-# ---- SELinux: ensure at least PERMISSIVE. Fedora's default is enforcing, but
-# provider VPS images often ship SELINUX=disabled (this host did — set at provision,
-# not by us). We move disabled -> permissive and schedule a one-time filesystem
-# relabel; the operator reboots, soaks in permissive (reviewing `ausearch -m avc`),
-# then flips to enforcing MANUALLY once clean. Doctrine: NEVER auto-reboot, NEVER
-# downgrade an already permissive/enforcing host, and never set enforcing here.
-# Permissive-first is safe: it logs denials without blocking, so a mislabel from an
-# interrupted relabel can't wedge boot. The fedora-dev workload container stays
-# SELinux-exempt by design (label=disable — nested rootless podman needs it).
+# ---- SELinux: one-time AUTOMATED convergence to ENFORCING (disabled -> permissive+relabel ->
+# soak -> enforcing), driven by setup-stamped system units + a chain state marker. Safe by
+# construction: enforcing is set ONLY AFTER a full relabel completes (permissive-first), so
+# enforcing never runs against an unlabeled fs (the RHEL-documented wedge); a hands-off, fail-closed
+# acceptance gate soaks in permissive before the flip; and a post-enforce health check AUTO-REVERTS
+# to permissive if the enforcing boot is unhealthy. The machinery SELF-DISARMS once a healthy
+# enforcing boot is confirmed — steady state is then plain enforcing.
+# Doctrine: this one-time setup-completion reboot chain is sanctioned SETUP machinery (NOT a
+# steady-state agent reboot — those stay propose-and-surface). NEVER DOWNGRADE an already-enforcing
+# host. The fedora-dev workload container stays SELinux-exempt (label=disable — nested rootless
+# podman needs it); host enforcing does not touch it. Opt out with SELINUX_TARGET=permissive (keeps
+# the pre-v1.2.0 permissive-only behavior). State machine: see selinux-autoenforce.sh.
 selc=/etc/selinux/config
+seldir=/var/lib/fedora-bootstrap
+selmark="$seldir/selinux-chain.state"
+seltarget="${SELINUX_TARGET:-enforcing}"
+install -d -m0755 "$seldir"
+# Driver + the chain units (two timers + their oneshots), stamped every run (idempotent declarative
+# overwrite). Each unit is a no-op outside its phase: ConditionSecurity=selinux fences the
+# kernel-disabled boot, the marker's ConditionPathExists fences disarmed boots, and an internal token
+# guard fences ARMED vs PENDING. BOTH checks run via TIMERS (not the boot transaction) so they fire
+# after startup completes — a oneshot WantedBy+After=multi-user.target would deadlock its own
+# is-system-running gate (it cannot read "running" until its own ExecStart returns).
+install -m0755 "$HERE/selinux-autoenforce.sh" /usr/local/sbin/selinux-autoenforce
+tee /etc/systemd/system/selinux-enforce.timer >/dev/null <<EOS
+[Unit]
+Description=fedora-bootstrap: soak delay before SELinux permissive->enforcing flip
+ConditionSecurity=selinux
+ConditionPathExists=$selmark
+[Timer]
+OnBootSec=15min
+Persistent=false
+Unit=selinux-enforce-flip.service
+[Install]
+WantedBy=timers.target
+EOS
+tee /etc/systemd/system/selinux-enforce-flip.service >/dev/null <<EOS
+[Unit]
+Description=fedora-bootstrap: SELinux soak-confirm + flip to enforcing
+ConditionSecurity=selinux
+ConditionPathExists=$selmark
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/selinux-autoenforce soak-confirm
+EOS
+tee /etc/systemd/system/selinux-postenforce.service >/dev/null <<EOS
+[Unit]
+Description=fedora-bootstrap: SELinux post-enforce health check + auto-revert
+ConditionSecurity=selinux
+ConditionPathExists=$selmark
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/selinux-autoenforce post-enforce
+EOS
+tee /etc/systemd/system/selinux-postenforce.timer >/dev/null <<EOS
+[Unit]
+Description=fedora-bootstrap: delay before SELinux post-enforce health check
+ConditionSecurity=selinux
+ConditionPathExists=$selmark
+[Timer]
+OnBootSec=2min
+Persistent=false
+Unit=selinux-postenforce.service
+[Install]
+WantedBy=timers.target
+EOS
+systemctl daemon-reload
+# set SELINUX= by substitution, or APPEND if the line is missing (never silently no-op).
+_sel_set(){ if grep -qE '^SELINUX=' "$selc"; then sed -i "s/^SELINUX=.*/SELINUX=$1/" "$selc"; else printf 'SELINUX=%s\n' "$1" >> "$selc"; fi; restorecon "$selc" 2>/dev/null || true; }
+_sel_disarm(){ rm -f "$selmark"; systemctl disable selinux-enforce.timer selinux-postenforce.timer >/dev/null 2>&1 || true; }
 if [ -f "$selc" ]; then
     selcur=$(sed -n 's/^SELINUX=\([a-z]*\).*/\1/p' "$selc" | head -1)
-    case "$selcur" in
-        enforcing)  echo ">> SELinux already enforcing — leaving as-is." ;;
-        permissive) echo ">> SELinux already permissive — leaving as-is (flip to enforcing after soak)." ;;
-        *)  sed -i 's/^SELINUX=.*/SELINUX=permissive/' "$selc"
-            restorecon "$selc" 2>/dev/null || true
-            touch /.autorelabel
-            echo ">> SELinux was '${selcur:-unset}' -> set PERMISSIVE + scheduled a one-time relabel (/.autorelabel)."
-            echo ">> ACTION REQUIRED: REBOOT to apply — a full filesystem relabel runs on next boot (can be slow)."
-            echo ">>   After reboot: 'getenforce' should say Permissive. Soak, then review:"
-            echo ">>     sudo ausearch -m avc -ts recent     (empty = clean)"
-            echo ">>   To enforce once clean: set SELINUX=enforcing in $selc and reboot (no relabel needed)." ;;
-    esac
+    if grep -qE '(^| )selinux=0( |$)' /proc/cmdline 2>/dev/null; then
+        # selinux=0 on the kernel cmdline force-disables SELinux regardless of /etc/selinux/config —
+        # the relabel unit (ConditionSecurity=selinux) would never fire and the chain would stall in
+        # disabled. Don't arm; surface it (bootloader fix is a host-layer/operator action).
+        _sel_disarm
+        echo ">> WARNING: 'selinux=0' on the kernel cmdline overrides $selc — SELinux cannot enable; enforcing chain NOT armed." >&2
+        echo ">>   Remove selinux=0 from the bootloader (then re-run setup.sh) to use the automated convergence." >&2
+    elif [ "$selcur" = enforcing ]; then
+        _sel_disarm                                   # converged — never downgrade; disarm the one-time machinery
+        echo ">> SELinux already enforcing — convergence complete, chain disarmed."
+    elif [ "$seltarget" != enforcing ]; then
+        [ "$selcur" = permissive ] || { _sel_set permissive; [ -e /.autorelabel ] || touch /.autorelabel; }
+        _sel_disarm
+        echo ">> SELINUX_TARGET=$seltarget -> permissive only, enforcing chain NOT armed (was '${selcur:-unset}'). REBOOT if newly set."
+    elif [ -f "$seldir/selinux-chain.rolled-back" ] || [ -f "$seldir/selinux-chain.aborted" ]; then
+        [ "$selcur" = permissive ] || _sel_set permissive
+        _sel_disarm
+        echo ">> SELinux convergence previously rolled-back/aborted (see $seldir) — staying PERMISSIVE, NOT re-arming."
+        echo ">>   Investigate (sudo ausearch -m avc -ts boot), then remove the marker(s) + re-run setup.sh to retry."
+    else
+        _sel_set permissive                           # disabled/unset/permissive -> ensure permissive
+        if [ ! -f "$selmark" ]; then                  # fresh arm (idempotent: skip if already in flight)
+            # Schedule a relabel only when coming from disabled/unset (the unlabeled-fs case). An
+            # already-permissive host is already labeled (or carries a pending /.autorelabel), so
+            # don't force a needless full relabel + extra reboot on re-arm.
+            [ "$selcur" = permissive ] || { [ -e /.autorelabel ] || touch /.autorelabel; }
+            echo ARMED > "$selmark"
+            systemctl enable selinux-enforce.timer selinux-postenforce.timer >/dev/null 2>&1 || true
+            echo ">> SELinux ARMED for one-time automated convergence to ENFORCING (was '${selcur:-unset}')."
+            echo ">> ACTION REQUIRED: REBOOT to launch the chain — everything after is automatic:"
+            echo ">>   reboot -> relabel in permissive -> auto-reboot -> ~15min soak + fail-closed auto-confirm"
+            echo ">>   -> enforcing -> auto-reboot -> health check (auto-reverts to permissive if unhealthy)."
+            echo ">>   Take a Hostinger snapshot first. Opt out with: SELINUX_TARGET=permissive ./setup.sh"
+        else
+            systemctl enable selinux-enforce.timer selinux-postenforce.timer >/dev/null 2>&1 || true
+            echo ">> SELinux chain already armed (token=$(tr -d '[:space:]' < "$selmark" 2>/dev/null)) — units re-stamped; marker/relabel untouched."
+        fi
+    fi
 else
     echo ">> no $selc (SELinux userspace absent?) — skipping SELinux config." >&2
 fi

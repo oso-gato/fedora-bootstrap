@@ -205,13 +205,14 @@ subsection.
 | claudebox-daily.sh | daily-refresh decision: rebuild now if idle, else defer to session exit |
 | claudebox-init.sh | claudebox host bridge (CONTAINER_HOST → host rootless podman socket) + in-box `claudebox-rebuild` command, applied post-assemble over the quote-safe `distrobox enter -- sudo` channel |
 | cockpit-tailnet-serve.sh | publishes Cockpit on the tailnet (`tailscale serve` :443 → loopback:9090) + writes `/etc/cockpit/cockpit.conf` for the proxied origin |
+| selinux-autoenforce.sh | drives the one-time SELinux disabled→enforcing convergence (soak-confirm + flip; post-enforce health check + auto-revert). Installed to `/usr/local/sbin/selinux-autoenforce`; invoked by the three `selinux-*` system units `setup-host.sh` stamps + a `/var/lib/fedora-bootstrap/selinux-chain.state` marker. The repo's first **system-scoped** stamped units (workload-refresh units are user-scoped). |
 | container-refresh.sh | per-workload refresh: busy-probe + pull + digest compare + `systemctl --user restart <name>.service` + rollback on health failure |
 | claudebox-busy-probe.sh | generic busy probe — `podman exec` + AND-check session.lock + box-rebuild.lock; exit 0/1/2 = idle/busy/broken |
 | systemd-units/ | instance templates for workload-refresh + retry |
 | policy/CLAUDE.md | host-claudebox runtime law (stamped at /etc/claude-code/CLAUDE.md inside the box) |
 | policy/managed-settings.json | deny-rule guardrails (defense-in-depth) + bypass-permissions disabled (managed tier) |
 | policy/sudoers.claudebox | scoped passwordless-sudo allowlist for the operating user; visudo-validated, stamped to /etc/sudoers.d/claudebox |
-| verify.sh | PASS/FAIL acceptance: sockets, box, claude, policy, host-engine reach, tailnet, box-rebuild units, workload-refresh timers, dnf-automatic timer, fail2ban sshd jail, firewalld absent (leaf footprint), sudo doctrine boundary |
+| verify.sh | PASS/FAIL acceptance: sockets, box, claude, policy, host-engine reach, tailnet, box-rebuild units, workload-refresh timers, dnf-automatic timer, fail2ban sshd jail, firewalld absent (leaf footprint), sudo doctrine boundary, SELinux config not disabled (permissive or enforcing) |
 | .github/workflows/refresh-release.yml | weekly CI (Fri): re-checks Fedora's latest stable + Hostinger's provisioned version, refreshes README status line + pinned releasever |
 
 ## PACKAGES

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.1.17 (docs-only: refresh the agent-facing CLAUDE.md cross-repo note now that fedora-dev shipped its nft-only banaction fix to main — both repos nft-native. No code/host change. Prior: v1.1.16 README de-bloat + v1.1.9 rollback-recipe correction.)
+# Version: 1.2.0 (SELinux: one-time AUTOMATED disabled->enforcing convergence — permissive-first relabel -> ~15min fail-closed soak -> enforcing -> post-enforce health check with auto-revert to permissive; setup-stamped self-disarming system units; SELINUX_TARGET=permissive opts out. Prior: v1.1.17 docs-only.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

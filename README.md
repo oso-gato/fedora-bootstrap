@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.1.17** — Docs-only: refresh the agent-facing CLAUDE.md cross-repo note (fedora-dev shipped its nft-only banaction fix to main — both repos are now nft-native). No host change. Prior: v1.1.16 — README de-bloat + v1.1.9 rollback-recipe correction.
+Version: **1.2.0** — SELinux now reaches **enforcing automatically** on a fresh host: a one-time, hands-off convergence (permissive-first relabel → ~15 min fail-closed soak → enforcing → post-enforce health check that **auto-reverts to permissive** if the enforcing boot is unhealthy), driven by self-disarming setup-stamped units. Supersedes v1.1.14's manual flip. `SELINUX_TARGET=permissive` opts out. Prior: v1.1.17 — docs-only.
 
 ## Purpose
 
@@ -157,6 +157,39 @@ su - core -c '
 #### Upgrading to v1.1.17 (from v1.0.0)
 
 Documentation-only — **no host action required**. Refreshes an agent-facing `CLAUDE.md` cross-repo note (the fail2ban-server PACKAGES row) now that `fedora-dev` shipped its nft-only banaction fix to main — both repos are now nft-native. `git pull` to get the updated docs; nothing to apply. Rollback: none needed (no host state touched).
+
+#### Upgrading to v1.2.0 (from v1.0.0)
+
+SELinux now reaches **enforcing automatically**, hands-off, in one operator action. This **supersedes the v1.1.14 manual flip** (see the dated note beside v1.1.14 in [UPGRADING.md](UPGRADING.md)). `setup.sh` ensures `permissive` + a relabel and **arms a one-time convergence chain** of self-disarming system units; you reboot **once**, and the host then drives itself: relabel in permissive → auto-reboot → a ~15-minute, fail-closed soak (system healthy + critical services up + zero AVC denials) → flip to `enforcing` → auto-reboot → a post-enforce health check that **auto-reverts to permissive** (instant `setenforce 0` + config + reboot, no loop) if the enforcing boot is unhealthy. It is safe by construction — permissive-first means enforcing never runs against an unlabeled filesystem — and self-disarms once a healthy enforcing boot is confirmed. A hands-off soak cannot exercise interactive paths (Cockpit WebSocket, a box-rebuild) or denials hidden by `dontaudit`; the post-enforce auto-revert is the net for those. Opt out per-host with `SELINUX_TARGET=permissive`. The `fedora-dev` container stays SELinux-exempt (`label=disable`); host enforcing does not touch it.
+
+**Before you start:** take a Hostinger **snapshot** (hPanel → VPS → Snapshots) — the one-button, SSH-independent recovery if anything misbehaves.
+
+**As root on the VPS:**
+
+```sh
+# 1. Standard upgrade flow — installs the SELinux auto-enforce driver + three self-disarming units,
+#    ensures SELINUX=permissive, schedules the relabel, and ARMS the convergence chain. setup.sh
+#    prints "ACTION REQUIRED: REBOOT". It does NOT reboot for you (the first reboot is yours).
+#    Opt out of enforcing entirely with:  SELINUX_TARGET=permissive ./setup.sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+
+# 2. Reboot ONCE to launch the chain. Everything after is automatic (two more reboots,
+#    ~20-25 min total on this host): relabel(permissive) -> soak+auto-confirm -> enforcing
+#    -> post-enforce health check (auto-reverts to permissive if unhealthy).
+reboot
+
+# 3. After it settles (give it ~25 min), confirm convergence:
+getenforce                                    # expect: Enforcing
+ls -1 /var/lib/fedora-bootstrap/              # expect: selinux-chain.enforced ; NO .state/.rolled-back/.aborted
+systemctl is-enabled selinux-enforce.timer    # expect: disabled (chain self-disarmed)
+sudo ausearch -m avc -ts boot                 # expect: <no matches> (no denials this boot)
+```
+
+Expected after step 3: `getenforce` = `Enforcing`, `selinux-chain.enforced` present (the chain disarmed itself), no `.rolled-back`/`.aborted` marker, and `verify.sh` PASSes (including its new `SELinux config enabled` check; `fedora-dev` is unaffected — `label=disable`). If you instead find **`selinux-chain.rolled-back`**, the enforcing boot was unhealthy and the host **auto-reverted to permissive** — review `sudo ausearch -m avc -ts boot` (and `sudo semodule -DB` to reveal `dontaudit`-hidden denials), fix labels (`restorecon -Rv <path>`) or policy, then remove the marker and re-run `setup.sh` to retry. A `selinux-chain.aborted` marker means the permissive soak gate never passed (host stayed permissive) — same investigate-and-retry.
+
+**Rollback** (works after a partial run): the chain self-heals an unhealthy enforcing boot back to permissive automatically. To revert manually: `sudo sed -i 's/^SELINUX=.*/SELINUX=permissive/' /etc/selinux/config && sudo reboot`, or restore the Hostinger snapshot. In the rare case a boot wedges before multi-user (a relabeled fs makes this unlikely), recover out-of-band via the Hostinger hPanel **GRUB console**: at the menu press `e`, append `enforcing=0` to the kernel line, boot (comes up permissive), then fix and reboot — or restore-to-base.
 
 ---
 

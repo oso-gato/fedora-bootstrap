@@ -29,4 +29,9 @@ ck "host: firewalld absent (leaf footprint)"       "! rpm -q firewalld"
 # DOCTRINE BOUNDARY: the in-box agent's scoped sudo must NOT grant host-mutating dnf (that would be
 # host root). -k clears any cached timestamp so a recent password-sudo can't mask a missing grant.
 ck "host: agent has NO passwordless dnf (immutable host)" "! sudo -kn /usr/bin/dnf --version"
+# v1.2.0: SELinux must not be deliberately DISABLED. Key on the config (durable intent), NOT on
+# getenforce — the live kernel legitimately reads Disabled during the pre-relabel reboot window, and
+# the claudebox container's own /etc/selinux/config is empty, so read the HOST file via /run/host
+# (fall back to /etc when verify.sh is run directly on the host). PASS for permissive OR enforcing.
+ck "host: SELinux config enabled (permissive or enforcing)" "grep -qE '^SELINUX=(permissive|enforcing)' /run/host/etc/selinux/config 2>/dev/null || grep -qE '^SELINUX=(permissive|enforcing)' /etc/selinux/config"
 exit $fail
