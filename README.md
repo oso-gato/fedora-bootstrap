@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.2.2** — Docs: aligned the agent recipes (Add-a-new-workload, FLEET CONTRACT) with the v1.2.1 maintainership flow and the v1.1.9 no-env-file model, and added a SELinux-posture check (label-exempt / `udica`) for any new workload under the now-enforcing host. Policy/doc only. Prior: v1.2.1 — agent maintainership (push to `main` + tag; host-apply stays operator-gated); v1.2.0 — automated SELinux disabled→enforcing convergence.
+Version: **1.2.3** — Docs: added a Day-0 boot-stage table to the "fresh VPS" section mapping the SELinux convergence reboots (setup → relabel → permissive soak → enforcing) to each boot's SELinux stage and, crucially, to **when `fedora-dev` is first pulled + started** (the permissive soak boot — the first `default.target` boot after the Quadlet lands) and re-created (volumes persist, no re-pull) on every later boot. Doc only. Prior: v1.2.2 — agent-recipe alignment (maintainership flow, no-env-file, SELinux-posture check); v1.2.1 — agent maintainership (push to `main` + tag; host-apply stays operator-gated).
 
 ## Purpose
 
@@ -102,6 +102,21 @@ The only interactive pause: the tailscale auth link (one-time per host). Open th
 **Default networking:** the host comes up advertising itself as a Tailscale **exit node** AND **accepting LAN routes** the tailnet advertises. Turn either off with `TS_EXIT_NODE=0` / `TS_ACCEPT_ROUTES=0` before setup. Each capability also needs one-time admin-console approval (Tailscale → Machines).
 
 > **Security note:** with accept-routes ON, the in-box Claude Code can reach your LAN. Scope its access via tailnet ACLs (tag the VPS, grant only specific hosts/ports — never the bare `/24`).
+
+#### What unfolds after that reboot — boots, stages, and when the workload lands
+
+The convergence above is also when the fleet first comes up — hands-off, with no `podman` command from you. `setup.sh` does **not** start `fedora-dev.service`; `setup-user.sh` installs `fedora-dev`'s Quadlet and enables **only** the `workload-refresh@`/`-retry@` timers, and it does so *after* the setup boot has already reached `default.target`. So the workload's first pull is deferred to the first full multi-user boot that reaches `default.target` with the Quadlet already present — the **permissive soak boot** — driven by the Quadlet's `WantedBy=default.target` and `core`'s lingering user manager. The default enforcing happy path is 1 manual + 2 automatic reboots (4 boots):
+
+| Boot (relative) | Reboot into it | SELinux mode | What the host does | `fedora-dev` state |
+|---|---|---|---|---|
+| **Setup boot** | — (you run `setup.sh`) | `disabled`/`permissive` (config set to `permissive`; effective next boot) | host packages, `/etc`, services, tailnet, `core` + linger; arms the convergence chain + `/.autorelabel`; `setup-user.sh` installs the Quadlet **after** `default.target` and enables only the refresh/retry timers; prints `ACTION REQUIRED: REBOOT` | **not started** — Quadlet present but `default.target` already passed; **no pull, no volumes** |
+| **Relabel boot** (~seconds) | manual (your `passwd core && reboot`) | `permissive` | the stock `selinux-autorelabel` relabels the whole filesystem, clears `/.autorelabel`, and self-reboots — it runs early and reboots before `default.target`, so the workload's start never fires here | **not started** — no `default.target`, **no pull** |
+| **Permissive soak boot** (~15 min floor) | automatic (autorelabel self-reboot) | `permissive` (labeled) | first full `default.target` boot **after** the Quadlet landed → `core`'s user manager starts `fedora-dev.service`; a ~15-min fail-closed soak gate (critical services up, zero AVC denials) then flips `SELINUX=enforcing` and reboots | **first pull + start** — `Pull=missing` fetches `ghcr.io/oso-gato/fedora-dev:latest` and **creates** the `fedora-dev-home`/`-state` volumes; the container goes healthy |
+| **Enforcing boot** | automatic (soak gate passed) | `enforcing` (labeled) — steady state | boots enforcing against the now-labeled filesystem; the post-enforce health gate passes → writes `selinux-chain.enforced` and **self-disarms** the chain; no further reboots | **re-created** — fresh instance, **named volumes persist**, `Pull=missing` reuses the local image (**no re-pull**) |
+
+> **Why the soak boot, not the setup boot:** the deferral is by design, not host-incidental — `setup-user.sh` enables the refresh timers (not the service) and lands the Quadlet *after* `default.target`, so the first `default.target` boot that sees the Quadlet is the soak boot. The container is **re-created on every later `default.target` boot** (including the enforcing one); volumes persist by name and `Pull=missing` means no re-pull and no data loss. The same persist-across-recreate behavior backs the monthly `workload-refresh` restart (which additionally pulls + digest-compares first).
+
+> **Variants** (the table is the default `SELINUX_TARGET=enforcing` happy path): `SELINUX_TARGET=permissive` drops the enforcing flip — **one fewer reboot** (1 manual + 1 automatic, 3 boots), and the first pull lands in the permissive *steady-state* boot rather than a soak boot. An **unhealthy enforcing boot auto-reverts** to permissive with **one extra reboot** (writes `selinux-chain.rolled-back`, no loop); the workload was already first-pulled in the soak boot and is simply re-created across the revert with volumes intact.
 
 ### Upgrading an existing host to a new release
 
@@ -217,6 +232,18 @@ git pull --ff-only origin main
 ```
 
 **Rollback** (docs/policy only — no host state to revert): `git checkout` the prior commit and re-run `setup.sh`.
+
+#### Upgrading to v1.2.3 (from v1.0.0)
+
+Documentation only — **no host behavior change**. Adds a Day-0 boot-stage table to the README's "fresh VPS" section, mapping the SELinux convergence reboots (setup → relabel → permissive soak → enforcing) to each boot's SELinux stage and to **when `fedora-dev` is first pulled and started** (the permissive soak boot — the first `default.target` boot after the Quadlet lands) and re-created, volumes persisting with no re-pull, on every later boot. No code, units, or policy changed.
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # docs-only release — re-stamp is a no-op; no host change
+```
+
+**Rollback** (docs only — no host state to revert): `git checkout` the prior commit.
 
 ---
 

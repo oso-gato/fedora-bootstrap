@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.2 (docs: align the "Add a new workload" recipe + FLEET CONTRACT with the v1.2.1 maintainership flow (push to main, not gh-pr-create) and the v1.1.9 no-env-file model; add a SELinux-posture check (label-exempt / udica) for new workloads under the now-enforcing host. Doc/policy only. Prior: v1.2.1 maintainership.)
+# Version: 1.2.3 (docs: add a Day-0 boot-stage table mapping the SELinux convergence reboots to each boot's SELinux stage and to when fedora-dev is first pulled/started (permissive soak boot) + re-created each default.target boot. Doc only. Prior: v1.2.2 agent-recipe alignment.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
