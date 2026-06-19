@@ -143,7 +143,9 @@ systemctl restart cockpit.socket
 
 # Unattended host updates — dnf5-plugin-automatic (Fedora 44 is dnf5; the dnf4 'dnf-automatic' is
 # obsoleted). Apply ALL updates (upgrade_type=security is UNRELIABLE on Fedora — Bodhi security
-# metadata is incomplete, RH BZ#1770125), NEVER auto-reboot (doctrine: a human decides reboots). The
+# metadata is incomplete, RH BZ#1770125), NEVER auto-reboot (steady-state doctrine: a human decides
+# reboots — the ONE sanctioned exception is the one-time SELinux setup convergence below, which
+# self-disarms once enforcing is reached; from then on, never auto-reboot). The
 # host override is /etc/dnf/automatic.conf (the dnf5 host-override path; vendor defaults live in
 # /usr/share/dnf5/dnf5-plugins/automatic.conf). This is the HOST cadence; the claudebox container
 # (which carries Claude Code) refreshes separately and daily via the rebuild harness (setup-user.sh).

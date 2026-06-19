@@ -76,8 +76,9 @@ exercise(){
 
 # Fail-CLOSED acceptance gate. Returns 0 only if the host is demonstrably healthy AND clean of
 # SELinux denials since this boot. Used for both the permissive soak and the post-enforce check.
-# Assumes auditd + policycoreutils (ausearch/getenforce/setenforce/restorecon) are present — they
-# ship in the Fedora Cloud base image; if auditd is somehow inactive the gate fails closed below.
+# Assumes base @core tooling: audit (ausearch) + libselinux-utils (get/setenforce) + policycoreutils
+# (restorecon/fixfiles/selinux-autorelabel) — all ship in the Fedora Cloud image; if auditd is
+# somehow inactive the gate fails closed below.
 gate_once(){
     local why="" s sysstate avc
     systemctl is-active --quiet auditd || why="auditd inactive (ausearch would be falsely empty)"

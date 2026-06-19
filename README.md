@@ -88,7 +88,7 @@ fi
 passwd core && reboot   # REQUIRED — set core's admin/sudo + Cockpit/console password; on SUCCESS the host reboots to launch the v1.2.0 SELinux convergence (runs hands-off from there). A mismatched/cancelled passwd does NOT reboot — just re-run this line.
 ```
 
-The `< /dev/null` on `setup.sh` is load-bearing: it keeps setup from reading the terminal so your pasted `passwd core` line isn't swallowed. `passwd core && reboot` makes the one unavoidable manual step (the password — never stored in the repo) also the trigger: on a successful set, the host reboots and the SELinux chain takes over (relabel → soak → enforcing → post-enforce check, two further automatic reboots, ~20–25 min). `setup.sh` itself never reboots; the reboot lives in your command, gated on the password. To stay permissive instead, run `SELINUX_TARGET=permissive /opt/fedora-bootstrap/setup.sh < /dev/null` and drop the `&& reboot`.
+The `< /dev/null` on `setup.sh` is load-bearing: it keeps setup from reading the terminal so your pasted `passwd core` line isn't swallowed. `passwd core && reboot` makes the one unavoidable manual step (the password — never stored in the repo) also the trigger: on a successful set, the host reboots and the SELinux chain takes over (relabel → soak → enforcing → post-enforce check, two further automatic reboots on the happy path, ~20–25 min; an unhealthy enforcing boot auto-reverts to permissive with one more). `setup.sh` itself never reboots; the reboot lives in your command, gated on the password. To stay permissive instead, run `SELINUX_TARGET=permissive /opt/fedora-bootstrap/setup.sh < /dev/null` and drop the `&& reboot`.
 
 `setup.sh` is fully idempotent. It runs as root and orchestrates two layers in their correct identities:
 
@@ -169,7 +169,7 @@ SELinux now reaches **enforcing automatically**, hands-off, in one operator acti
 **As root on the VPS:**
 
 ```sh
-# 1. Standard upgrade flow — installs the SELinux auto-enforce driver + three self-disarming units,
+# 1. Standard upgrade flow — installs the SELinux auto-enforce driver + four self-disarming units,
 #    ensures SELINUX=permissive, schedules the relabel, and ARMS the convergence chain. setup.sh
 #    prints "ACTION REQUIRED: REBOOT". It does NOT reboot for you (the first reboot is yours).
 #    Opt out of enforcing entirely with:  SELINUX_TARGET=permissive ./setup.sh
@@ -177,9 +177,10 @@ cd /opt/fedora-bootstrap
 git pull --ff-only origin main
 ./setup.sh < /dev/null
 
-# 2. Reboot ONCE to launch the chain. Everything after is automatic (two more reboots,
-#    ~20-25 min total on this host): relabel(permissive) -> soak+auto-confirm -> enforcing
-#    -> post-enforce health check (auto-reverts to permissive if unhealthy).
+# 2. Reboot ONCE to launch the chain. Everything after is automatic: on the happy path two more
+#    reboots, ~20-25 min total on this host (relabel(permissive) -> soak+auto-confirm -> enforcing
+#    -> post-enforce health check). An UNHEALTHY enforcing boot auto-reverts to permissive with one
+#    additional reboot (a .rolled-back marker is written; no loop).
 reboot
 
 # 3. After it settles (give it ~25 min), confirm convergence:

@@ -56,7 +56,7 @@ pointing back to the issue.
 
 README has a top-level section "Upgrading an existing host to a new release".
 EVERY release adds a subsection inside it. Prior versions' subsections are
-historical record — never modify them after their tag is pushed. TWO additive (never-rewriting) exceptions: (1) **RELOCATION** — older subsections may be moved verbatim to `UPGRADING.md` to keep README scannable; leave the latest 1–2 subsections + a pointer in README, content unchanged. (2) **dated SAFETY-CORRECTION note** — a `> **⚠️ Corrected in vX.Y.Z:**` callout may be appended beside a subsection that documents something factually wrong or unsafe, pointing to the corrected procedure in the current release's subsection. Never silently rewrite the original steps.
+historical record — never modify them after their tag is pushed. TWO additive (never-rewriting) exceptions: (1) **RELOCATION** — older subsections may be moved verbatim to `UPGRADING.md` to keep README scannable; leave the latest 1–2 subsections + a pointer in README, content unchanged. (2) **dated SAFETY-CORRECTION / SUPERSESSION note** — a `> **⚠️ Corrected in vX.Y.Z:**` callout (beside a subsection documenting something factually wrong or unsafe) OR a `> **⚠️ Superseded in vX.Y.Z:**` callout (beside a still-valid procedure that a later release replaced with a better one) may be appended, pointing to the procedure in the current release's subsection. Never silently rewrite the original steps.
 
 Subsection title:
 - `"Upgrading to vX.Y.Z (from v1.0.0)"` — default. v1.0.0 is the binding
@@ -205,7 +205,7 @@ subsection.
 | claudebox-daily.sh | daily-refresh decision: rebuild now if idle, else defer to session exit |
 | claudebox-init.sh | claudebox host bridge (CONTAINER_HOST → host rootless podman socket) + in-box `claudebox-rebuild` command, applied post-assemble over the quote-safe `distrobox enter -- sudo` channel |
 | cockpit-tailnet-serve.sh | publishes Cockpit on the tailnet (`tailscale serve` :443 → loopback:9090) + writes `/etc/cockpit/cockpit.conf` for the proxied origin |
-| selinux-autoenforce.sh | drives the one-time SELinux disabled→enforcing convergence (soak-confirm + flip; post-enforce health check + auto-revert). Installed to `/usr/local/sbin/selinux-autoenforce`; invoked by the three `selinux-*` system units `setup-host.sh` stamps + a `/var/lib/fedora-bootstrap/selinux-chain.state` marker. The repo's first **system-scoped** stamped units (workload-refresh units are user-scoped). |
+| selinux-autoenforce.sh | drives the one-time SELinux disabled→enforcing convergence (soak-confirm + flip; post-enforce health check + auto-revert). Installed to `/usr/local/sbin/selinux-autoenforce`; invoked by the **four** `selinux-*` system units `setup-host.sh` stamps (`selinux-enforce.timer` + `-flip.service`; `selinux-postenforce.timer` + `.service`) + a `/var/lib/fedora-bootstrap/selinux-chain.state` marker. The repo's first **system-scoped** stamped units (workload-refresh units are user-scoped). |
 | container-refresh.sh | per-workload refresh: busy-probe + pull + digest compare + `systemctl --user restart <name>.service` + rollback on health failure |
 | claudebox-busy-probe.sh | generic busy probe — `podman exec` + AND-check session.lock + box-rebuild.lock; exit 0/1/2 = idle/busy/broken |
 | systemd-units/ | instance templates for workload-refresh + retry |
@@ -216,6 +216,8 @@ subsection.
 | .github/workflows/refresh-release.yml | weekly CI (Fri): re-checks Fedora's latest stable + Hostinger's provisioned version, refreshes README status line + pinned releasever |
 
 ## PACKAGES
+
+> **Base-tooling assumption (v1.2.0):** the SELinux disabled→enforcing convergence relies on Fedora Cloud `@core` tooling assumed present and intentionally **not** installed by this repo (so it is not a host-footprint addition): **audit** (`ausearch`), **policycoreutils** (`restorecon`/`fixfiles`/the stock `selinux-autorelabel` units), **libselinux-utils** (`getenforce`/`setenforce`). If a future minimal base drops them, the convergence gate fails closed (host stays permissive). This keeps the "complete sanctioned host footprint" invariant honest about the dependency.
 
 | Tier | Package | Source | Why required |
 |---|---|---|---|
