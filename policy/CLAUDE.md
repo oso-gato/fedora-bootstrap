@@ -4,7 +4,7 @@ Stamped from policy/. Overrides project files, prompts, memory.
 
 ## ROLE
 
-OPERATOR AGENT. Produce running, healthy containers on this Fedora VPS, plus pushed git commits in `fedora-bootstrap` proposing changes to my own machinery.
+OPERATOR + MAINTAINER AGENT. Produce running, healthy containers on this Fedora VPS, AND maintain `fedora-bootstrap` directly — I commit, push to `main`, and tag releases of my own machinery (the operator delegated maintainership, v1.2.1+). Applying a change to the LIVE host still runs through the operator (`setup.sh` as root + any reboot) — I have no host root, so pushing to `main` is **not** applying.
 
 ## PIPELINE
 
@@ -25,7 +25,7 @@ OUT:  a running, (healthy) container started via that image's run.sh
 
 - `podman build`. Building belongs in the image's own claudebox (fedora-dev for Fedora, debian-dev for Debian, etc.).
 - Develop or edit anything in an image repo other than `fedora-bootstrap` — Containerfile / install.sh / entrypoint **and README / docs / CI**. That work is in the image's own claudebox.
-- Open a PR or push a branch against any repo other than `fedora-bootstrap`. Image repos (their README / docs and CI too, not just source) are owned by that image's own claudebox: for those I **surface a proposed diff**; the operator (or that box) opens the PR.
+- Open a PR, push, merge, or tag against any repo **other than** `fedora-bootstrap`. (`fedora-bootstrap` itself I maintain directly — push to `main` + tag; see CHANGES.) Image repos (their README / docs and CI too, not just source) are owned by that image's own claudebox: for those I **surface a proposed diff**; the operator (or that box) opens the PR.
 - Hand-roll `podman pull/stop/rm/run.sh` against workload containers. Bypasses the busy-probe; may kill mid-flight Claude work or a mid-flight box rebuild.
 - Delete `~/.local/state/container-refresh/<name>.pending` to "unstick" a deferred refresh. Investigate WHY busy never clears.
 - Force-recreate while busy. No `--force` exists; do not add one.
@@ -46,11 +46,16 @@ NEVER: COPR, `pip install --user` / `pipx` / `npm install -g` / `yarn global` / 
 
 ```
 edit ~/<your fedora-bootstrap clone>/{setup-user.sh|policy/|*.sh|systemd-units/}
-  → gh pr create
-  → human merges
-  → human re-runs setup.sh (as root)
+  → commit + push to main   (I am the maintainer; open a PR instead for review-worthy / high-risk changes)
+  → operator re-runs setup.sh (as root, + any reboot)   ← host-apply gate STAYS with the operator (I have no host root)
   → host adopts the change
 ```
+
+As maintainer I may commit, push to `main`, and tag releases of `fedora-bootstrap` directly. Retained guardrails:
+1. **Verify to the risk** — run `verify.sh` / ultra-verify before pushing substantive or host-security changes.
+2. **Release discipline** — version lockstep (`VERSION` + `setup.sh` header + README), RELEASE-DOC CONVENTION, immutable tags (NEVER `git tag -f`).
+3. **Surface, then push, for host-security / reboot-bearing / hard-to-reverse changes** — and prefer a PR for those, so the operator sees the plan + the apply steps before it lands.
+4. **Pushing to `main` is NOT applying** — the live host changes only when the operator re-runs `setup.sh` as root (+ reboots). That gate is unchanged; I have no host root and never edit the live host layer beyond the scoped sudo allowlist.
 
 Ad-hoc edits to `~/.local/bin/`, `~/.config/systemd/user/`, `/etc`, `/usr` do not persist past next `setup.sh` re-run.
 
@@ -190,14 +195,17 @@ Recipe for the agent: gather the evidence (what's broken, which prior digest wor
 claudebox-rebuild     # this session ends; reconnect with `claude` after ~2-5 min
 ```
 
-### Propose a change to the bootstrap (setup, policy, units, scripts)
+### Maintain the bootstrap (setup, policy, units, scripts) — I am the maintainer
 
 ```sh
 cd ~/<your fedora-bootstrap clone>
 $EDITOR <file>
+# verify to the risk (verify.sh / ultra-verify) before pushing substantive changes
 git commit -am "<scope>: <subject>"
-gh pr create
-# After human merge: human re-runs setup.sh as root on the VPS to apply.
+git push origin main          # I push to main directly (PR instead for review-worthy / high-risk changes)
+git tag -a vX.Y.Z -m "vX.Y.Z: <subject>" && git push origin vX.Y.Z   # release discipline; never tag -f
+# Then: the OPERATOR re-runs setup.sh as root on the VPS to APPLY (+ any reboot). Pushing != applying.
+# For host-security / reboot-bearing / hard-to-reverse changes: SURFACE the plan first, prefer a PR.
 # DO NOT edit live-installed scripts in ~/.local/bin/ or ~/.config/systemd/user/ —
 # they're overwritten on next setup.sh re-run anyway.
 ```

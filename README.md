@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.2.0** — SELinux now reaches **enforcing automatically** on a fresh host: a one-time, hands-off convergence (permissive-first relabel → ~15 min fail-closed soak → enforcing → post-enforce health check that **auto-reverts to permissive** if the enforcing boot is unhealthy), driven by self-disarming setup-stamped units. Supersedes v1.1.14's manual flip. `SELINUX_TARGET=permissive` opts out. Prior: v1.1.17 — docs-only.
+Version: **1.2.1** — Maintainership: the in-box agent now maintains `fedora-bootstrap` directly (commit, push to `main`, tag releases); the host-apply gate stays with the operator (`setup.sh` as root + reboot — the agent has no host root). Policy/doc only. Prior: v1.2.0 — automated SELinux disabled→enforcing convergence (permissive-first relabel → fail-closed soak → enforcing → post-enforce auto-revert), `SELINUX_TARGET=permissive` opts out.
 
 ## Purpose
 
@@ -193,6 +193,18 @@ sudo ausearch -m avc -ts boot                 # expect: <no matches> (no denials
 Expected after step 3: `getenforce` = `Enforcing`, `selinux-chain.enforced` present (the chain disarmed itself), no `.rolled-back`/`.aborted` marker, and `verify.sh` PASSes (including its new `SELinux config enabled` check; `fedora-dev` is unaffected — `label=disable`). If you instead find **`selinux-chain.rolled-back`**, the enforcing boot was unhealthy and the host **auto-reverted to permissive** — review `sudo ausearch -m avc -ts boot` (and `sudo semodule -DB` to reveal `dontaudit`-hidden denials), fix labels (`restorecon -Rv <path>`) or policy, then remove the marker and re-run `setup.sh` to retry. A `selinux-chain.aborted` marker means the permissive soak gate never passed (host stayed permissive) — same investigate-and-retry.
 
 **Rollback** (works after a partial run): the chain self-heals an unhealthy enforcing boot back to permissive automatically. To revert manually: `sudo sed -i 's/^SELINUX=.*/SELINUX=permissive/' /etc/selinux/config && sudo reboot`, or restore the Hostinger snapshot. In the rare case a boot wedges before multi-user (a relabeled fs makes this unlikely), recover out-of-band via the Hostinger hPanel **GRUB console**: at the menu press `e`, append `enforcing=0` to the kernel line, boot (comes up permissive), then fix and reboot — or restore-to-base.
+
+#### Upgrading to v1.2.1 (from v1.0.0)
+
+Policy/doc only — **no host behavior change**. The in-box agent is now the `fedora-bootstrap` maintainer: it commits, pushes to `main`, and tags releases directly. The host-apply gate is unchanged — the live host still changes only when you re-run `setup.sh` as root (the agent has no host root). This release just re-stamps the updated agent law (`policy/CLAUDE.md` → `/etc/claude-code/CLAUDE.md` inside claudebox).
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # re-stamps the updated agent law into the box; no host change
+```
+
+**Rollback** (docs/policy only — no host state to revert): `git checkout` the prior commit and re-run `setup.sh` to re-stamp the previous agent law.
 
 ---
 
