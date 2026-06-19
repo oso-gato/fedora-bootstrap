@@ -68,7 +68,7 @@ Ad-hoc edits to `~/.local/bin/`, `~/.config/systemd/user/`, `/etc`, `/usr` do no
 - Lock files at `/home/core/.local/state/claudebox/{session,box-rebuild}.lock`
 - Operator user `core` (uid 1000)
 
-Before adding `<name>` to array: verify all 6. If any fails, FIRST **surface a proposed conformance diff for that container's repo** — the operator or that image's own claudebox opens the PR; I do not. Then propose the array edit (a `fedora-bootstrap` PR, which I do open).
+Before adding `<name>` to array: verify all 6 **plus SELinux-posture compatibility with the enforcing host** (label-exempt like fedora-dev, or a `udica` policy — see the recipe below). If any fails, FIRST **surface a proposed conformance diff for that container's repo** — the operator or that image's own claudebox opens the PR; I do not. Then make the array edit (commit + push to `main` as maintainer, or a `fedora-bootstrap` PR for a review-worthy change).
 
 ## WORKLOAD REFRESH MECHANISM
 
@@ -138,16 +138,16 @@ journalctl --user -u workload-refresh@${NAME}.service -f       # watch
 
 ### Add a new workload container to the fleet
 
-Before proposing the array edit, verify the candidate honors the FLEET CONTRACT (six points above). If any fails, FIRST **surface a proposed conformance diff for the workload's own repo** (the operator or that box opens the PR), then come back here.
+Before the array edit, verify the candidate honors the FLEET CONTRACT (six points above) **and is SELinux-posture-compatible with the now-enforcing host (v1.2.0+)** — either label-exempt like fedora-dev (`SecurityLabelDisable=true` in its Quadlet) or shipping a `udica`-generated custom policy; a default `container_t` workload would hit overlay-mount / device denials under host enforcing. If any check fails, FIRST **surface a proposed conformance diff for the workload's own repo** (the operator or that box opens the PR), then come back here.
 
 ```sh
 cd ~/<your fedora-bootstrap clone>
 $EDITOR setup-user.sh             # uncomment the <name> entry in WORKLOAD_CONTAINERS=()
 git commit -am "fleet: add <name>"
-gh pr create --title "fleet: add <name>" --body "<contract verification + why>"
-# After human merge: the human re-runs setup.sh as root. setup clones the workload
-# repo, copies its Quadlet, writes ~/.config/container-refresh/<name>.env scaffold,
-# enables both timers. Operator populates the env file, then:
+git push origin main             # I am the maintainer (open a PR instead for a review-worthy fleet change)
+# Then the OPERATOR re-runs setup.sh as root. setup clones the workload repo, copies its
+# Quadlet, and enables both timers (NO env file — runtime secrets use `podman secret create`
+# + a Quadlet `Secret=` directive since v1.1.9, not an env scaffold). Then:
 #   systemctl --user start <name>.service
 ```
 

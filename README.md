@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.2.1** — Maintainership: the in-box agent now maintains `fedora-bootstrap` directly (commit, push to `main`, tag releases); the host-apply gate stays with the operator (`setup.sh` as root + reboot — the agent has no host root). Policy/doc only. Prior: v1.2.0 — automated SELinux disabled→enforcing convergence (permissive-first relabel → fail-closed soak → enforcing → post-enforce auto-revert), `SELINUX_TARGET=permissive` opts out.
+Version: **1.2.2** — Docs: aligned the agent recipes (Add-a-new-workload, FLEET CONTRACT) with the v1.2.1 maintainership flow and the v1.1.9 no-env-file model, and added a SELinux-posture check (label-exempt / `udica`) for any new workload under the now-enforcing host. Policy/doc only. Prior: v1.2.1 — agent maintainership (push to `main` + tag; host-apply stays operator-gated); v1.2.0 — automated SELinux disabled→enforcing convergence.
 
 ## Purpose
 
@@ -205,6 +205,18 @@ git pull --ff-only origin main
 ```
 
 **Rollback** (docs/policy only — no host state to revert): `git checkout` the prior commit and re-run `setup.sh` to re-stamp the previous agent law.
+
+#### Upgrading to v1.2.2 (from v1.0.0)
+
+Docs/policy only — **no host behavior change**. Brings the agent recipes in `policy/CLAUDE.md` into line with the v1.2.0/v1.2.1 reality: the "Add a new workload container" recipe and FLEET-CONTRACT gate now use the **maintainership push-to-`main` flow** (not `gh pr create → human merges`), drop the dead **`*.env` scaffold** step (runtime secrets use `podman secret` + a Quadlet `Secret=` since v1.1.9), and add a **SELinux-posture check** — any *new* workload added to the fleet must be enforcing-host-compatible (label-exempt like `fedora-dev`, or ship a `udica` policy), since the host is now enforcing. `fedora-dev` itself needs no change. `setup.sh` re-stamps the updated agent law.
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # re-stamps the updated agent law into the box; no host change
+```
+
+**Rollback** (docs/policy only — no host state to revert): `git checkout` the prior commit and re-run `setup.sh`.
 
 ---
 
