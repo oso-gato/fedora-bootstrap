@@ -263,6 +263,8 @@ After a rollback you'll now see `~/.local/state/container-refresh/<name>.rolled-
 
 #### Upgrading to v1.1.14 (from v1.0.0)
 
+> **⚠️ Superseded in v1.2.0:** the manual flip in step 4 below (hand-edit `SELINUX=enforcing` + reboot after a soak) is replaced by an **automated, self-disarming convergence** — `setup.sh` now arms a chain that goes permissive → relabel → soak → enforcing → post-enforce health check with **auto-revert to permissive** on failure. Use the **"Upgrading to v1.2.0"** subsection in [README.md](README.md) instead. The v1.1.14 steps below remain valid as the permissive-first first leg (and `SELINUX_TARGET=permissive` reproduces exactly this manual-flip posture), but do not hand-flip enforcing if you are on v1.2.0 — let the chain do it.
+
 Turns SELinux back on (Fedora's default; this VPS's provider image shipped it disabled). `setup-host.sh` moves a disabled host to **permissive** and schedules a one-time relabel — it never auto-reboots, never downgrades an already-enabled host, and never sets `enforcing` (you do that after soaking). The `fedora-dev` container stays SELinux-exempt (`label=disable`). **This release requires a reboot** — the relabel runs on next boot.
 
 **Before you start:** take a Hostinger **snapshot** (hPanel → VPS → Snapshots) — hypervisor-level rollback if anything misbehaves. SELinux is enablable here because the VPS is KVM (own kernel) with no in-guest provider agent to conflict with.
