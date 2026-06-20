@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.4 (policy: extend agent maintainership to fedora-dev — direct commit/push/tag on fedora-dev's repo like fedora-bootstrap; all OTHER image repos stay surface-only; image builds still run in CI (never podman build on host); host-apply gate + fedora-dev deploy path unchanged. Re-stamps the agent law. Prior: v1.2.3 docs Day-0 boot-stage table.)
+# Version: 1.2.5 (fix: verify.sh fail2ban check no longer false-FAILs on the unprivileged `core` bring-up path — the root-only fail2ban-client jail query is gated on euid (full check as root, daemon-active as core). No host behavior change. Prior: v1.2.4 genesis/mother-platform role + fedora-dev maintainership.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

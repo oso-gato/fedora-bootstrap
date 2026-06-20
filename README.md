@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.2.4** — Policy: articulates the host claudebox as the **genesis agent / mother platform** — it operates + maintains the host AND now directly maintains (commit, push to `main`, tag) **both `fedora-bootstrap` and `fedora-dev`** (the first workload image + the template later workloads follow), to grow the ongoing container workflow from a maintained base. All *other* image repos remain surface-only (propose a diff; the operator or that image's own box opens the PR). Unchanged: image builds still run in CI (never `podman build` on the host); the host-apply gate (the live host changes only when you re-run `setup.sh` as root); and the `fedora-dev` deploy path (workload-refresh pull + live-spec refresh). Re-stamps the agent law + refreshes the README Purpose. Prior: v1.2.3 — docs Day-0 boot-stage table; v1.2.2 — agent-recipe alignment; v1.2.1 — agent maintainership (push to `main` + tag; host-apply stays operator-gated).
+Version: **1.2.5** — Fix: `verify.sh`'s `host: fail2ban active (sshd jail)` check no longer false-FAILs on the normal (unprivileged `core`) bring-up path — the root-only `fail2ban-client status sshd` query is gated on euid (full daemon+jail check when root, daemon-active check when `core`). No host behavior change. Prior: v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership; v1.2.3 — docs Day-0 boot-stage table; v1.2.2 — agent-recipe alignment; v1.2.1 — agent maintainership (push to `main` + tag; host-apply stays operator-gated).
 
 ## Purpose
 
@@ -260,6 +260,18 @@ git pull --ff-only origin main
 ```
 
 **Rollback** (docs/policy only — no host state to revert): `git checkout` the prior commit and re-run `setup.sh` to re-stamp the previous agent law.
+
+#### Upgrading to v1.2.5 (from v1.0.0)
+
+Fix only — **no host behavior change**. `verify.sh`'s `host: fail2ban active (sshd jail)` check ran `fail2ban-client status sshd`, which needs root to reach fail2ban's `0700` control socket — but `verify.sh` runs as the unprivileged `core` user (`setup.sh` hands the rootless layer to `su - core`), so the check short-circuited to a **false FAIL on every bring-up even though fail2ban was healthy**. The check now gates the root-only jail query on euid: it asserts the daemon is active (works as `core`) and additionally checks the sshd jail only when run as root.
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # re-runs verify with the corrected check; no host change
+```
+
+**Rollback** (no host state to revert): `git checkout` the prior commit.
 
 ---
 
