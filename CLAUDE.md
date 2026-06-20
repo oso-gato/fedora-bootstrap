@@ -24,9 +24,16 @@ list is the boundary — it is not.
 
 ## PIPELINE CONTEXT
 
-Images developed in fedora-dev / debian-dev containers, CI-built on GitHub,
-GHCR-published. claudebox (this repo's product) pulls and operates them on
-the host — never builds.
+Images are CI-built on GitHub and GHCR-published; the host claudebox **pulls
+and operates** them — it never `podman build`s. The host claudebox is the
+**genesis agent / mother platform**: besides operating the host, as of v1.2.4
+it directly maintains the SOURCE of two repos — `fedora-bootstrap` (its own
+machinery) and `fedora-dev` (the first workload + the template later workloads
+follow): it commits/pushes/tags them, CI builds the image, and the new image
+reaches the host via the workload-refresh pull. Every OTHER workload's source
+is developed in that image's own dev box (debian-dev, …) and stays surface-only
+to the host claudebox. Maintaining a repo's source ≠ building its image (CI) ≠
+deploying it (the pull).
 
 ## RELEASING A NEW VERSION
 

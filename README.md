@@ -1,17 +1,21 @@
 # fedora-bootstrap
 
-Version: **1.2.3** — Docs: added a Day-0 boot-stage table to the "fresh VPS" section mapping the SELinux convergence reboots (setup → relabel → permissive soak → enforcing) to each boot's SELinux stage and, crucially, to **when `fedora-dev` is first pulled + started** (the permissive soak boot — the first `default.target` boot after the Quadlet lands) and re-created (volumes persist, no re-pull) on every later boot. Doc only. Prior: v1.2.2 — agent-recipe alignment (maintainership flow, no-env-file, SELinux-posture check); v1.2.1 — agent maintainership (push to `main` + tag; host-apply stays operator-gated).
+Version: **1.2.4** — Policy: articulates the host claudebox as the **genesis agent / mother platform** — it operates + maintains the host AND now directly maintains (commit, push to `main`, tag) **both `fedora-bootstrap` and `fedora-dev`** (the first workload image + the template later workloads follow), to grow the ongoing container workflow from a maintained base. All *other* image repos remain surface-only (propose a diff; the operator or that image's own box opens the PR). Unchanged: image builds still run in CI (never `podman build` on the host); the host-apply gate (the live host changes only when you re-run `setup.sh` as root); and the `fedora-dev` deploy path (workload-refresh pull + live-spec refresh). Re-stamps the agent law + refreshes the README Purpose. Prior: v1.2.3 — docs Day-0 boot-stage table; v1.2.2 — agent-recipe alignment; v1.2.1 — agent maintainership (push to `main` + tag; host-apply stays operator-gated).
 
 ## Purpose
 
 `fedora-bootstrap` turns a fresh Fedora Cloud VPS into a **container-as-app fleet** operated by an in-box Claude Code agent. The host stays minimal and treated-as-immutable; every application function runs in a container pulled from `ghcr.io/oso-gato/*`.
 
-This is one half of a two-agent pipeline:
+The host's claudebox is the **genesis agent** of this platform — the first claudebox brought up, running *on* the host. Its standing purpose is two-fold:
 
-- **the host's claudebox** (this repo's product) — DEPLOYS and OPERATES container images. **Never builds.**
-- **`fedora-dev` / `debian-dev`** (separate repos) — DEVELOP and BUILD container images. **Never deploy.**
+1. **Operate + maintain the mother platform** — the host itself, which runs every current and future containerised workload. It deploys and operates workload images and keeps the host sound. It **never builds** images (CI does) and **never applies** host changes itself (the operator re-runs `setup.sh` as root).
+2. **Develop + maintain the foundation's source** — it directly maintains (commit, push to `main`, tag) **`fedora-bootstrap`** (the host's own machinery) and **`fedora-dev`** (the first workload image, and the template every later workload follows), so the ongoing container workflow keeps evolving from a maintained base.
 
-The handoff is one-way: image source built in the dev container → pushed to GitHub → CI publishes to GHCR → host claudebox pulls and recreates via the workload-refresh harness on a monthly cadence.
+Every *other* workload image's source is developed and built in that image's own dev container (`debian-dev`, …) and is **surface-only** to the host claudebox. For **all** images — including the two the host claudebox maintains — the build/deploy handoff is one-way and unchanged:
+
+image source → pushed to GitHub → CI builds + publishes to GHCR → host claudebox pulls and recreates via the workload-refresh harness (monthly).
+
+Maintaining a repo's source is never the same as building its image (CI's job) or deploying it (the pull): the host claudebox writes source and pulls images; it never `podman build`s and never hand-deploys.
 
 ## What the host provides after bootstrap
 
@@ -245,6 +249,18 @@ git pull --ff-only origin main
 
 **Rollback** (docs only — no host state to revert): `git checkout` the prior commit.
 
+#### Upgrading to v1.2.4 (from v1.0.0)
+
+Policy/doc only — **no host behavior change**. Articulates the host claudebox's purpose as the **genesis agent / mother platform** (operate + maintain the host) and extends its maintainership: in addition to `fedora-bootstrap`, the agent now maintains the **`fedora-dev`** repo directly (commit, push to `main`, tag) — `fedora-dev` being the first workload image and the template later workloads follow. All *other* image repos stay surface-only (the agent proposes a diff; the operator or that image's own box opens the PR). Unchanged: image builds still run in CI on push (never `podman build` on the host); the host-apply gate (the live host changes only when you re-run `setup.sh` as root); and the `fedora-dev` deploy path (a pushed image reaches the host only via the workload-refresh pull, and a running box only adopts it once its live spec is refreshed). This release re-stamps the updated agent law (`policy/CLAUDE.md` → `/etc/claude-code/CLAUDE.md` inside claudebox) and refreshes the README Purpose.
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # re-stamps the updated agent law into the box; no host change
+```
+
+**Rollback** (docs/policy only — no host state to revert): `git checkout` the prior commit and re-run `setup.sh` to re-stamp the previous agent law.
+
 ---
 
 ## Operating the host (as the maintainer)
@@ -380,7 +396,7 @@ Turn a fresh Fedora Cloud VPS into a container-as-app fleet that an LLM agent op
 
 1. **Host immutability & minimal packages.** A short fixed package list is the complete sanctioned host footprint. Anything else runs in a container. Growing the list requires an explicit waiver recorded in CLAUDE.md's Build Principles. Within the list, always install the most specific (leaf) package rather than a convenience metapackage — `install_weak_deps=False` blocks optional Recommends but not a metapackage's hard Requires, so a metapackage can silently pull components you never use. Use a metapackage only for a recorded architectural reason; when in doubt, verify its hard deps and flag for review.
 2. **Container-as-app.** Each major function is its own image with its own repo, CI, and Quadlet. An image that exists only on this host (no repo, no CI behind it) is drift.
-3. **Two-agent pipeline.** Dev containers BUILD images; host claudebox DEPLOYS them. Strict separation; the boundary is enforced by per-agent `policy/CLAUDE.md` rules.
+3. **Build/deploy separation (genesis agent).** Images are always BUILT in CI (never `podman build` on the host) and DEPLOYED by the host claudebox via the pull. The host claudebox is the genesis agent: it operates the host AND maintains the *source* of `fedora-bootstrap` + `fedora-dev` (commit/push/tag); every *other* image's source is developed in that image's own dev box and is surface-only to it. The invariant the `policy/CLAUDE.md` rules enforce is **build-in-CI + maintainership scope** (which repos the agent may push), not a strict develop-vs-deploy agent split.
 4. **Least privilege, kernel-enforced.** `core` user is password-gated `wheel` admin; in-box agent has scoped passwordless sudo for exactly the pinned commands in `policy/sudoers.claudebox` (currently `tailscale serve` loopback + read-only `tailscale status`). Everything else is OS-blocked.
 5. **Self-updating with safety.** Refreshes respect a busy-probe (don't kill mid-flight Claude work or in-flight box rebuilds) and roll back automatically on healthcheck failure.
 6. **Propose-and-commit.** Any change to setup, policy, or workload list flows through this repo's git history (PR + `setup.sh` re-run). Ad-hoc changes vanish on next setup.
