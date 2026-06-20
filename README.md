@@ -1,6 +1,19 @@
 # fedora-bootstrap
 
-Version: **1.2.5** — Fix: `verify.sh`'s `host: fail2ban active (sshd jail)` check no longer false-FAILs on the normal (unprivileged `core`) bring-up path — the root-only `fail2ban-client status sshd` query is gated on euid (full daemon+jail check when root, daemon-active check when `core`). No host behavior change. Prior: v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership; v1.2.3 — docs Day-0 boot-stage table; v1.2.2 — agent-recipe alignment; v1.2.1 — agent maintainership (push to `main` + tag; host-apply stays operator-gated).
+## TL;DR — in plain words
+
+One script that turns a fresh cloud server into your **"mother platform"** — a locked-down host that runs your whole fleet of container apps. Its on-board Claude (the "host claudebox") has **two standing jobs**: it **operates and maintains the host itself**, and it **develops and maintains the source of two repositories**:
+
+1. **`fedora-bootstrap`** (this one) — the host's own machinery
+2. **`fedora-dev`** (development box) — the first workload + the template later ones follow
+
+- 🔑 **How you get in:** key-only SSH/Mosh from anywhere; the admin console (Cockpit) and everything sensitive are reachable only over your private Tailscale network.
+- 🏭 **Maintaining the host:** keeps it minimal and treated-as-immutable; every app runs as a container pulled from your registry, auto-refreshed monthly with **automatic roll-back** if a new version comes up unhealthy. The host claudebox operates the fleet.
+- 🔧 **Why it can edit those two repos directly:** this is the **first container that ever comes up — the foundation everything else stands on.** It's uniquely trusted to commit + push directly to both because it has to repair the foundation *in place* — like fixing a running car — and to fix the dev box even before it's fully spun up. Every *other* repo it only *proposes* changes to.
+- 🚧 **The split:** it **never builds** images (CI does) and **never edits the live host** by hand — you re-run the setup script as root to apply. So "pushing a change" is never the same as "applying it to the server."
+- 🔒 **No secrets in the repo.**
+
+Version: **1.2.7** — Docs: a plain-words **TL;DR** at the top of the README. Policy: the host claudebox now maintains `fedora-bootstrap` and `fedora-dev` via **PR-first + maintainer-approved merge** (no direct push to `main`) — traceable and reversible; host-apply stays operator-gated. No host behavior change. *(Note: v1.2.6 was a mis-applied tag pointing at v1.2.5's commit; v1.2.7 supersedes it.)* Prior: v1.2.5 — `verify.sh` fail2ban check euid-gated; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership; v1.2.3 — docs Day-0 boot-stage table; v1.2.2 — agent-recipe alignment; v1.2.1 — agent maintainership.
 
 ## Purpose
 
@@ -269,6 +282,20 @@ Fix only — **no host behavior change**. `verify.sh`'s `host: fail2ban active (
 cd /opt/fedora-bootstrap
 git pull --ff-only origin main
 ./setup.sh < /dev/null        # re-runs verify with the corrected check; no host change
+```
+
+**Rollback** (no host state to revert): `git checkout` the prior commit.
+
+#### Upgrading to v1.2.7 (from v1.0.0)
+
+Docs + agent-policy — **no host behavior change**. Adds a plain-words "TL;DR" at the top of the README, and updates the host-claudebox law (`policy/CLAUDE.md`) so it maintains `fedora-bootstrap` and `fedora-dev` via **PR-first + maintainer-approved merge** (no direct push to `main`). Host-apply is unchanged — the operator still re-runs `setup.sh`.
+
+> **⚠️ Note — `v1.2.6` was a mis-applied tag** (it points at v1.2.5's commit); **v1.2.7 is its real successor** — there is no v1.2.6 release content.
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # docs + policy re-stamp; re-runs verify, no host change
 ```
 
 **Rollback** (no host state to revert): `git checkout` the prior commit.
