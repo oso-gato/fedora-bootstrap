@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.5 (fix: verify.sh fail2ban check no longer false-FAILs on the unprivileged `core` bring-up path — the root-only fail2ban-client jail query is gated on euid (full check as root, daemon-active as core). No host behavior change. Prior: v1.2.4 genesis/mother-platform role + fedora-dev maintainership.)
+# Version: 1.2.7 (docs: plain-words TL;DR at README top; policy: PR-first + maintainer-approved-merge pathway for fedora-bootstrap + fedora-dev source — no direct push to main. No host behavior change. NOTE: v1.2.6 was a mis-applied tag (pointed at v1.2.5's commit); v1.2.7 supersedes it. Prior: v1.2.5 verify.sh fail2ban euid-gate fix; v1.2.4 genesis/mother-platform role + fedora-dev maintainership.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
