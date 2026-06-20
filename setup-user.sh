@@ -48,6 +48,28 @@ distrobox enter claudebox -- sudo bash "/run/host$HERE/claudebox-init.sh" "$(id 
 distrobox enter claudebox -- sudo mkdir -p /etc/claude-code
 distrobox enter claudebox -- sudo cp "/run/host$HERE/policy/CLAUDE.md" /etc/claude-code/CLAUDE.md
 distrobox enter claudebox -- sudo cp "/run/host$HERE/policy/managed-settings.json" /etc/claude-code/managed-settings.json
+# Auto-provision the ultra-verify skill into the box's personal skills dir (~/.claude/skills,
+# shared with the host home). Fetched from the private oso-gato/claude-skills repo using the
+# box's own gh auth (~/.config/gh, shared) — runs INSIDE the box where git/gh live. Tracks `main`,
+# so every box rebuild (this script re-runs) refreshes the skill. Best-effort: no gh auth or no
+# network -> skip, never fail the bootstrap. No secrets stored; reads the private repo via the
+# operator's gh login already present in the box.
+echo ">> claudebox skills: refreshing ultra-verify from oso-gato/claude-skills (main)"
+distrobox enter claudebox -- bash -lc '
+    set -u
+    gh auth status >/dev/null 2>&1 || { echo "   no gh auth in box — skipping ultra-verify (gh auth login, then rebuild)"; exit 0; }
+    tmp=$(mktemp -d) || exit 0
+    if gh repo clone oso-gato/claude-skills "$tmp/cs" -- --depth 1 >/dev/null 2>&1 \
+       && [ -d "$tmp/cs/plugins/action/skills/ultra-verify" ]; then
+        mkdir -p "$HOME/.claude/skills"
+        rm -rf "$HOME/.claude/skills/ultra-verify"
+        cp -rT "$tmp/cs/plugins/action/skills/ultra-verify" "$HOME/.claude/skills/ultra-verify"
+        echo "   installed/updated ~/.claude/skills/ultra-verify"
+    else
+        echo "   claude-skills fetch failed (network/access?) — skipping" >&2
+    fi
+    rm -rf "$tmp"
+' || echo ">> claudebox skills: step skipped (non-fatal)"
 mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.local/state/claudebox"
 
 # `claude` entry wrapper. XDG_RUNTIME_DIR is pinned so `su core` works (su keeps the prior user's

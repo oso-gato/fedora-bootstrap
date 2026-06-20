@@ -1,6 +1,6 @@
 # fedora-bootstrap
 
-Version: **1.2.4** — Policy: articulates the host claudebox as the **genesis agent / mother platform** — it operates + maintains the host AND now directly maintains (commit, push to `main`, tag) **both `fedora-bootstrap` and `fedora-dev`** (the first workload image + the template later workloads follow), to grow the ongoing container workflow from a maintained base. All *other* image repos remain surface-only (propose a diff; the operator or that image's own box opens the PR). Unchanged: image builds still run in CI (never `podman build` on the host); the host-apply gate (the live host changes only when you re-run `setup.sh` as root); and the `fedora-dev` deploy path (workload-refresh pull + live-spec refresh). Re-stamps the agent law + refreshes the README Purpose. Prior: v1.2.3 — docs Day-0 boot-stage table; v1.2.2 — agent-recipe alignment; v1.2.1 — agent maintainership (push to `main` + tag; host-apply stays operator-gated).
+Version: **1.2.5** — claudebox: **auto-provisions the `ultra-verify` skill** from the private `oso-gato/claude-skills` repo into `~/.claude/skills/` on every box rebuild — a best-effort runtime fetch inside the box via its own `gh` auth (tracks `main`, no secrets, skips cleanly if unauthenticated/offline). Prior: v1.2.4 — extend agent maintainership to `fedora-dev` + articulate the genesis/mother-platform role; v1.2.3 — docs Day-0 boot-stage table; v1.2.2 — agent-recipe alignment; v1.2.1 — agent maintainership (push to `main` + tag; host-apply stays operator-gated).
 
 ## Purpose
 
@@ -260,6 +260,18 @@ git pull --ff-only origin main
 ```
 
 **Rollback** (docs/policy only — no host state to revert): `git checkout` the prior commit and re-run `setup.sh` to re-stamp the previous agent law.
+
+#### Upgrading to v1.2.5 (from v1.0.0)
+
+Adds **auto-provisioning of the `ultra-verify` skill** into the host claudebox. On every `setup.sh` run and every box rebuild, the box fetches `ultra-verify` from the private `oso-gato/claude-skills` repo (tracking `main`) into `~/.claude/skills/`, using the box's existing `gh` auth (`~/.config/gh`, shared with the host). It is **best-effort** — a missing gh auth or no network simply skips it without failing the bootstrap — and stores **no secrets** (the private repo is read with the operator's `gh` login already present in the box).
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # installs/refreshes ultra-verify into the box (needs gh auth in the box)
+```
+
+If the box isn't gh-authenticated yet, run `distrobox enter claudebox -- gh auth login` once, then `claudebox-rebuild`. **Verify:** `ls ~/.claude/skills/ultra-verify/SKILL.md` exists. **Rollback:** `git checkout` the prior commit, then `rm -rf ~/.claude/skills/ultra-verify`.
 
 ---
 

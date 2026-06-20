@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.4 (policy: extend agent maintainership to fedora-dev — direct commit/push/tag on fedora-dev's repo like fedora-bootstrap; all OTHER image repos stay surface-only; image builds still run in CI (never podman build on host); host-apply gate + fedora-dev deploy path unchanged. Re-stamps the agent law. Prior: v1.2.3 docs Day-0 boot-stage table.)
+# Version: 1.2.5 (claudebox: auto-provision the ultra-verify skill from the private oso-gato/claude-skills repo into ~/.claude/skills on every box rebuild — runtime fetch inside the box via its gh auth, tracks main, best-effort, no secrets. Prior: v1.2.4 extend maintainership to fedora-dev + genesis/mother-platform role.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
