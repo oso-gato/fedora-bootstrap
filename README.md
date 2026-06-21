@@ -13,7 +13,7 @@ One script that turns a fresh cloud server into your **"mother platform"** — a
 - 🚧 **The split:** it **never builds** images (CI does) and **never edits the live host** by hand — you re-run the setup script as root to apply. So "pushing a change" is never the same as "applying it to the server."
 - 🔒 **No secrets in the repo.**
 
-Version: **1.2.8** — Policy: **Principle 2(c) broadened FLEET-WIDE** to a bounded official-upstream-binary class (last-resort/zero-base · publisher GPG-or-checksum verified, fail-closed · three self-contained consumption shapes · never loose on `$PATH` · per-artifact disclosure). **Parity only** — this host/box ships no class-(c) artifact, so **no host behavior change**; the rule is carried so the fleet (fedora-desktop, fedora-dev, fedora-bootstrap) obeys ONE source-class definition. Prior: v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban check euid-gated; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership; v1.2.3 — docs Day-0 boot-stage table.
+Version: **1.2.9** — Policy: **Principle 3 (MINIMAL) refined fleet-wide** — *"minimum" is relative to the chosen capability*, not absolute package count: install the smallest leaf footprint that makes the chosen capability work + the disclosed irreducible hard-dep closure; a lighter option that *reduces* function (e.g. noVNC vs Guacamole's RDP-grade web gate) is a recorded **capability trade-off, not a minimalism win**. **Parity only** — no host behavior change; carried so the fleet (fedora-desktop, fedora-dev, fedora-bootstrap) obeys ONE MINIMAL definition. Prior: v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
 
 ## Purpose
 
@@ -310,6 +310,25 @@ verified fail-closed, three self-contained consumption shapes, never loose on `$
 per-artifact). `fedora-bootstrap` ships no class-(c) artifact (enumeration stays "none"); the
 rule is carried for fleet parity so the whole fleet obeys one source-class definition. Host-apply
 is unchanged — the operator still re-runs `setup.sh` (it re-stamps the policy docs; no host delta).
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # policy re-stamp + verify; no host change
+```
+
+**Rollback** (no host state to revert): `git checkout` the prior commit.
+
+---
+
+#### Upgrading to v1.2.9 (from v1.0.0)
+
+Agent-policy only — **no host behavior change**. Refines BUILD PRINCIPLE 3 (MINIMAL) fleet-wide:
+*"minimum" is relative to the chosen capability*, not absolute package count — install the
+smallest leaf footprint that makes the chosen capability work, accept + disclose its irreducible
+hard-dep closure, and treat a lighter option that *reduces* function as a recorded capability
+trade-off (not a minimalism win). Carried for fleet parity (identical wording in fedora-desktop +
+fedora-dev). Host-apply is unchanged — re-run `setup.sh` (re-stamps policy docs; no host delta).
 
 ```sh
 cd /opt/fedora-bootstrap
