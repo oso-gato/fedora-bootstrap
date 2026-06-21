@@ -1,11 +1,10 @@
 {
   "permissions": {
     "deny": [
+      "Bash(dnf copr:*)",
       "Bash(distrobox-host-exec sudo dnf install:*)",
       "Bash(distrobox-host-exec sudo dnf -y install:*)",
-      "Bash(distrobox-host-exec sudo rpm-ostree install:*)",
       "Bash(distrobox-host-exec sudo rpm -i:*)",
-      "Bash(rpm-ostree install:*)",
       "Bash(pip install --user:*)",
       "Bash(pip3 install --user:*)",
       "Bash(pipx install:*)",
@@ -17,12 +16,31 @@
       "Bash(go install:*)",
       "Bash(gem install:*)",
       "Bash(brew install:*)",
-      "Bash(dnf copr:*)",
-      "Bash(flatpak:*)",
+      "Bash(flatpak install:*)",
       "Bash(snap install:*)",
       "Write(~/.local/bin/**)",
-      "Write(/usr/local/bin/**)"
+      "Write(/usr/local/bin/**)",
+      "mcp__*merge*",
+      "mcp__*__merge*",
+      "mcp__*__*merge*",
+      "mcp__*pull_request*merge*"
     ],
-    "disableBypassPermissionsMode": "disable"
+    "disableBypassPermissionsMode": "disable",
+    "disableAutoMode": "disable",
+    "allowManagedPermissionRulesOnly": true,
+    "allowManagedHooksOnly": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/etc/claude-code/hooks/gate-push.sh"
+          }
+        ]
+      }
+    ]
   }
 }

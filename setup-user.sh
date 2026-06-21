@@ -48,6 +48,18 @@ distrobox enter claudebox -- sudo bash "/run/host$HERE/claudebox-init.sh" "$(id 
 distrobox enter claudebox -- sudo mkdir -p /etc/claude-code
 distrobox enter claudebox -- sudo cp "/run/host$HERE/policy/CLAUDE.md" /etc/claude-code/CLAUDE.md
 distrobox enter claudebox -- sudo cp "/run/host$HERE/policy/managed-settings.json" /etc/claude-code/managed-settings.json
+# Stamp the managed PreToolUse hooks. managed-settings.json wires
+# /etc/claude-code/hooks/gate-push.sh as a Bash PreToolUse hook with
+# allowManagedHooksOnly:true — the hook MUST exist there or a missing PreToolUse
+# hook fails OPEN, defeating the promotion gate. FAIL LOUDLY if it didn't land.
+distrobox enter claudebox -- sudo mkdir -p /etc/claude-code/hooks
+distrobox enter claudebox -- sudo cp -a "/run/host$HERE/policy/hooks/." /etc/claude-code/hooks/
+distrobox enter claudebox -- sudo bash -c 'chmod 0755 /etc/claude-code/hooks/*.sh 2>/dev/null || true'
+distrobox enter claudebox -- sudo test -x /etc/claude-code/hooks/gate-push.sh || {
+    echo "FATAL: promotion-gate hook /etc/claude-code/hooks/gate-push.sh missing or not" \
+         "executable after stamp — refusing to leave the genesis box without its gate." >&2
+    exit 1
+}
 mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.local/state/claudebox"
 
 # `claude` entry wrapper. XDG_RUNTIME_DIR is pinned so `su core` works (su keeps the prior user's
