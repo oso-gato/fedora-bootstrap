@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.8 (policy: Principle 2(c) broadened FLEET-WIDE to the bounded official-upstream-binary class — last-resort/zero-base, GPG-or-checksum verified fail-closed, three consumption shapes, never loose on PATH, disclosed. Parity only: this host/box ships no class-(c) artifact; NO host behavior change. Prior: v1.2.7 PR-first + maintainer-approved-merge maintainership; v1.2.5 verify.sh fail2ban euid-gate fix; v1.2.4 genesis/mother-platform role + fedora-dev maintainership.)
+# Version: 1.2.9 (policy: Principle 3 MINIMAL refined fleet-wide — "minimum" is RELATIVE to the chosen capability, not absolute package count: install the smallest leaf footprint that makes the chosen capability work + the disclosed irreducible hard-dep closure; a lighter option that REDUCES function is a recorded capability trade-off, not a minimalism win. Parity only, NO host behavior change. Prior: v1.2.8 Principle 2(c) bounded official-upstream-binary class; v1.2.7 PR-first maintainership; v1.2.5 verify.sh fail2ban euid-gate fix; v1.2.4 genesis/mother-platform role + fedora-dev maintainership.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
