@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.7 (docs: plain-words TL;DR at README top; policy: PR-first + maintainer-approved-merge pathway for fedora-bootstrap + fedora-dev source — no direct push to main. No host behavior change. NOTE: v1.2.6 was a mis-applied tag (pointed at v1.2.5's commit); v1.2.7 supersedes it. Prior: v1.2.5 verify.sh fail2ban euid-gate fix; v1.2.4 genesis/mother-platform role + fedora-dev maintainership.)
+# Version: 1.2.8 (policy: Principle 2(c) broadened FLEET-WIDE to the bounded official-upstream-binary class — last-resort/zero-base, GPG-or-checksum verified fail-closed, three consumption shapes, never loose on PATH, disclosed. Parity only: this host/box ships no class-(c) artifact; NO host behavior change. Prior: v1.2.7 PR-first + maintainer-approved-merge maintainership; v1.2.5 verify.sh fail2ban euid-gate fix; v1.2.4 genesis/mother-platform role + fedora-dev maintainership.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

@@ -186,7 +186,7 @@ subsection.
 | # | Principle | Rule |
 |---|---|---|
 | 1 | TARGET | Fedora Cloud Base, pinned latest stable (image tag in distrobox.ini, host assumptions documented in README). Bump deliberately, per rule 3. |
-| 2 | SOURCES | Host and box install only from: (a) Fedora repos via dnf (RPM); (b) the vendor's/developer's official RPM/dnf repo; (c) at worst a developer/vendor AppImage. Never curl-pipe-sh, language package managers onto PATH, tarballs onto PATH, third-party repos. Exceptions only by explicit user waiver recorded as a new row in the PACKAGES table below. Current waivers: none. |
+| 2 | SOURCES | Host and box install only from an official source, exactly one of: (a) Fedora repos via dnf (RPM); (b) the vendor's/developer's own RPM or dnf repo (`.repo` with `gpgcheck=1`); (c) an **official-upstream binary release artifact with NO class-(a)/(b) source** — bounded by the **Class-(c) rules** below (last-resort/zero-base; publisher GPG-signature-or-checksum-verified, fail-closed; one of three self-contained consumption shapes; never loose on `$PATH`; disclosed per-artifact). Never: COPR or other third-party repos, pip/npm/cargo/gem/brew installs, curl-pipe-sh, tarball-on-PATH, flatpak, snap. Anything outside (a)/(b)/(c)-as-scoped needs an explicit user waiver row. **Class-(c) artifacts in use: none.** |
 | 3 | VERIFY FIRST | Fact-check any source/version against the live source before changing it. |
 | 4 | HOST MINIMAL & IMMUTABLE | The PACKAGES table below is the complete sanctioned host footprint. Anything else runs in a container or in claudebox. Host installs beyond it require an explicit user waiver, recorded as a new row. **Always install the most specific (leaf) package, never a convenience metapackage, unless an explicit architectural reason is recorded in the Why column. `install_weak_deps=False` blocks optional Recommends but NOT a metapackage's hard Requires, so a metapackage can silently drag in components you never use (e.g. `fail2ban` hard-pulls `fail2ban-firewalld`→`firewalld` + `fail2ban-sendmail`→`esmtp`; install `fail2ban-server` instead). Minimalism is a package-choice discipline, not just a flag. If unsure whether a name is a metapackage or what it hard-requires, VERIFY (`dnf repoquery --requires <pkg>` / `rpm -q --requires`) and flag it for review before adding.** |
 | 5 | NO SECRETS | No passwords, keys, or tokens in this repo, ever. Tailscale auth is interactive or via TS_AUTHKEY env at run time. |
@@ -194,6 +194,38 @@ subsection.
 | 7 | EXPOSURE | Public IP carries key-only ssh and mosh ONLY. Cockpit and every sensitive port are tailnet-only. etserver is never installed (replaced fleet-wide by mosh). |
 | 8 | VALIDATE | setup.sh ends with verify.sh; a bootstrap is done when every check PASSes. |
 | 9 | LEAST PRIVILEGE / LAYERS | Provisioning splits by identity: the SYSTEM layer (packages, /etc, system services) runs as root once via setup-host.sh; the ROOTLESS layer (podman, distrobox, Claude Code) runs as the operating user via setup-user.sh. The user is a password-gated `wheel` admin with NO blanket NOPASSWD; the in-box agent gets only a scoped passwordless allowlist (policy/sudoers.claudebox), grown solely by committing to the repo, and is OS-blocked from everything else (host installs stay hard-denied). Privileged files are written in place by root, never staged via a user-owned /tmp file. |
+
+### Class-(c) sources — the bounded last-resort exception (fleet-wide; identical in fedora-desktop + fedora-dev + fedora-bootstrap)
+
+**(c)** ONLY when **no class-(a) Fedora package and no class-(b) vendor `.repo`** exists for the
+needed artifact — a **last-resort, zero-base check, re-confirmed at every version bump**; the
+moment it appears in Fedora or a vendor `.repo` it MUST move to (a)/(b): an **official-upstream
+binary release artifact**, fetched over TLS from the project's **own canonical release channel**
+— whose exact host + org/repo (or release-API URL) is **pinned in the disclosure row and
+changeable only as a control-plane change** — never a mirror, aggregator, COPR, PPA, OBS home
+project, language-package-manager registry (Maven Central/npm/PyPI/crates.io/RubyGems), or
+third-party rebuild. Each artifact MUST be **(1) version-pinned** via a Containerfile `ARG` (or
+`distrobox.ini` pin), the SOLE exception being an artifact Principle 6 designates
+latest-at-build; and **(2) integrity-verified before any use** — against the publisher's **GPG
+signature** (`gpg --verify`, key fingerprint pinned in-repo) **whenever one is published**; a
+bare `sha*sum -c` is acceptable **only** when the project publishes no signature; the build
+**fails closed** on any mismatch / missing / unfetchable check. *(For a latest-at-build artifact
+where no hash can be pre-pinned: TLS-authenticated fetch from the publisher's own release API +
+**resolve-and-log** — an auditable record, NOT a fail-closed gate; reserved to explicitly-named
+latest-at-build artifacts only.)* The artifact may be consumed in **exactly one of three
+self-contained shapes**: (i) a developer/vendor **AppImage** run from `/opt` (never a bare
+ELF/script/tarball); (ii) a webapp/archive **deployed into a class-(a) runtime** (an Apache
+`.war` into Fedora's Tomcat); or (iii) a **build-time-only tool** that is itself (c)-verified,
+transforms a named (c) artifact, fetches no further network, installs nothing onto `$PATH`, runs
+deterministically, and is deleted. **A loose executable / script / tarball on `$PATH` is NEVER
+permitted under (c).** Each (c) artifact gets a **disclosure row** in the PACKAGES table (pinned
+canonical URL + version + signature/checksum kind); the table's **enumeration line lists every
+(c) artifact in use**. **Mechanical backstop (CI):** the control-plane diff-guard asserts every
+binary on `$PATH` resolves to an rpm (`rpm -qf`).
+
+**Class-(c) artifacts in use: none.** This host/box ships no upstream binary artifact today; the
+rule is carried for fleet parity so any future need inherits the identical bounded definition.
+(The only repo with class-(c) artifacts is fedora-desktop: `guacamole.war` + Obsidian.)
 
 ## REPO FILE PURPOSES
 
@@ -244,5 +276,5 @@ subsection.
 | Box | podman (client) | Fedora repos | drives the HOST engine via CONTAINER_HOST socket |
 | Box | git, gh, tmux, fastfetch | Fedora repos | orchestration toolset (repos, GHCR auth, sessions) |
 
-Current waivers: none. Adding a package = add a row + edit setup-host.sh /
-distrobox.ini accordingly + PR.
+Class-(c) artifacts in use: none (see the Class-(c) rules under BUILD PRINCIPLES). Adding a
+package = add a row + edit setup-host.sh / distrobox.ini accordingly + PR.
