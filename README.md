@@ -13,7 +13,9 @@ One script that turns a fresh cloud server into your **"mother platform"** — a
 - 🚧 **The split:** it **never builds** images (CI does) and **never edits the live host** by hand — you re-run the setup script as root to apply. So "pushing a change" is never the same as "applying it to the server."
 - 🔒 **No secrets in the repo.**
 
-Version: **1.2.9** — Policy: **Principle 3 (MINIMAL) refined fleet-wide** — *"minimum" is relative to the chosen capability*, not absolute package count: install the smallest leaf footprint that makes the chosen capability work + the disclosed irreducible hard-dep closure; a lighter option that *reduces* function (e.g. noVNC vs Guacamole's RDP-grade web gate) is a recorded **capability trade-off, not a minimalism win**. **Parity only** — no host behavior change; carried so the fleet (fedora-desktop, fedora-dev, fedora-bootstrap) obeys ONE MINIMAL definition. Prior: v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
+Version: **1.2.10** — Policy: **HEADLESS declared a binding prerequisite fleet-wide.** The host (a remote VPS), the claudebox, and every workload image (`fedora-dev` + the `fedora-desktop` **xrdp**/**grd** desktop lineages) run with **no physical monitor, GPU, or local seat**; any desktop is a *virtual* software-GL (llvmpipe) display reached only over the network (ssh/RDP/VNC/web). A change that needs a physical display is a **defect, not an option**. Stated in both the **machine file** (`CLAUDE.md`) and the **human file** (this README). **Parity only** — no host behavior change; carried so the whole fleet (fedora-desktop, fedora-dev, fedora-bootstrap) shares ONE headless statement. Prior: v1.2.9 — Principle 3 (MINIMAL) refined fleet-wide (*"minimum" is relative to the chosen capability* + disclosed irreducible hard-dep closure; a lighter option that *reduces* function — e.g. noVNC vs Guacamole's RDP-grade web gate — is a recorded **capability trade-off, not a minimalism win**); v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
+
+> **Headless (binding prerequisite).** There is never a screen plugged into this server, and there is no "log in at the console" — the host is a remote cloud VPS you only ever reach over the network. Every desktop the fleet serves (Obsidian, VS Code, the browser) is drawn by software on a *virtual* screen inside a container and streamed to you over RDP/VNC/the web gate; nothing in the design may ever assume a real monitor, graphics card, or sit-down seat. If something needs one, that's a bug to fix, not a setting to toggle.
 
 ## Purpose
 
@@ -329,6 +331,27 @@ smallest leaf footprint that makes the chosen capability work, accept + disclose
 hard-dep closure, and treat a lighter option that *reduces* function as a recorded capability
 trade-off (not a minimalism win). Carried for fleet parity (identical wording in fedora-desktop +
 fedora-dev). Host-apply is unchanged — re-run `setup.sh` (re-stamps policy docs; no host delta).
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # policy re-stamp + verify; no host change
+```
+
+**Rollback** (no host state to revert): `git checkout` the prior commit.
+
+---
+
+#### Upgrading to v1.2.10 (from v1.0.0)
+
+Agent-policy + docs only — **no host behavior change**. Declares **HEADLESS a binding
+prerequisite** fleet-wide: the host, the claudebox, and every workload image (`fedora-dev` + the
+`fedora-desktop` **xrdp**/**grd** lineages) run with no physical monitor/GPU/seat — any desktop is
+a *virtual* software-GL (llvmpipe) display reached only over the network. The statement is carried
+in BOTH the machine file (`CLAUDE.md`, a new "HEADLESS (binding prerequisite)" section ahead of
+the build principles) and the human file (this README). `fedora-bootstrap` already ran headless;
+this only makes the requirement explicit and fleet-consistent. Host-apply is unchanged — the
+operator re-runs `setup.sh` (re-stamps the policy docs; no host delta).
 
 ```sh
 cd /opt/fedora-bootstrap
