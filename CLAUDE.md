@@ -181,6 +181,15 @@ heading is two-or-three lines max, human-facing, structurally:
 Nothing else goes between the top-level heading and the first per-version
 subsection.
 
+## HEADLESS (binding prerequisite)
+
+The host — and everything it runs — is **fully headless**: a remote VPS with no physical monitor,
+GPU, or local login seat. The host services, the claudebox, and every workload image (fedora-dev
+and the fedora-desktop **xrdp**/**grd** desktop lineages) must work with NO physical display — any
+desktop is a *virtual* display rendered in software (llvmpipe), reached only over the network
+(ssh / RDP / VNC / web, over the tailnet or the hardened public doors). A change that requires a
+physical display, GPU, or seat is a **defect**, not an option.
+
 ## BUILD PRINCIPLES (binding for every code change)
 
 | # | Principle | Rule |
