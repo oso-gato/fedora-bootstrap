@@ -13,7 +13,7 @@ One script that turns a fresh cloud server into your **"mother platform"** — a
 - 🚧 **The split:** it **never builds** images (CI does) and **never edits the live host** by hand — you re-run the setup script as root to apply. So "pushing a change" is never the same as "applying it to the server."
 - 🔒 **No secrets in the repo.**
 
-Version: **1.2.7** — Docs: a plain-words **TL;DR** at the top of the README. Policy: the host claudebox now maintains `fedora-bootstrap` and `fedora-dev` via **PR-first + maintainer-approved merge** (no direct push to `main`) — traceable and reversible; host-apply stays operator-gated. No host behavior change. *(Note: v1.2.6 was a mis-applied tag pointing at v1.2.5's commit; v1.2.7 supersedes it.)* Prior: v1.2.5 — `verify.sh` fail2ban check euid-gated; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership; v1.2.3 — docs Day-0 boot-stage table; v1.2.2 — agent-recipe alignment; v1.2.1 — agent maintainership.
+Version: **1.2.8** — Policy: **Principle 2(c) broadened FLEET-WIDE** to a bounded official-upstream-binary class (last-resort/zero-base · publisher GPG-or-checksum verified, fail-closed · three self-contained consumption shapes · never loose on `$PATH` · per-artifact disclosure). **Parity only** — this host/box ships no class-(c) artifact, so **no host behavior change**; the rule is carried so the fleet (fedora-desktop, fedora-dev, fedora-bootstrap) obeys ONE source-class definition. Prior: v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban check euid-gated; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership; v1.2.3 — docs Day-0 boot-stage table.
 
 ## Purpose
 
@@ -296,6 +296,25 @@ Docs + agent-policy — **no host behavior change**. Adds a plain-words "TL;DR" 
 cd /opt/fedora-bootstrap
 git pull --ff-only origin main
 ./setup.sh < /dev/null        # docs + policy re-stamp; re-runs verify, no host change
+```
+
+**Rollback** (no host state to revert): `git checkout` the prior commit.
+
+---
+
+#### Upgrading to v1.2.8 (from v1.0.0)
+
+Agent-policy only — **no host behavior change**. Broadens BUILD PRINCIPLE 2(c) fleet-wide to a
+bounded official-upstream-binary class (last-resort/zero-base, publisher-signature-or-checksum
+verified fail-closed, three self-contained consumption shapes, never loose on `$PATH`, disclosed
+per-artifact). `fedora-bootstrap` ships no class-(c) artifact (enumeration stays "none"); the
+rule is carried for fleet parity so the whole fleet obeys one source-class definition. Host-apply
+is unchanged — the operator still re-runs `setup.sh` (it re-stamps the policy docs; no host delta).
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # policy re-stamp + verify; no host change
 ```
 
 **Rollback** (no host state to revert): `git checkout` the prior commit.
