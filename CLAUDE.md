@@ -26,14 +26,19 @@ list is the boundary — it is not.
 
 Images are CI-built on GitHub and GHCR-published; the host claudebox **pulls
 and operates** them — it never `podman build`s. The host claudebox is the
-**genesis agent / mother platform**: besides operating the host, as of v1.2.4
-it directly maintains the SOURCE of two repos — `fedora-bootstrap` (its own
-machinery) and `fedora-dev` (the first workload + the template later workloads
-follow): it commits/pushes/tags them, CI builds the image, and the new image
-reaches the host via the workload-refresh pull. Every OTHER workload's source
-is developed in that image's own dev box (debian-dev, …) and stays surface-only
-to the host claudebox. Maintaining a repo's source ≠ building its image (CI) ≠
-deploying it (the pull).
+**genesis agent / mother platform**: besides operating the host, it maintains
+the SOURCE of the fleet's image repos. As of **v1.2.12 its development authority
+EQUALS the `fedora-dev` build box's** — it develops + PRs + (on the maintainer's
+clickable approval) merges not only `fedora-bootstrap` (its own machinery) and
+`fedora-dev` (the first workload + the template later workloads follow) but **any
+fleet image repo it operates and can diagnose live** (`fedora-desktop`, and every
+other `WORKLOAD_CONTAINERS` image). It commits/PRs/merges them; CI builds the
+image; the new image reaches the host via the workload-refresh pull. The one
+preserved boundary: builds are CI's job, never `podman build` here — and a repo
+the host neither operates nor can diagnose stays surface-only. Maintaining a
+repo's source ≠ building its image (CI) ≠ deploying it (the pull). (Why the host,
+of all boxes, holds this authority: it is the only one that can diagnose the live
+containers — see `policy/CLAUDE.md` RATIONALE.)
 
 ## RELEASING A NEW VERSION
 
