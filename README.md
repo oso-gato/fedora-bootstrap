@@ -10,7 +10,19 @@ One script that turns a fresh cloud server into your **"mother platform"** — a
 - 🚧 **The split:** it **never builds** images (CI does), **never merges** (`fedora-dev` does), and **never edits the live host** by hand — you re-run the setup script as root to apply. "Proposing a change" is never "applying it."
 - 🔒 **No secrets in the repo.**
 
-Version: **1.2.16** — Setup: **a Day-0 wizard (`day0.sh`) that ASKS for the Tailscale auth key**, mirroring the workload `spin-up.sh`. Run it as the last Day-0 line: it reads the key from the terminal (**Enter** = browser web-login), runs `setup.sh`, then prompts for core's password and reboots into the SELinux convergence (`SELINUX_TARGET=permissive` ⇒ no reboot). **`setup.sh` is unchanged** — it still honors env `TS_AUTHKEY` and never reboots, so the fully-scripted `TS_AUTHKEY=… setup.sh < /dev/null` + `passwd core && reboot` path still works. Prior: v1.2.15 — spin-up path made explicit; v1.2.14 — day-0 TS_AUTHKEY prompt; v1.2.13 — docs cleanup (scrub deleted-repo refs); v1.2.12 — FLEET governance (3-box model, host PR-only, `fedora-dev` sole merge box); v1.2.11 — BUILT promotion gate (managed `PreToolUse` hook + hardened `managed-settings.json` + CI diff-guard); v1.2.10 — HEADLESS binding prerequisite fleet-wide; v1.2.9 — Principle 3 (MINIMAL) refined fleet-wide (*"minimum" is relative to the chosen capability* + disclosed irreducible hard-dep closure; a lighter option that *reduces* function — e.g. noVNC vs Guacamole's RDP-grade web gate — is a recorded **capability trade-off, not a minimalism win**); v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
+Version: **1.2.17** — Docs: **add `FLEET.md` (the swarm map) + a "Where this sits — the fleet" table to the README** (no host behavior change; identical `FLEET.md` across all three repos — the human-readable mirror of the `policy/CLAUDE.md` `THE FLEET` block). Prior: v1.2.16 — a Day-0 wizard (`day0.sh`) that ASKS for the Tailscale auth key**, mirroring the workload `spin-up.sh`. Run it as the last Day-0 line: it reads the key from the terminal (**Enter** = browser web-login), runs `setup.sh`, then prompts for core's password and reboots into the SELinux convergence (`SELINUX_TARGET=permissive` ⇒ no reboot). **`setup.sh` is unchanged** — it still honors env `TS_AUTHKEY` and never reboots, so the fully-scripted `TS_AUTHKEY=… setup.sh < /dev/null` + `passwd core && reboot` path still works. Prior: v1.2.15 — spin-up path made explicit; v1.2.14 — day-0 TS_AUTHKEY prompt; v1.2.13 — docs cleanup (scrub deleted-repo refs); v1.2.12 — FLEET governance (3-box model, host PR-only, `fedora-dev` sole merge box); v1.2.11 — BUILT promotion gate (managed `PreToolUse` hook + hardened `managed-settings.json` + CI diff-guard); v1.2.10 — HEADLESS binding prerequisite fleet-wide; v1.2.9 — Principle 3 (MINIMAL) refined fleet-wide (*"minimum" is relative to the chosen capability* + disclosed irreducible hard-dep closure; a lighter option that *reduces* function — e.g. noVNC vs Guacamole's RDP-grade web gate — is a recorded **capability trade-off, not a minimalism win**); v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
+
+## Where this sits — the fleet
+
+**This repo is the `fedora-bootstrap` box** of a three-box swarm — **the genesis / mother-platform box** that operates the VPS host and live-diagnoses the containers on it; PR-only. Full map: **[FLEET.md](FLEET.md)**.
+
+| Box | Role | Builds? | Merges? | Operates host? | Spin up |
+|-----|------|:--:|:--:|:--:|---------|
+| **fedora-dev** | develop · build · **merge** | ✅ nested | ✅ **(sole merger)** | ❌ | `./spin-up.sh` |
+| **fedora-bootstrap** *(this one)* | operate host · live-diagnose → PR | ❌ (CI) | ❌ PR-only | ✅ incl. create/remove | `./day0.sh` (Day-0) |
+| **fedora-desktop** | knowledge-work + own toolset → PR | ❌ (CI) | ❌ PR-only | ❌ | `./spin-up.sh` |
+
+This box **operates the host and proposes fixes (PRs) — it never merges**; `fedora-dev` merges on Arthur's **clickable APPROVE**. The host genesis path is `day0.sh` → `setup.sh` (no `spin-up.sh`/`run.sh` here). See [FLEET.md](FLEET.md) for the handoff + boundaries.
 
 > **Headless (binding prerequisite).** There is never a screen plugged into this server, and there is no "log in at the console" — the host is a remote cloud VPS you only ever reach over the network. Every desktop the fleet serves (Obsidian, VS Code, the browser) is drawn by software on a *virtual* screen inside a container and streamed to you over RDP/VNC/the web gate; nothing in the design may ever assume a real monitor, graphics card, or sit-down seat. If something needs one, that's a bug to fix, not a setting to toggle.
 
@@ -416,6 +428,18 @@ Adds the interactive **Day-0 wizard `day0.sh`** — it ASKS for the Tailscale au
 cd /opt/fedora-bootstrap
 git pull --ff-only origin main
 ./setup.sh < /dev/null        # re-stamp/upgrade an existing host (day0.sh is for a FRESH Day-0 only)
+```
+
+**Rollback** (no host state to revert): `git checkout` the prior commit and re-run `setup.sh`.
+
+#### Upgrading to v1.2.17 (from v1.0.0)
+
+Docs only — **no host behavior change**. Adds **`FLEET.md`** (the human-readable swarm map) and a **"Where this sits — the fleet"** table to the README (the at-a-glance 3-box overview + a `FLEET.md` link); the binding law (`policy/CLAUDE.md` `THE FLEET` block) is unchanged.
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # docs/policy re-stamp; no host change
 ```
 
 **Rollback** (no host state to revert): `git checkout` the prior commit and re-run `setup.sh`.
