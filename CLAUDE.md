@@ -246,6 +246,7 @@ rule is carried for fleet parity so any future need inherits the identical bound
 | README.md | human-facing project doc (purpose, install, upgrade, use, reference) |
 | UPGRADING.md | archived per-version upgrade subsections — older releases relocated from README per the RELEASE-DOC CONVENTION; README keeps the latest 1–2 + a pointer |
 | VERSION | repo's release version (single line, semver) |
+| day0.sh | interactive Day-0 wizard (run as root, the LAST line of the Day-0 paste): ASKS for the Tailscale auth key (reads `/dev/tty`; blank = browser web-login), runs `setup.sh < /dev/null` with it in the env, then prompts for core's password + reboots into the SELinux convergence (`SELINUX_TARGET=permissive` ⇒ no reboot). Mirrors the workload `spin-up.sh`; `setup.sh` stays the non-interactive contract it wraps |
 | setup.sh | orchestrator (run as root): runs the system layer then the rootless layer in their correct identities |
 | setup-host.sh | **system layer**, as root — packages, /etc, system services, tailnet, host dnf-automatic, creates `core` + its rootless prerequisites |
 | setup-user.sh | **rootless layer**, as `core` — user podman socket, ssh keys, claudebox, Claude policy, the `claude` + `claudebox-rebuild` wrappers + the box-rebuild units, workload-refresh harness, verify (no host privilege) |

@@ -10,7 +10,7 @@ One script that turns a fresh cloud server into your **"mother platform"** — a
 - 🚧 **The split:** it **never builds** images (CI does), **never merges** (`fedora-dev` does), and **never edits the live host** by hand — you re-run the setup script as root to apply. "Proposing a change" is never "applying it."
 - 🔒 **No secrets in the repo.**
 
-Version: **1.2.15** — Docs: **make the host spin-up path explicit + the unattended join reachable** (no host behavior change). The Day-0 block now shows the **unattended** Tailscale join (set `TS_AUTHKEY=tskey-…` on the `setup.sh` line — honored even with `< /dev/null`; blank = browser web-login) and a **"who runs this / no `spin-up.sh`|`run.sh` here — `setup.sh` IS the host genesis path"** signpost, so a spin-up agent doesn't hunt for a missing wizard. Corrects the v1.2.14 framing: the *interactive* `TS_AUTHKEY` prompt fires only on a later interactive `setup.sh` re-run, **not** the `< /dev/null` Day-0 paste. `policy/CLAUDE.md` DO gains a fleet spin-up-paths bullet. Re-run `setup.sh`. Prior: v1.2.14 — day-0 TS_AUTHKEY prompt; v1.2.13 — docs cleanup (scrub deleted-repo refs); v1.2.12 — FLEET governance (3-box model, host PR-only, `fedora-dev` sole merge box); v1.2.11 — BUILT promotion gate (managed `PreToolUse` hook + hardened `managed-settings.json` + CI diff-guard); v1.2.10 — HEADLESS binding prerequisite fleet-wide; v1.2.9 — Principle 3 (MINIMAL) refined fleet-wide (*"minimum" is relative to the chosen capability* + disclosed irreducible hard-dep closure; a lighter option that *reduces* function — e.g. noVNC vs Guacamole's RDP-grade web gate — is a recorded **capability trade-off, not a minimalism win**); v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
+Version: **1.2.16** — Setup: **a Day-0 wizard (`day0.sh`) that ASKS for the Tailscale auth key**, mirroring the workload `spin-up.sh`. Run it as the last Day-0 line: it reads the key from the terminal (**Enter** = browser web-login), runs `setup.sh`, then prompts for core's password and reboots into the SELinux convergence (`SELINUX_TARGET=permissive` ⇒ no reboot). **`setup.sh` is unchanged** — it still honors env `TS_AUTHKEY` and never reboots, so the fully-scripted `TS_AUTHKEY=… setup.sh < /dev/null` + `passwd core && reboot` path still works. Prior: v1.2.15 — spin-up path made explicit; v1.2.14 — day-0 TS_AUTHKEY prompt; v1.2.13 — docs cleanup (scrub deleted-repo refs); v1.2.12 — FLEET governance (3-box model, host PR-only, `fedora-dev` sole merge box); v1.2.11 — BUILT promotion gate (managed `PreToolUse` hook + hardened `managed-settings.json` + CI diff-guard); v1.2.10 — HEADLESS binding prerequisite fleet-wide; v1.2.9 — Principle 3 (MINIMAL) refined fleet-wide (*"minimum" is relative to the chosen capability* + disclosed irreducible hard-dep closure; a lighter option that *reduces* function — e.g. noVNC vs Guacamole's RDP-grade web gate — is a recorded **capability trade-off, not a minimalism win**); v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
 
 > **Headless (binding prerequisite).** There is never a screen plugged into this server, and there is no "log in at the console" — the host is a remote cloud VPS you only ever reach over the network. Every desktop the fleet serves (Obsidian, VS Code, the browser) is drawn by software on a *virtual* screen inside a container and streamed to you over RDP/VNC/the web gate; nothing in the design may ever assume a real monitor, graphics card, or sit-down seat. If something needs one, that's a bug to fix, not a setting to toggle.
 
@@ -90,24 +90,21 @@ Both reboot the host twice (offline transaction, then into the new release). App
 
 ### Day 0 — fresh VPS
 
-As root on a fresh Fedora Cloud instance (take a Hostinger snapshot first — the last line reboots the host into the automated SELinux convergence).
+As root on a fresh Fedora Cloud instance (take a Hostinger snapshot first — `day0.sh` reboots the host into the automated SELinux convergence).
 
-> **Who runs this & how the host "spins up":** a human operator with host root pastes this block. The in-host claudebox agent has **NO host root** — if *you* are the agent, **surface** this block to the operator, don't run it (policy/CLAUDE.md ROLE). There is **no `spin-up.sh` / `run.sh` / Quadlet** in this repo: unlike the workload repos (`fedora-dev` / `fedora-desktop`, which spin up via `spin-up.sh` → `run.sh`), the HOST genesis path **is** `setup.sh` (this block); workloads then come up automatically (below). For an **unattended** Tailscale join, set `TS_AUTHKEY=tskey-…` on the `setup.sh` line — it's honored even with `< /dev/null`; a blank/absent key falls back to **browser web-login** (a `login.tailscale.com` link prints in the output). *(The interactive v1.2.14 `TS_AUTHKEY` prompt fires only on a later **interactive** `setup.sh` re-run — the Day-0 `< /dev/null` paste skips it by design, since `< /dev/null` is load-bearing for the `passwd` step below.)*
+> **Who runs this & how the host "spins up":** a human operator with host root pastes this block. The in-host claudebox agent has **NO host root** — if *you* are the agent, **surface** this block to the operator, don't run it (policy/CLAUDE.md ROLE). There is **no `spin-up.sh` / `run.sh` / Quadlet** in this repo: unlike the workload repos (`fedora-dev` / `fedora-desktop`, which spin up via `spin-up.sh` → `run.sh`), the HOST genesis path is **`day0.sh` → `setup.sh`**; workloads then come up automatically (below).
 
 ```sh
 dnf -y upgrade --refresh
 dnf -y install git
 git clone https://github.com/oso-gato/fedora-bootstrap /opt/fedora-bootstrap
-# UNATTENDED tailnet join: paste your key into TS_AUTHKEY= below. Leave it empty for browser web-login.
-if TS_AUTHKEY= /opt/fedora-bootstrap/setup.sh < /dev/null; then
-  echo 'setup: all layers PASS.'
-else
-  echo '*** investigate the failure (login.tailscale.com link? scoped sudoers? see verify.sh output above) and re-run /opt/fedora-bootstrap/setup.sh < /dev/null'
-fi
-passwd core && reboot   # REQUIRED — set core's admin/sudo + Cockpit/console password; on SUCCESS the host reboots to launch the v1.2.0 SELinux convergence (runs hands-off from there). A mismatched/cancelled passwd does NOT reboot — just re-run this line.
+/opt/fedora-bootstrap/day0.sh        # interactive Day-0 wizard — keep this the LAST line
 ```
 
-The `< /dev/null` on `setup.sh` is load-bearing: it keeps setup from reading the terminal so your pasted `passwd core` line isn't swallowed. `passwd core && reboot` makes the one unavoidable manual step (the password — never stored in the repo) also the trigger: on a successful set, the host reboots and the SELinux chain takes over (relabel → soak → enforcing → post-enforce check, two further automatic reboots on the happy path, ~20–25 min; an unhealthy enforcing boot auto-reverts to permissive with one more). `setup.sh` itself never reboots; the reboot lives in your command, gated on the password. To stay permissive instead, run `SELINUX_TARGET=permissive /opt/fedora-bootstrap/setup.sh < /dev/null` and drop the `&& reboot`.
+`day0.sh` is the interactive Day-0 wizard (mirrors the workload `spin-up.sh`): it **ASKS for a Tailscale auth key** (`tskey-…`; press **Enter** to leave it blank → **browser web-login**, a `login.tailscale.com` link prints — open it and approve), then runs `setup.sh`, then **prompts for core's password** (admin/sudo + Cockpit — never stored in the repo) and, on success, **reboots** into the SELinux convergence (relabel → soak → enforcing → post-enforce check; two further automatic reboots on the happy path, ~20–25 min; an unhealthy enforcing boot auto-reverts to permissive with one more). Run it as the **last** line so its prompt has nothing buffered behind it.
+
+- **Stay permissive (no enforcing):** `SELINUX_TARGET=permissive /opt/fedora-bootstrap/day0.sh` — sets the password, no reboot.
+- **Fully scripted / unattended (no prompts):** skip the wizard and call `setup.sh` directly, as before — `TS_AUTHKEY=tskey-… /opt/fedora-bootstrap/setup.sh < /dev/null` then `passwd core && reboot`. The `< /dev/null` keeps `setup.sh` from swallowing the pasted `passwd` line; `setup.sh` honors `TS_AUTHKEY` (blank ⇒ browser web-login) and never reboots itself (the reboot is gated on your `passwd`).
 
 `setup.sh` is fully idempotent. It runs as root and orchestrates two layers in their correct identities:
 
@@ -407,6 +404,18 @@ Docs/policy only — **no host behavior change**. Makes the host spin-up path ex
 cd /opt/fedora-bootstrap
 git pull --ff-only origin main
 ./setup.sh < /dev/null        # re-stamps the updated agent law; no host change
+```
+
+**Rollback** (no host state to revert): `git checkout` the prior commit and re-run `setup.sh`.
+
+#### Upgrading to v1.2.16 (from v1.0.0)
+
+Adds the interactive **Day-0 wizard `day0.sh`** — it ASKS for the Tailscale auth key (**Enter** = browser web-login), runs `setup.sh`, then prompts for core's password and reboots into the SELinux convergence. `setup.sh` is **unchanged**, so the scripted `TS_AUTHKEY=… setup.sh < /dev/null` + `passwd core && reboot` path is identical. **`day0.sh` is the *fresh-host* bring-up entry point only** — an existing-host re-stamp/upgrade still uses `setup.sh` directly (no re-prompt, no reboot):
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # re-stamp/upgrade an existing host (day0.sh is for a FRESH Day-0 only)
 ```
 
 **Rollback** (no host state to revert): `git checkout` the prior commit and re-run `setup.sh`.
