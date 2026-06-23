@@ -2,18 +2,15 @@
 
 ## TL;DR — in plain words
 
-One script that turns a fresh cloud server into your **"mother platform"** — a locked-down host that runs your whole fleet of container apps. Its on-board Claude (the "host claudebox") has **two standing jobs**: it **operates and maintains the host itself**, and it **develops and maintains the source of two repositories**:
-
-1. **`fedora-bootstrap`** (this one) — the host's own machinery
-2. **`fedora-dev`** (development box) — the first workload + the template later ones follow
+One script that turns a fresh cloud server into your **"mother platform"** — a locked-down host that runs your whole fleet of container apps. Its on-board Claude (the "host claudebox") has **two standing jobs**: it **operates the host** (including starting and removing containers), and — being the only thing that watches the apps run *live* — it **diagnoses them and proposes fixes**. It's one of **three boxes**: this host box **operates + diagnoses**, `fedora-dev` **builds + merges**, the desktop box **builds its own tools**. All three **open PRs; only `fedora-dev` merges** — on your one click.
 
 - 🔑 **How you get in:** key-only SSH/Mosh from anywhere; the admin console (Cockpit) and everything sensitive are reachable only over your private Tailscale network.
 - 🏭 **Maintaining the host:** keeps it minimal and treated-as-immutable; every app runs as a container pulled from your registry, auto-refreshed monthly with **automatic roll-back** if a new version comes up unhealthy. The host claudebox operates the fleet.
-- 🔧 **Why it can edit those two repos directly:** this is the **first container that ever comes up — the foundation everything else stands on.** It's uniquely trusted to commit + push directly to both because it has to repair the foundation *in place* — like fixing a running car — and to fix the dev box even before it's fully spun up. Every *other* repo it only *proposes* changes to.
-- 🚧 **The split:** it **never builds** images (CI does) and **never edits the live host** by hand — you re-run the setup script as root to apply. So "pushing a change" is never the same as "applying it to the server."
+- 🔧 **What it can change:** because it's the only box watching the apps run live, it can **diagnose any container it runs and propose a fix** (a PR) to that app's code — including the foundation it stands on. But it **stops at the proposal**: it never merges its own change. `fedora-dev` merges it, on your click.
+- 🚧 **The split:** it **never builds** images (CI does), **never merges** (`fedora-dev` does), and **never edits the live host** by hand — you re-run the setup script as root to apply. "Proposing a change" is never "applying it."
 - 🔒 **No secrets in the repo.**
 
-Version: **1.2.11** — Policy: **BUILT promotion gate (defense-in-depth).** The genesis claudebox now stamps a managed `PreToolUse` hook (`policy/hooks/gate-push.sh`) that fail-closed DENIES `git push` / `gh pr merge` / `gh api …/merge` to a remote `main` unless a one-shot approval marker is present — wired by a hardened `managed-settings.json` (`allowManagedHooksOnly` + `allowManagedPermissionRulesOnly` + `disableAutoMode` + mcp merge denies); `setup-user.sh` stamps it, `verify.sh` checks it, and a CI control-plane diff-guard blocks unlabelled guardrail PRs. Closes the ultra-verify finding that the PR-first rule was *prose-only* while the box held a `main`-pushing token. **Real host-behavior change** — re-run `setup.sh` to stamp the gate. Server-side **branch protection on `main`** (require PR + review) remains the PRIMARY backstop, the operator's one-time item. Prior: v1.2.10 — HEADLESS binding prerequisite fleet-wide; v1.2.9 — Principle 3 (MINIMAL) refined fleet-wide (*"minimum" is relative to the chosen capability* + disclosed irreducible hard-dep closure; a lighter option that *reduces* function — e.g. noVNC vs Guacamole's RDP-grade web gate — is a recorded **capability trade-off, not a minimalism win**); v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
+Version: **1.2.12** — Policy: **FLEET governance — the host claudebox is now PR-only.** A 3-box fleet model with **one merge authority** is stamped identically into all three repos (THE FLEET header). The host claudebox operates the host (**incl. create/remove containers**), is the **only** box that sees the live containers, and **live-diagnoses + develops fixes** to the fleet image repos it operates — but **stops at the open PR**: it no longer merges, pushes, or tags `main`. **`fedora-dev` is the fleet's sole merge box** — merges any open PR (control-plane included) **only** on Arthur's discrete clickable APPROVE (a free-text "yes" is not approval). **Policy re-stamp only — no host-layer change**; re-run `setup.sh`. Prior: v1.2.11 — BUILT promotion gate (managed `PreToolUse` hook + hardened `managed-settings.json` + CI diff-guard); v1.2.10 — HEADLESS binding prerequisite fleet-wide; v1.2.9 — Principle 3 (MINIMAL) refined fleet-wide (*"minimum" is relative to the chosen capability* + disclosed irreducible hard-dep closure; a lighter option that *reduces* function — e.g. noVNC vs Guacamole's RDP-grade web gate — is a recorded **capability trade-off, not a minimalism win**); v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
 
 > **Headless (binding prerequisite).** There is never a screen plugged into this server, and there is no "log in at the console" — the host is a remote cloud VPS you only ever reach over the network. Every desktop the fleet serves (Obsidian, VS Code, the browser) is drawn by software on a *virtual* screen inside a container and streamed to you over RDP/VNC/the web gate; nothing in the design may ever assume a real monitor, graphics card, or sit-down seat. If something needs one, that's a bug to fix, not a setting to toggle.
 
@@ -24,9 +21,9 @@ Version: **1.2.11** — Policy: **BUILT promotion gate (defense-in-depth).** The
 The host's claudebox is the **genesis agent** of this platform — the first claudebox brought up, running *on* the host. Its standing purpose is two-fold:
 
 1. **Operate + maintain the mother platform** — the host itself, which runs every current and future containerised workload. It deploys and operates workload images and keeps the host sound. It **never builds** images (CI does) and **never applies** host changes itself (the operator re-runs `setup.sh` as root).
-2. **Develop + maintain the foundation's source** — it directly maintains (commit, push to `main`, tag) **`fedora-bootstrap`** (the host's own machinery) and **`fedora-dev`** (the first workload image, and the template every later workload follows), so the ongoing container workflow keeps evolving from a maintained base.
+2. **Live-diagnose + develop fixes → open PRs** — being the only box that sees the containers running live, it diagnoses them and develops fixes to the fleet image repos it operates (`fedora-bootstrap`, `fedora-dev`, and the workloads deployed here) — and **opens PRs only**. It never merges, pushes, or tags `main`: **`fedora-dev` merges**, on Arthur's clickable APPROVE (THE FLEET). Builds stay CI's job.
 
-Every *other* workload image's source is developed and built in that image's own dev container (`debian-dev`, …) and is **surface-only** to the host claudebox. For **all** images — including the two the host claudebox maintains — the build/deploy handoff is one-way and unchanged:
+A repo it neither operates nor can diagnose stays **surface-only** (it proposes a diff; that repo's own dev box or the operator opens the PR). For **all** images, the build/deploy handoff is one-way and unchanged:
 
 image source → pushed to GitHub → CI builds + publishes to GHCR → host claudebox pulls and recreates via the workload-refresh harness (monthly).
 
@@ -360,6 +357,18 @@ git pull --ff-only origin main
 ```
 
 **Rollback** (no host state to revert): `git checkout` the prior commit.
+
+#### Upgrading to v1.2.12 (from v1.0.0)
+
+Agent-policy + docs only — **no host behavior change**. Stamps the **3-box FLEET governance model** (one merge authority) identically into all three repos' agent law. The host claudebox's role is restated: it **operates the host (incl. creating/removing containers)** and **live-diagnoses + develops fixes** to the fleet image repos it operates, but is now **PR-only** — it **stops at the open PR** and no longer merges, pushes, or tags `main`. **`fedora-dev`** becomes the fleet's sole merge box (merges any open PR, control-plane included, only on Arthur's discrete clickable APPROVE). Host-apply is unchanged: re-running `setup.sh` re-stamps the updated agent law; no host delta.
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # re-stamps the updated agent law into the box; no host change
+```
+
+**Rollback** (no host state to revert): `git checkout` the prior commit and re-run `setup.sh`.
 
 ---
 

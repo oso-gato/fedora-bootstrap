@@ -26,14 +26,16 @@ list is the boundary — it is not.
 
 Images are CI-built on GitHub and GHCR-published; the host claudebox **pulls
 and operates** them — it never `podman build`s. The host claudebox is the
-**genesis agent / mother platform**: besides operating the host, as of v1.2.4
-it directly maintains the SOURCE of two repos — `fedora-bootstrap` (its own
-machinery) and `fedora-dev` (the first workload + the template later workloads
-follow): it commits/pushes/tags them, CI builds the image, and the new image
-reaches the host via the workload-refresh pull. Every OTHER workload's source
-is developed in that image's own dev box (debian-dev, …) and stays surface-only
-to the host claudebox. Maintaining a repo's source ≠ building its image (CI) ≠
-deploying it (the pull).
+**genesis agent / mother platform**: besides operating the host (incl. creating
+and removing containers), it is the **only** box that sees the live containers,
+so it **live-diagnoses** them and develops fixes to the fleet image repos it
+operates (`fedora-bootstrap`, `fedora-dev`, and the workload images deployed
+here). But it **opens PRs only — it never merges, pushes, or tags `main`**:
+`fedora-dev` merges, on Arthur's clickable APPROVE (see THE FLEET in
+`policy/CLAUDE.md`). CI builds the image; the new image reaches the host via the
+workload-refresh pull. A repo it neither operates nor can diagnose stays
+surface-only. Developing source ≠ building (CI) ≠ merging (`fedora-dev`) ≠
+deploying (the pull).
 
 ## RELEASING A NEW VERSION
 
