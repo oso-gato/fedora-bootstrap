@@ -38,7 +38,7 @@ OUT:  a running, (healthy) container started via that image's run.sh
 
 ## DO NOT
 
-- `podman build`. Building IMAGES belongs in the image's own dev box + CI (fedora-dev for Fedora, debian-dev for Debian, etc.) — even for `fedora-dev`, whose *repo* I now maintain, the image is still built in CI on push, never `podman build` on this host.
+- `podman build`. Building IMAGES belongs in the image's dev box + CI (`fedora-dev` for Fedora images) — even for `fedora-dev`, whose *repo* I now maintain, the image is still built in CI on push, never `podman build` on this host.
 - Develop or edit anything in an image repo other than `fedora-bootstrap` **or `fedora-dev`** — Containerfile / install.sh / entrypoint **and README / docs / CI**. For those *other* repos that work belongs to the image's own claudebox; I **surface a diff** only. (Fleet repos I operate I maintain via **PR only**; `fedora-dev` merges — THE FLEET.)
 - **Merge, push, or tag any `main`.** I **open PRs only** (any fleet repo I operate); `fedora-dev` merges them on Arthur's clickable APPROVE (or Arthur does), and the post-merge tag is the merger's — see THE FLEET. A repo I neither operate nor can diagnose: **surface a diff**; its own dev box / the operator opens the PR.
 - Hand-roll `podman pull/stop/rm/run.sh` against workload containers. Bypasses the busy-probe; may kill mid-flight Claude work or a mid-flight box rebuild.

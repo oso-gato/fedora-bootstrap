@@ -10,7 +10,7 @@ One script that turns a fresh cloud server into your **"mother platform"** — a
 - 🚧 **The split:** it **never builds** images (CI does), **never merges** (`fedora-dev` does), and **never edits the live host** by hand — you re-run the setup script as root to apply. "Proposing a change" is never "applying it."
 - 🔒 **No secrets in the repo.**
 
-Version: **1.2.12** — Policy: **FLEET governance — the host claudebox is now PR-only.** A 3-box fleet model with **one merge authority** is stamped identically into all three repos (THE FLEET header). The host claudebox operates the host (**incl. create/remove containers**), is the **only** box that sees the live containers, and **live-diagnoses + develops fixes** to the fleet image repos it operates — but **stops at the open PR**: it no longer merges, pushes, or tags `main`. **`fedora-dev` is the fleet's sole merge box** — merges any open PR (control-plane included) **only** on Arthur's discrete clickable APPROVE (a free-text "yes" is not approval). **Policy re-stamp only — no host-layer change**; re-run `setup.sh`. Prior: v1.2.11 — BUILT promotion gate (managed `PreToolUse` hook + hardened `managed-settings.json` + CI diff-guard); v1.2.10 — HEADLESS binding prerequisite fleet-wide; v1.2.9 — Principle 3 (MINIMAL) refined fleet-wide (*"minimum" is relative to the chosen capability* + disclosed irreducible hard-dep closure; a lighter option that *reduces* function — e.g. noVNC vs Guacamole's RDP-grade web gate — is a recorded **capability trade-off, not a minimalism win**); v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
+Version: **1.2.13** — Docs: **scrub references to the now-deleted standalone repos** (no host behavior change). The desktop-variant repos (`fedora-xrdp`, `fedora-tigervnc`, `fedora-kasm`, `debian-kasm-tigervnc`) + `debian-dev` were deleted from `oso-gato` — `fedora-desktop` (xrdp + grd lineages) superseded them. README's desktop-containers line now names **`fedora-desktop`**; the `WORKLOAD_CONTAINERS` dead commented placeholders are removed (a `fedora-desktop` placeholder added); `policy/CLAUDE.md`'s dev-box example de-references `debian-dev`. **Policy re-stamp only — no host-layer change**; re-run `setup.sh`. Prior: v1.2.12 — FLEET governance (3-box model, host PR-only, `fedora-dev` sole merge box); v1.2.11 — BUILT promotion gate (managed `PreToolUse` hook + hardened `managed-settings.json` + CI diff-guard); v1.2.10 — HEADLESS binding prerequisite fleet-wide; v1.2.9 — Principle 3 (MINIMAL) refined fleet-wide (*"minimum" is relative to the chosen capability* + disclosed irreducible hard-dep closure; a lighter option that *reduces* function — e.g. noVNC vs Guacamole's RDP-grade web gate — is a recorded **capability trade-off, not a minimalism win**); v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
 
 > **Headless (binding prerequisite).** There is never a screen plugged into this server, and there is no "log in at the console" — the host is a remote cloud VPS you only ever reach over the network. Every desktop the fleet serves (Obsidian, VS Code, the browser) is drawn by software on a *virtual* screen inside a container and streamed to you over RDP/VNC/the web gate; nothing in the design may ever assume a real monitor, graphics card, or sit-down seat. If something needs one, that's a bug to fix, not a setting to toggle.
 
@@ -35,7 +35,7 @@ After `setup.sh` (see "Using the bootstrap" below), the VPS:
 
 - **Runs containers from `ghcr.io/oso-gato/*` via podman.** Each major function is its own container; nothing else is installed onto the host beyond a short fixed package list.
 - **Hosts claudebox** — the in-host management agent (Claude Code in a Distrobox). Pulls images, runs containers, writes Quadlets, refreshes them on schedule.
-- **Carries the personal universe and second brain** via desktop containers (fedora-xrdp, fedora-tigervnc, fedora-kasm, debian-kasm-tigervnc). VS Code for projects, Obsidian for the knowledge vault. RDP `KillDisconnected` + tmux give session survival across disconnects.
+- **Carries the personal universe and second brain** via the **fedora-desktop** container (XFCE over xrdp + an experimental GNOME/grd lineage). VS Code for projects, Obsidian for the knowledge vault. RDP `KillDisconnected` + tmux give session survival across disconnects.
 
 **Access:**
 
@@ -366,6 +366,18 @@ Agent-policy + docs only — **no host behavior change**. Stamps the **3-box FLE
 cd /opt/fedora-bootstrap
 git pull --ff-only origin main
 ./setup.sh < /dev/null        # re-stamps the updated agent law into the box; no host change
+```
+
+**Rollback** (no host state to revert): `git checkout` the prior commit and re-run `setup.sh`.
+
+#### Upgrading to v1.2.13 (from v1.0.0)
+
+Docs/policy only — **no host behavior change**. Scrubs references to the **now-deleted** standalone repos (`fedora-xrdp`, `fedora-tigervnc`, `fedora-kasm`, `debian-kasm-tigervnc`, `debian-dev`) — `fedora-desktop` (xrdp + grd lineages) superseded the desktop variants. README's desktop-containers line now names `fedora-desktop`; the `WORKLOAD_CONTAINERS` dead commented placeholders are removed (a `fedora-desktop` placeholder added for when it's onboarded); `policy/CLAUDE.md`'s dev-box example de-references `debian-dev`. Re-running `setup.sh` re-stamps the updated agent law; no host delta.
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # re-stamps the updated agent law; no host change
 ```
 
 **Rollback** (no host state to revert): `git checkout` the prior commit and re-run `setup.sh`.
