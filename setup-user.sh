@@ -210,9 +210,7 @@ PHASE "user 4/5 workload-container refresh (Quadlets + claudebox-lock deferral)"
 #   - Operator user `core` (uid 1000)
 WORKLOAD_CONTAINERS=(
     fedora-dev
-    # debian-dev      # uncomment when shipped
-    # fedora-xrdp     # uncomment when shipped
-    # fedora-kasm     # uncomment when shipped
+    # fedora-desktop  # uncomment when onboarded (the desktop workload — xrdp + grd lineages)
 )
 
 # ---- generic helpers (one source of truth for the fleet) ----
