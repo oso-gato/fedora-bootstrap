@@ -392,6 +392,12 @@ fi
 ts_up=(--ssh)
 [ "$ACCEPT_ROUTES" = true ] && ts_up+=(--accept-routes)
 [ "$ADVERTISE_EXIT" = true ] && ts_up+=(--advertise-exit-node)
+# Day-0: if the environment didn't supply TS_AUTHKEY, ASK for one (an UNATTENDED join). A blank
+# answer — or a non-interactive run (`setup.sh < /dev/null`) — falls through to the browser
+# web-login join below. Same ask-or-web-login pattern the workload spin-up wizards follow.
+if [ -z "${TS_AUTHKEY:-}" ] && [ -t 0 ]; then
+    read -rp '>> Tailscale auth key for an UNATTENDED host join (tskey-…; blank = browser web-login): ' TS_AUTHKEY || TS_AUTHKEY=""
+fi
 if ! tailscale status >/dev/null 2>&1; then
     if [ -n "${TS_AUTHKEY:-}" ]; then
         tailscale up "${ts_up[@]}" --auth-key="$TS_AUTHKEY"   # unattended join
