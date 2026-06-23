@@ -10,7 +10,7 @@ One script that turns a fresh cloud server into your **"mother platform"** — a
 - 🚧 **The split:** it **never builds** images (CI does), **never merges** (`fedora-dev` does), and **never edits the live host** by hand — you re-run the setup script as root to apply. "Proposing a change" is never "applying it."
 - 🔒 **No secrets in the repo.**
 
-Version: **1.2.14** — Setup: **day-0 ASKS for a Tailscale auth key** (unattended join), with a **browser web-login fallback**. When `TS_AUTHKEY` isn't in the environment and you're at a terminal, `setup-host.sh` now prompts for a `tskey-…`; a blank answer — or a non-interactive `setup.sh < /dev/null` — falls through to the existing browser-login join. Matches the ask-or-web-login Tailscale pattern the workload spin-up wizards follow (`fedora-desktop` + `fedora-dev` `spin-up.sh`). `setup-host.sh` only — no security-posture change. Re-run `setup.sh`. Prior: v1.2.13 — docs cleanup (scrub deleted-repo refs); v1.2.12 — FLEET governance (3-box model, host PR-only, `fedora-dev` sole merge box); v1.2.11 — BUILT promotion gate (managed `PreToolUse` hook + hardened `managed-settings.json` + CI diff-guard); v1.2.10 — HEADLESS binding prerequisite fleet-wide; v1.2.9 — Principle 3 (MINIMAL) refined fleet-wide (*"minimum" is relative to the chosen capability* + disclosed irreducible hard-dep closure; a lighter option that *reduces* function — e.g. noVNC vs Guacamole's RDP-grade web gate — is a recorded **capability trade-off, not a minimalism win**); v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
+Version: **1.2.15** — Docs: **make the host spin-up path explicit + the unattended join reachable** (no host behavior change). The Day-0 block now shows the **unattended** Tailscale join (set `TS_AUTHKEY=tskey-…` on the `setup.sh` line — honored even with `< /dev/null`; blank = browser web-login) and a **"who runs this / no `spin-up.sh`|`run.sh` here — `setup.sh` IS the host genesis path"** signpost, so a spin-up agent doesn't hunt for a missing wizard. Corrects the v1.2.14 framing: the *interactive* `TS_AUTHKEY` prompt fires only on a later interactive `setup.sh` re-run, **not** the `< /dev/null` Day-0 paste. `policy/CLAUDE.md` DO gains a fleet spin-up-paths bullet. Re-run `setup.sh`. Prior: v1.2.14 — day-0 TS_AUTHKEY prompt; v1.2.13 — docs cleanup (scrub deleted-repo refs); v1.2.12 — FLEET governance (3-box model, host PR-only, `fedora-dev` sole merge box); v1.2.11 — BUILT promotion gate (managed `PreToolUse` hook + hardened `managed-settings.json` + CI diff-guard); v1.2.10 — HEADLESS binding prerequisite fleet-wide; v1.2.9 — Principle 3 (MINIMAL) refined fleet-wide (*"minimum" is relative to the chosen capability* + disclosed irreducible hard-dep closure; a lighter option that *reduces* function — e.g. noVNC vs Guacamole's RDP-grade web gate — is a recorded **capability trade-off, not a minimalism win**); v1.2.8 — Principle 2(c) bounded official-upstream-binary class; v1.2.7 — PR-first + maintainer-approved-merge maintainership; v1.2.5 — `verify.sh` fail2ban euid-gate fix; v1.2.4 — genesis/mother-platform role + `fedora-dev` maintainership.
 
 > **Headless (binding prerequisite).** There is never a screen plugged into this server, and there is no "log in at the console" — the host is a remote cloud VPS you only ever reach over the network. Every desktop the fleet serves (Obsidian, VS Code, the browser) is drawn by software on a *virtual* screen inside a container and streamed to you over RDP/VNC/the web gate; nothing in the design may ever assume a real monitor, graphics card, or sit-down seat. If something needs one, that's a bug to fix, not a setting to toggle.
 
@@ -90,13 +90,16 @@ Both reboot the host twice (offline transaction, then into the new release). App
 
 ### Day 0 — fresh VPS
 
-As root on a fresh Fedora Cloud instance (take a Hostinger snapshot first — the last line reboots the host into the automated SELinux convergence):
+As root on a fresh Fedora Cloud instance (take a Hostinger snapshot first — the last line reboots the host into the automated SELinux convergence).
+
+> **Who runs this & how the host "spins up":** a human operator with host root pastes this block. The in-host claudebox agent has **NO host root** — if *you* are the agent, **surface** this block to the operator, don't run it (policy/CLAUDE.md ROLE). There is **no `spin-up.sh` / `run.sh` / Quadlet** in this repo: unlike the workload repos (`fedora-dev` / `fedora-desktop`, which spin up via `spin-up.sh` → `run.sh`), the HOST genesis path **is** `setup.sh` (this block); workloads then come up automatically (below). For an **unattended** Tailscale join, set `TS_AUTHKEY=tskey-…` on the `setup.sh` line — it's honored even with `< /dev/null`; a blank/absent key falls back to **browser web-login** (a `login.tailscale.com` link prints in the output). *(The interactive v1.2.14 `TS_AUTHKEY` prompt fires only on a later **interactive** `setup.sh` re-run — the Day-0 `< /dev/null` paste skips it by design, since `< /dev/null` is load-bearing for the `passwd` step below.)*
 
 ```sh
 dnf -y upgrade --refresh
 dnf -y install git
 git clone https://github.com/oso-gato/fedora-bootstrap /opt/fedora-bootstrap
-if /opt/fedora-bootstrap/setup.sh < /dev/null; then
+# UNATTENDED tailnet join: paste your key into TS_AUTHKEY= below. Leave it empty for browser web-login.
+if TS_AUTHKEY= /opt/fedora-bootstrap/setup.sh < /dev/null; then
   echo 'setup: all layers PASS.'
 else
   echo '*** investigate the failure (login.tailscale.com link? scoped sudoers? see verify.sh output above) and re-run /opt/fedora-bootstrap/setup.sh < /dev/null'
@@ -111,7 +114,7 @@ The `< /dev/null` on `setup.sh` is load-bearing: it keeps setup from reading the
 1. **System layer** (`setup-host.sh`, as root): host packages, `/etc`, system services, tailnet, dnf-automatic, creates `core` user + rootless prerequisites.
 2. **Rootless layer** (`setup-user.sh`, as `core`): user podman socket, ssh keys synced from `github.com/oso-gato.keys`, claudebox assembled from `distrobox.ini`, Claude policy stamped, workload-refresh harness enabled, verify.
 
-The only interactive pause: the tailscale auth link (one-time per host). Open the URL printed in the output, approve, then re-run setup.sh.
+Tailscale join (one-time per host): with `TS_AUTHKEY=tskey-…` set it's unattended (no pause); otherwise it's browser web-login — open the `login.tailscale.com` URL printed in the output, approve, then re-run `setup.sh`. (On a later *interactive* `setup.sh` run — without `< /dev/null` — `setup-host.sh` instead PROMPTS for the key; the Day-0 `< /dev/null` paste above skips that prompt by design.)
 
 **Host naming:** the VPS names itself `erebus` (override with `BOOTSTRAP_HOSTNAME=<name>`). `hostnamectl` sets it; a cloud-init drop-in pins it across reboots.
 
@@ -392,6 +395,18 @@ git pull --ff-only origin main
 ./setup.sh                    # INTERACTIVE — it will ASK for a TS_AUTHKEY (blank = browser web-login)
 # Non-interactive `./setup.sh < /dev/null` still works: it skips the prompt and uses the browser
 # web-login join if the node isn't already up and no TS_AUTHKEY env var is set.
+```
+
+**Rollback** (no host state to revert): `git checkout` the prior commit and re-run `setup.sh`.
+
+#### Upgrading to v1.2.15 (from v1.0.0)
+
+Docs/policy only — **no host behavior change**. Makes the host spin-up path explicit so an agent (or operator) doesn't miss it: the Day-0 block now shows the **unattended** Tailscale join (`TS_AUTHKEY=tskey-…` on the `setup.sh` line, honored with `< /dev/null`; blank = browser web-login) and a **"who runs this / no `spin-up.sh`/`run.sh` here — `setup.sh` IS the host genesis path"** signpost. Corrects the v1.2.14 framing (the interactive prompt fires only on a later *interactive* `setup.sh` run, not the `< /dev/null` Day-0 paste). `policy/CLAUDE.md` DO gains a fleet spin-up-paths bullet.
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # re-stamps the updated agent law; no host change
 ```
 
 **Rollback** (no host state to revert): `git checkout` the prior commit and re-run `setup.sh`.

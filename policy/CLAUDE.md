@@ -30,6 +30,7 @@ OUT:  a running, (healthy) container started via that image's run.sh
 
 ## DO
 
+- Know the SPIN-UP paths (fleet-consistent; never hand-roll `podman run`): the **HOST itself** comes up via `setup.sh` (operator-run; this repo has no `spin-up.sh`/`run.sh`). A **workload** spins up by hand via its own `./spin-up.sh` wizard (ASKS for `TS_AUTHKEY`; blank = `login.tailscale.com` web-login) → the env-driven `./run.sh` it wraps (`IMAGE=ghcr.io/oso-gato/<name>:latest`); in steady state the fleet refreshes it via the Quadlet + `workload-refresh@` timers below.
 - Refresh workload containers: `systemctl --user start workload-refresh@<name>.service`. Sanctioned path. Busy-probe gated.
 - Inspect: `podman ps`, `podman logs`, `podman exec`, `journalctl --user -u workload-refresh@<name>.service`, `systemctl --user list-timers 'workload-refresh@*'`.
 - Manage `systemd --user` units I own in `~/.config/systemd/user/`.
