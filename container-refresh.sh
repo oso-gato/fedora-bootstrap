@@ -64,11 +64,17 @@ esac
 prior_id=$(podman container inspect "$name" -f '{{.Image}}' 2>/dev/null || echo "")
 
 # (4) Pull. Pull failure -> defer (the retry timer handles it).
-echo "[$name] pulling $image…"
-if ! podman pull "$image" >/dev/null; then
-    echo "[$name] pull FAILED — leaving running container alone" >&2
-    date -Iseconds >> "$pending"
-    exit 1
+# SKIP_PULL is a TEST-ONLY seam (validation/rollback-spike.sh): UNSET in production, so zero
+# behaviour change there. When set, the registry pull is skipped so the rollback branch can be
+# exercised against a locally-staged image with nothing pushed to GHCR. The pull is orthogonal
+# to the rollback logic under test.
+if [ -z "${SKIP_PULL:-}" ]; then
+    echo "[$name] pulling $image…"
+    if ! podman pull "$image" >/dev/null; then
+        echo "[$name] pull FAILED — leaving running container alone" >&2
+        date -Iseconds >> "$pending"
+        exit 1
+    fi
 fi
 
 # (5) Compare digests.
