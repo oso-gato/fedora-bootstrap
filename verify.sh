@@ -5,6 +5,7 @@ ck(){ if eval "$2" >/dev/null 2>&1; then echo "PASS  $1"; else echo "FAIL  $1"; 
 ck "host: podman.socket active"            "systemctl --user is-active podman.socket"
 ck "host: cockpit.socket active"           "systemctl is-active cockpit.socket"
 ck "host: tmux auto-attach drop-in"        "test -f /etc/profile.d/zz-tmux-attach.sh"
+ck "host: tmux server config"              "test -f /etc/tmux.conf"
 ck "host: no shim symlinks in ~/.local/bin" "test ! -e ~/.local/bin/podman && test ! -e ~/.local/bin/systemctl"
 ck "box: exists"                           "distrobox list | grep -q claudebox"
 ck "box: claude runs"                      "distrobox enter claudebox -- /usr/bin/claude --version"

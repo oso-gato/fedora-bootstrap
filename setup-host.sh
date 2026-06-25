@@ -473,17 +473,49 @@ systemctl daemon-reload
 systemctl enable cockpit-tailnet-serve.service
 systemctl start --no-block cockpit-tailnet-serve.service
 
-PHASE "host 7/7 tmux drop-in + bring up '$U' rootless user manager"
-# System-wide login drop-in: ssh/mosh logins attach a per-device tmux session.
+PHASE "host 7/7 tmux drop-in + config + bring up '$U' rootless user manager"
+# System-wide login drop-in: every ssh/mosh login gets its OWN session inside
+# ONE shared "main" tmux group. The windows (the work) are shared across every
+# client, but each connection's geometry + redraw state stay INDEPENDENT — so a
+# small client never forces a resize on a large one. That is the multi-client
+# geometry race: under one shared SESSION (window-size=latest) a newly-attaching
+# client of a different size resizes the shared window to its own geometry and
+# paints every OTHER client onto a foreign row/column grid -> garbled
+# input+output (Prompt 3 / WebSSH, and the initial garble even on native
+# terminals). Session groups give shared windows + per-session size (tmux(1):
+# "Sessions in the same group share the same set of windows ... the current and
+# previous window ... remain independent"). A single "main" group (not per-
+# LOGIN_KEY) is deliberate: the primary access path is keyless Tailscale SSH,
+# which is terminated by tailscaled and never sets LOGIN_KEY (an OpenSSH
+# authorized_keys feature), so a per-key model would collapse to "main" on the
+# tailnet anyway AND would fragment the workspace across access methods. One
+# "main" group = one continuous workspace over tailnet ssh, public ssh, and mosh.
+# LOGIN_KEY is retained purely for per-device audit/attribution (authorized_keys
+# + PermitUserEnvironment), not for session routing. The per-connection "c<pid>"
+# session self-destroys on disconnect; work persists in the detached "main" base.
 tee /etc/profile.d/zz-tmux-attach.sh >/dev/null <<'EOS'
-# ssh/mosh logins attach to a tmux session named after the key that authenticated
-# (LOGIN_KEY, from authorized_keys). Each device gets its own persistent session;
-# all sessions share one server, so `tmux attach -t <other>` hops between them.
-# Local/unkeyed logins fall back to the shared "main".
+# ssh/mosh logins each get their own session in the shared "main" group.
 case $- in *i*) ;; *) return ;; esac
 if [ -z "${TMUX:-}" ] && command -v tmux >/dev/null && { [ -n "${SSH_TTY:-}" ] || [ -t 0 ]; }; then
-    exec tmux new-session -A -s "${LOGIN_KEY:-main}"
+    tmux has-session -t main 2>/dev/null || tmux new-session -d -s main 2>/dev/null || true
+    exec tmux new-session -t main -s "c$$" \; set-option destroy-unattached on
 fi
+EOS
+# tmux server config: per-client geometry isolation + clean repaint. default-
+# terminal: a present, 256-colour TERM for programs inside tmux (compiled
+# default is the bare "screen"). window-size=smallest + aggressive-resize: if
+# two clients ever view the SAME window at once, fit it to the smaller so
+# neither is painted on a foreign grid (no garble; the larger screen letterboxes)
+# — the per-session attach above already makes the common case full-size.
+# client-attached/-resized -> refresh-client: force a full server-driven repaint
+# on every attach AND resize, so a client that won't self-redraw (xterm.js /
+# WebSSH) still receives a complete clean frame.
+tee /etc/tmux.conf >/dev/null <<'EOS'
+set -g default-terminal "tmux-256color"
+set -g window-size smallest
+setw -g aggressive-resize on
+set-hook -g client-attached 'refresh-client'
+set-hook -g client-resized  'refresh-client'
 EOS
 # Stand up the user's systemd manager + D-Bus user bus NOW, as root, so the rootless
 # phase (setup-user.sh, run via `su - $U`) finds the bus already up — no session-less
