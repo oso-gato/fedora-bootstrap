@@ -67,7 +67,11 @@ mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.local/state/cla
 # denied"); a normal SSH login already has the right value, so it is a no-op there. It holds a SHARED
 # session lock (so the DAILY refresh can tell a session is live and defer), and on exit it (a) follows
 # a Claude-triggered rebuild, or (b) runs a daily refresh that was deferred while you worked — your
-# "quit -> it rebuilds". Emitted via a QUOTED heredoc so $(id -u)/"$@"/$HOME/$state stay LITERAL.
+# "quit -> it rebuilds". It also injects --settings {"ultracode":true} so every session STARTS in
+# ultracode (xhigh effort + workflow-by-default); ultracode is SESSION-SCOPED and IGNORED in settings
+# files, so the wrapper is the only place it can be made a default (effortLevel:xhigh lives in
+# policy/managed-settings.json as the persistent floor for any non-wrapper path). Emitted via a
+# QUOTED heredoc so $(id -u)/"$@"/$HOME/$state AND the literal {"ultracode":true} stay LITERAL.
 cat > "$HOME/.local/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
@@ -77,7 +81,7 @@ if systemctl --user is-active --quiet claudebox-rebuild-run.service 2>/dev/null;
     exec "$HOME/.local/bin/claudebox-rebuild" --watch-only
 fi
 # Hold a SHARED session lock for the session's lifetime so the daily refresh defers while you work.
-flock -s "$state/session.lock" distrobox enter claudebox -- bash -lc 'exec /usr/bin/claude "$@"' bash "$@"
+flock -s "$state/session.lock" distrobox enter claudebox -- bash -lc 'exec /usr/bin/claude --settings "{\"ultracode\":true}" "$@"' bash "$@"
 rc=$?
 # Post-session: (a) Claude triggered a rebuild -> follow it to completion; else (b) a daily refresh
 # was deferred while you worked AND no other session is active now -> rebuild now and follow it.
