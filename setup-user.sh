@@ -259,7 +259,7 @@ if [ ! -e "$HOME/.config/containers/policy.json" ]; then
             "registry.fedoraproject.org/fedora": [{ "type": "insecureAcceptAnything" }],
             "": [{ "type": "reject" }]
         },
-        "containers-storage": [{ "type": "insecureAcceptAnything" }]
+        "containers-storage": { "": [{ "type": "insecureAcceptAnything" }] }
     }
 }
 EOF
@@ -279,14 +279,25 @@ d = t.setdefault("docker", {})
 changed = False
 if "registry.fedoraproject.org/fedora" not in d:
     d["registry.fedoraproject.org/fedora"] = [{"type": "insecureAcceptAnything"}]; changed = True
-if "containers-storage" not in t:
-    t["containers-storage"] = [{"type": "insecureAcceptAnything"}]; changed = True
+cs = t.get("containers-storage")
+if cs is None:
+    t["containers-storage"] = {"": [{"type": "insecureAcceptAnything"}]}; changed = True
+elif isinstance(cs, list):
+    # REPAIR a pre-v1.2.21 host: containers-image requires each transport to map
+    # scope -> requirements (an OBJECT), not a bare requirements ARRAY. The array form
+    # made podman reject the WHOLE policy ("JSON object expected, got 91"), so every
+    # ghcr.io/oso-gato pull failed and no workload could start.
+    t["containers-storage"] = {"": cs}; changed = True
+# Fail-closed structural check: every transport value MUST be a scope->requirements object.
+for _n, _v in t.items():
+    if not isinstance(_v, dict):
+        sys.exit(f"[policy] FATAL: transport {_n!r} must be a scope->requirements object, got {type(_v).__name__}")
 if changed:
     with open(p, "w") as f:
         json.dump(pol, f, indent=4); f.write("\n")
-    print("[policy] validation-fixture entries added to policy.json")
+    print("[policy] validation-fixture entries ensured (containers-storage normalized to object)")
 else:
-    print("[policy] validation-fixture entries already present")
+    print("[policy] validation-fixture entries already present and well-formed")
 PY
 if [ ! -e "$HOME/.config/containers/registries.d/ghcr-io.yaml" ]; then
     cat > "$HOME/.config/containers/registries.d/ghcr-io.yaml" <<'EOF'
