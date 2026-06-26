@@ -224,7 +224,12 @@ install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.service"  "$HOME/.c
 install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.timer"    "$HOME/.config/systemd/user/"
 
 # ---- image signature verification scaffolding ----
-# Default policy: trust ghcr.io/oso-gato/* unconditionally (insecureAcceptAnything).
+# Default policy: reject everything; then trust two repos unconditionally
+# (insecureAcceptAnything): ghcr.io/oso-gato/* (the production workloads that
+# actually RUN) and registry.fedoraproject.org/fedora (the class-(a) Fedora BASE
+# the validation/ host-validation spikes+gates pull as disposable test fixtures —
+# never a run-set image). Plus containers-storage (local save/load, for the
+# throwaway tar cache the fixtures are cached in). See the merge block below.
 #
 # DO NOT add JSON "comment" keys (e.g. "//") inside policy.json: podman's
 # containers/image policy parser is strict and REJECTS unknown keys, which makes
@@ -239,6 +244,9 @@ install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.timer"    "$HOME/.c
 #              "fulcio": { "caData": "...",
 #                          "oidcIssuer": "https://token.actions.githubusercontent.com",
 #                          "subjectEmail": "..." } }
+# The same sigstoreSigned tightening applies to the registry.fedoraproject.org/fedora
+# base (Fedora publishes sigstore signatures) — upgrade both stanzas in lockstep so the
+# fixture base is never held to a weaker bar than the production run-set.
 install -d -m 0755 "$HOME/.config/containers"
 install -d -m 0755 "$HOME/.config/containers/registries.d"
 if [ ! -e "$HOME/.config/containers/policy.json" ]; then
@@ -248,12 +256,38 @@ if [ ! -e "$HOME/.config/containers/policy.json" ]; then
     "transports": {
         "docker": {
             "ghcr.io/oso-gato": [{ "type": "insecureAcceptAnything" }],
+            "registry.fedoraproject.org/fedora": [{ "type": "insecureAcceptAnything" }],
             "": [{ "type": "reject" }]
-        }
+        },
+        "containers-storage": [{ "type": "insecureAcceptAnything" }]
     }
 }
 EOF
 fi
+# Idempotently ensure the validation-fixture entries on an EXISTING host too (the create-if-
+# absent above won't touch a file that already exists, to preserve operator edits). Adds ONLY:
+# pulling the class-(a) Fedora BASE the validation/ spikes+gates use, and copying LOCAL images
+# (podman save -> the throwaway tar cache). Production still only RUNS oso-gato workloads (the
+# Quadlets reference only oso-gato images) — this widens what may be PULLED for disposable
+# host-validation, not what runs. Structural JSON merge (no comment keys; the parser rejects them).
+python3 - "$HOME/.config/containers/policy.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+pol = json.load(open(p))
+t = pol.setdefault("transports", {})
+d = t.setdefault("docker", {})
+changed = False
+if "registry.fedoraproject.org/fedora" not in d:
+    d["registry.fedoraproject.org/fedora"] = [{"type": "insecureAcceptAnything"}]; changed = True
+if "containers-storage" not in t:
+    t["containers-storage"] = [{"type": "insecureAcceptAnything"}]; changed = True
+if changed:
+    with open(p, "w") as f:
+        json.dump(pol, f, indent=4); f.write("\n")
+    print("[policy] validation-fixture entries added to policy.json")
+else:
+    print("[policy] validation-fixture entries already present")
+PY
 if [ ! -e "$HOME/.config/containers/registries.d/ghcr-io.yaml" ]; then
     cat > "$HOME/.config/containers/registries.d/ghcr-io.yaml" <<'EOF'
 docker:
