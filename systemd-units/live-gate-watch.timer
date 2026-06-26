@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll workload repos for `live-validate` PRs to live-gate
+
+[Timer]
+# Gentle authenticated poll (the host is NAT/tailnet-only — no inbound webhook is possible).
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=90
+Persistent=true
+
+[Install]
+WantedBy=timers.target
