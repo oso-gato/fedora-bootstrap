@@ -38,8 +38,10 @@ flock -n 9 || {
     exit 0
 }
 
-# (2) Busy probe — distinguishes idle vs busy vs broken.
-"$HOME/.local/bin/claudebox-busy-probe.sh" "$name"
+# (2) Busy probe — distinguishes idle vs busy vs broken. BUSY_PROBE overrides the default
+#     claudebox probe (UNSET in production → claudebox-busy-probe.sh); a non-claudebox workload
+#     supplies an empty/appropriate probe (e.g. BUSY_PROBE=/bin/true), per CLAUDE.md.
+"${BUSY_PROBE:-$HOME/.local/bin/claudebox-busy-probe.sh}" "$name"
 rc=$?
 case $rc in
     0)  : ;;  # idle, proceed
