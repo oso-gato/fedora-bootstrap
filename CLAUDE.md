@@ -25,7 +25,7 @@ list is the boundary — it is not.
 ## PIPELINE CONTEXT
 
 Images are CI-built on GitHub and GHCR-published; the host claudebox **pulls
-and operates** them — it never `podman build`s. The host claudebox is the
+and operates** them — it never `podman build`s a **shipping** image (CI does); it MAY build a disposable, never-pushed validation throwaway to live-gate an open PR pre-merge (see `policy/CLAUDE.md` DO NOT carve-out). The host claudebox is the
 **genesis agent / mother platform**: besides operating the host (incl. creating
 and removing containers), it is the **only** box that sees the live containers,
 so it **live-diagnoses** them and develops fixes to the fleet image repos it
