@@ -220,6 +220,12 @@ WORKLOAD_CONTAINERS=(
 # ---- generic helpers (one source of truth for the fleet) ----
 install -m 0755 "$HERE/container-refresh.sh"    "$HOME/.local/bin/container-refresh.sh"
 install -m 0755 "$HERE/claudebox-busy-probe.sh" "$HOME/.local/bin/claudebox-busy-probe.sh"
+# Pre-merge live-gate pair (Gate B + its build step): build-candidate.sh builds a PR candidate
+# DISPOSABLY on the host (v1.2.25 carve-out: localhost/disposable/*, never pushed, --rm/rmi'd) and
+# hands it to validate-candidate.sh, which live-runs + access-probes it. validate-candidate.sh was
+# previously uninstalled (an orphan with no caller); install both so the live-gate harness can call them.
+install -m 0755 "$HERE/validate-candidate.sh"   "$HOME/.local/bin/validate-candidate.sh"
+install -m 0755 "$HERE/build-candidate.sh"      "$HOME/.local/bin/build-candidate.sh"
 
 # ---- systemd template units (refresh trigger + retry) ----
 install -m 0644 "$HERE/systemd-units/workload-refresh@.service"        "$HOME/.config/systemd/user/"
