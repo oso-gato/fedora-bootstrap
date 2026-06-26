@@ -339,7 +339,16 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     if [ ! -d "$HOME/$_c/.git" ]; then
         git clone "https://github.com/oso-gato/$_c" "$HOME/$_c"
     else
-        (cd "$HOME/$_c" && git pull --ff-only origin main)
+        # ~/<name> is a SETUP-MANAGED clone (the live-gate tooling fetches PR refs + `git archive`s
+        # into it but never authoritatively edits the tree). Discard any stray working-tree changes
+        # so the update never aborts on a dirty file (maintainer edits belong in a SEPARATE clone),
+        # but KEEP `--ff-only` so a non-fast-forward — a force-push to `main` — still SURFACES rather
+        # than being silently accepted (a blind `reset --hard origin/main` would hide that attack).
+        (cd "$HOME/$_c" \
+            && git fetch origin main \
+            && git reset --hard HEAD \
+            && git clean -fd \
+            && git merge --ff-only origin/main)
     fi
 
     # (b) Install the container's Quadlet into systemd's user search path.
