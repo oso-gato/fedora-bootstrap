@@ -6,6 +6,10 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=%h/.local/bin/live-gate-watch.sh
+# The watcher uses gh + git (claudebox tools — NOT on the minimal host) and drives the host podman
+# engine via the box's CONTAINER_HOST bridge, so run it INSIDE the claudebox. distrobox lives on the
+# host; `bash -lc` loads the box login env (CONTAINER_HOST + gh/git on PATH); gh auth is the shared
+# home (~/.config/gh). The build/run still land on the HOST engine via CONTAINER_HOST.
+ExecStart=/usr/bin/distrobox enter claudebox -- bash -lc 'exec "$HOME/.local/bin/live-gate-watch.sh"'
 # Bounded so a hung/slow build can't wedge the timer forever (one full candidate build + gate).
 TimeoutStartSec=1800
