@@ -146,7 +146,7 @@ Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:%h/.local/bin
 ExecStart=$HERE/box-rebuild.sh
-TimeoutStartSec=900
+TimeoutStartSec=480
 EOF
 
 cat > "$HOME/.config/systemd/user/claudebox-rebuild.service" <<'EOF'
