@@ -30,10 +30,13 @@ echo "== launch candidate DISPOSABLY + FENCED =="
 # TODO(host box): thread the workload's real run.sh contract here, MINUS the public publish and
 # MINUS the real secrets (dummy RDP_PW/GUAC_PW etc). Keep --rm + fence + caps. Probe on loopback
 # inside the container's own netns via `podman exec`, so nothing is published to the host.
-launch=( podman run -d --rm --name "$NAME"
-         --network=none
+# CAND_FENCE = the candidate's run-contract fence, MINUS public publishes + real secrets.
+# Default = the hardest fence (untrusted: no network, all caps dropped). A workload that needs
+# caps/devices supplies them via CAND_FENCE (its run.sh args minus -p and minus real secrets).
+CAND_FENCE="${CAND_FENCE:---network=none --cap-drop=ALL}"
+# word-splitting CAND_FENCE into podman args is intentional
+launch=( podman run -d --rm --name "$NAME" $CAND_FENCE
          --memory=2g --pids-limit=512
-         --cap-drop=ALL
          -e DUMMY_SECRETS=1 )
 [ -n "$HEALTH" ] && launch+=( --health-cmd "$HEALTH" --health-start-period=90s --health-interval=10s --health-retries=12 )
 if "${launch[@]}" "$IMG" >/dev/null 2>"$OUT/launch.err"; then
@@ -51,14 +54,22 @@ for _ in $(seq 1 18); do
 done
 [ "$st" = healthy ] && g healthy PASS || g healthy "FAIL($st)"
 
-echo "== access-path probes =="
-# TODO(host box): replace with the workload's REAL probes, run via `podman exec "$NAME" …` so
-# they hit the candidate's OWN loopback (nothing published to the host). For fedora-desktop:
-#   web door  : podman exec "$NAME" curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/guacamole/   == 200
-#   web login : POST /guacamole/api/tokens with the dummy creds -> authToken (or TOTP challenge)
-#   RDP up    : podman exec "$NAME" bash -c 'exec 3<>/dev/tcp/127.0.0.1/3389'
-#   paint     : freerdp + Xvfb + a frame-stddev>0 check (the desktop actually rendered)
-g probes "TODO(host) — fill per workload"
+echo "== access-path probe =="
+# CAND_PROBE = the workload's "does it actually serve" assertion, run INSIDE the candidate via
+# `podman exec` (hits the candidate's OWN loopback — nothing is published to the host). Exit 0 =
+# serves. Supplied per-candidate by the dev loop. Examples:
+#   fedora-dev      : the sshd door answers on :22
+#   fedora-desktop  : curl https://127.0.0.1:8443/guacamole/ == 200; RDP :3389 open; desktop paints
+CAND_PROBE="${CAND_PROBE:-}"
+if [ -n "$CAND_PROBE" ]; then
+  if podman exec "$NAME" sh -c "$CAND_PROBE" >"$OUT/probe.out" 2>&1; then
+    g probes PASS
+  else
+    g probes FAIL; sed 's/^/    probe: /' "$OUT/probe.out"
+  fi
+else
+  printf '  %-26s %s\n' probes "(none supplied — health-only gate)"
+fi
 
 podman logs "$NAME" 2>&1 | tail -20 > "$OUT/candidate.log"
 echo; echo "VERDICT: $([ $pass = 1 ] && echo GREEN || echo RED)   (logs: $OUT)"
