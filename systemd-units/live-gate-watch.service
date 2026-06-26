@@ -1,0 +1,11 @@
+[Unit]
+Description=Live-gate open `live-validate` PRs — build + gate candidates disposably on the host, post verdicts
+Documentation=https://github.com/oso-gato/fedora-bootstrap
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/live-gate-watch.sh
+# Bounded so a hung/slow build can't wedge the timer forever (one full candidate build + gate).
+TimeoutStartSec=1800
