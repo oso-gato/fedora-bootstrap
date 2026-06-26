@@ -56,6 +56,10 @@ Image=${IMG}
 ContainerName=${NAME}
 Pull=missing
 Notify=healthy
+HealthCmd=test -f /tmp/ok
+HealthInterval=2s
+HealthStartPeriod=1s
+HealthRetries=3
 [Install]
 WantedBy=default.target
 EOF
@@ -72,7 +76,7 @@ echo "== swap :latest -> BAD locally, run container-refresh (SKIP_PULL), expect 
 podman tag "localhost/${NAME}-bad" "$IMG"           # the 'new' :latest that won't go healthy
 bad_id=$(podman image inspect "$IMG" -f '{{.Id}}')
 [ "$good_id" != "$bad_id" ] && t images-differ PASS || t images-differ FAIL
-SKIP_PULL=1 "$REFRESH" "$NAME"; rc=$?
+SKIP_PULL=1 BUSY_PROBE=/bin/true "$REFRESH" "$NAME"; rc=$?
 echo "  (container-refresh exit: $rc — expect 1 = rolled back)"
 
 echo "== assertions =="
