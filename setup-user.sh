@@ -226,12 +226,24 @@ install -m 0755 "$HERE/claudebox-busy-probe.sh" "$HOME/.local/bin/claudebox-busy
 # previously uninstalled (an orphan with no caller); install both so the live-gate harness can call them.
 install -m 0755 "$HERE/validate-candidate.sh"   "$HOME/.local/bin/validate-candidate.sh"
 install -m 0755 "$HERE/build-candidate.sh"      "$HOME/.local/bin/build-candidate.sh"
+# Pre-merge live-gate loop transport: live-gate-run.sh gates ONE PR (build + gate + comment the
+# verdict back); live-gate-watch.sh polls `live-validate`-labelled PRs, dedups per-commit, and
+# invokes the runner. The host comments, NEVER merges. Not gated on any dev session.
+install -m 0755 "$HERE/live-gate-run.sh"        "$HOME/.local/bin/live-gate-run.sh"
+install -m 0755 "$HERE/live-gate-watch.sh"      "$HOME/.local/bin/live-gate-watch.sh"
+# Per-workload live-gate presets (CAND_FENCE/CAND_PROBE/HEALTH) — host fallback; a workload may
+# ship its own `.live-gate` at its repo top to override (preferred). Read by live-gate-run.sh.
+mkdir -p "$HOME/.config/live-gate"
+install -m 0644 "$HERE/live-gate-presets/"*.env "$HOME/.config/live-gate/" 2>/dev/null || true
 
 # ---- systemd template units (refresh trigger + retry) ----
 install -m 0644 "$HERE/systemd-units/workload-refresh@.service"        "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE/systemd-units/workload-refresh@.timer"          "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.service"  "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.timer"    "$HOME/.config/systemd/user/"
+# Live-gate watcher (poll `live-validate` PRs + build/gate/verdict them on the host)
+install -m 0644 "$HERE/systemd-units/live-gate-watch.service"          "$HOME/.config/systemd/user/"
+install -m 0644 "$HERE/systemd-units/live-gate-watch.timer"            "$HOME/.config/systemd/user/"
 
 # ---- image signature verification scaffolding ----
 # Default policy: reject everything; then trust two repos unconditionally
@@ -354,6 +366,8 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
 done
 
 systemctl --user daemon-reload
+# Enable the live-gate watcher (polls `live-validate`-labelled PRs and builds/gates them on the host).
+systemctl --user enable --now live-gate-watch.timer
 
 PHASE "user 5/5 verify"
 bash "$HERE/verify.sh"
