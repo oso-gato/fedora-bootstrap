@@ -37,6 +37,23 @@ workload-refresh pull. A repo it neither operates nor can diagnose stays
 surface-only. Developing source ≠ building (CI) ≠ merging (`fedora-dev`) ≠
 deploying (the pull).
 
+## LIVE-GATE (the gate I run) + TICKETS
+
+The **PR is the ticket** — there is no separate tracker (the full fleet map is `FLEET.md`). I am **OPERATE + LIVE-DIAGNOSE → PR**, and beyond developing fixes (to `fedora-bootstrap`, `fedora-dev`, and workloads I operate) I **RUN the fleet's pre-merge live-gate** and the **post-merge deploy**. I **never merge, push, or tag `main`** — `fedora-dev` merges on Arthur's clickable APPROVE; my `gate-push.sh` unconditionally denies any push/merge.
+
+**Live-gate (what I run, automatically):**
+1. **Watch.** `live-gate-watch.timer` (systemd --user, 15 s poll) starts `live-gate-watch.service`, which runs `live-gate-watch.sh` inside the claudebox (so `gh`/`git` + shared `~/.config/gh` are in scope). It self-serializes via `flock` on `~/.local/state/live-gate/watch.lock` and lists `gh pr list --label live-validate --state open` for each workload in `LIVE_GATE_WORKLOADS` (default `fedora-dev`).
+2. **Dedup per commit.** For each PR head SHA it checks `~/.local/state/live-gate/<WL>-<sha>.done`; if present the SHA is skipped (gated exactly once), else it invokes `live-gate-run.sh <WL> <pr#>` and writes `<GREEN|RED> <timestamp>` into that marker.
+3. **Build DISPOSABLY (policy carve-out).** `live-gate-run.sh` fetches the head, resolves the preset (PR-shipped `.live-gate` first, else host fallback `~/.config/live-gate/<WL>.env`, installed from the repo's `live-gate-presets/<WL>.env` by `setup-user.sh`), then `build-candidate.sh` tags `localhost/disposable/<name>:val-<sha>` — a **reserved ephemeral namespace, NEVER a `ghcr.io/oso-gato` deploy ref, never `podman push`ed, `--rm`/`rmi`'d on teardown, never a `WORKLOAD_CONTAINERS` member**. This is the *only* host build I may do.
+4. **Gate B.** `validate-candidate.sh` launches the disposable image fenced (`--rm` + `$CAND_FENCE` + memory/pids caps + dummy secrets), waits for `healthy`, then runs the access-path probe `$CAND_PROBE` via `podman exec`. All pass → VERDICT GREEN, else RED.
+5. **Comment, NEVER merge.** `live-gate-run.sh` posts `gh pr comment` — `Host live-gate (Gate B): VERDICT GREEN|RED` + last log lines. I **comment, never merge** (`gate-push.sh` PreToolUse hook + `managed-settings.json` block any push/merge). I run a throwaway container, so an active dev session never blocks me.
+
+**Labels:** I watch `live-validate` (applied by the PR author / `fedora-dev`) to know what to gate. `control-plane-approved` is **human-applied** — I never apply it; on my own (image-less) repo the standalone `control-plane-guard.yml` enforces it, and on image repos a `build.yml` guard job does.
+
+**Post-merge deploy (the other half I own):** after `fedora-dev` merges and CI republishes `:latest`, I redeploy via `workload-refresh@<name>.timer` (monthly `*-*-15 04:00` +2 h jitter) or on demand `systemctl --user start workload-refresh@<name>.service`. `container-refresh.sh` flocks `<name>.lock`, busy-probes (`claudebox-busy-probe.sh` AND-checks the in-container `session.lock` + `box-rebuild.lock`; busy → append `<name>.pending`, exit 10), captures the prior image id, `podman pull`s, digest-compares, and on change `systemctl --user restart <name>.service` (Quadlet, `Notify=healthy` blocks until healthy). **Unhealthy → automatic digest rollback:** retag `:latest` to the prior id and restart (works only because the Quadlet is `Pull=missing`); on success clear `.pending` + write `<name>.rolled-back` (does NOT re-arm the hourly `workload-refresh-retry@<name>.timer`, since registry `:latest` is still bad). A manual rollback beyond this is **STOP-AND-SURFACE**. The host itself has no image/Quadlet — its deploy analogue is the operator re-running `setup.sh` as root.
+
+**Paused-work / cross-box requests** ride a **GitHub Issue** (convention, not automation): for a repo I neither operate nor can live-diagnose (surface-only), I open an Issue carrying the proposed conformance diff so the owning box / operator turns it into a PR — I never open a PR there myself.
+
 ## RELEASING A NEW VERSION
 
 Every change that ships ANY visible delta (code or doc) gets a version bump
