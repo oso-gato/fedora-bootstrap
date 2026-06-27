@@ -501,21 +501,56 @@ if [ -z "${TMUX:-}" ] && command -v tmux >/dev/null && { [ -n "${SSH_TTY:-}" ] |
     exec tmux new-session -t main -s "c$$" \; set-option destroy-unattached on
 fi
 EOS
-# tmux server config: per-client geometry isolation + clean repaint. default-
-# terminal: a present, 256-colour TERM for programs inside tmux (compiled
-# default is the bare "screen"). window-size=smallest + aggressive-resize: if
-# two clients ever view the SAME window at once, fit it to the smaller so
-# neither is painted on a foreign grid (no garble; the larger screen letterboxes)
-# — the per-session attach above already makes the common case full-size.
-# client-attached/-resized -> refresh-client: force a full server-driven repaint
-# on every attach AND resize, so a client that won't self-redraw (xterm.js /
-# WebSSH) still receives a complete clean frame.
+# tmux server config: multi-device geometry policy + clean co-view. A tmux window
+# has exactly ONE size shared by every client viewing it (verified against tmux
+# 3.6 source + a live multi-client harness), so differently-sized devices on the
+# SAME tab cannot each be full-size — unfixable in tmux. What we control is which
+# single size wins and how the mismatched client degrades (a smaller client gets
+# a clean cursor-following crop; a larger one shows the content top-left and fills
+# the surplus with fill-character — actively redrawn each frame, NOT garbage; the
+# compiled default is the `·` middle-dot, the "screen full of dots" garble look).
+#   window-size=latest (DEFAULT): the session follows the client that most
+#     recently sent INPUT — type on the Mac and it's Mac-sized; pick up the iPad
+#     and type and it rescales to the iPad. Both stay connected (mosh-friendly);
+#     the idle device blank-letterboxes/crops and reclaims full size on its next
+#     keystroke; when the active device disconnects the session falls to whoever
+#     remains. This is the seamless macOS<->iPad handoff.
+#   fill-character ' ': idle larger device's surplus is BLANK, not `·`.
+#   aggressive-resize on: devices parked on DIFFERENT tabs each get their own size.
+#   client-attached/-resized -> refresh-client: full server-driven repaint on
+#     every attach/resize so a client that won't self-redraw (xterm.js / WebSSH /
+#     mosh) gets a clean frame after each rescale.
+#   prefix+g cycles latest -> smallest (every device sees the WHOLE session, sized
+#     to the smallest, big screens blank-letterbox) -> largest (biggest wins,
+#     smaller devices crop) -> latest.
 tee /etc/tmux.conf >/dev/null <<'EOS'
 set -g default-terminal "tmux-256color"
-set -g window-size smallest
+set -g window-size latest
 setw -g aggressive-resize on
+setw -g fill-character ' '
 set-hook -g client-attached 'refresh-client'
 set-hook -g client-resized  'refresh-client'
+set -g @coview latest
+
+# prefix+g: cycle the multi-device geometry policy (see comment above install).
+bind-key g {
+  if-shell -F '#{==:#{@coview},latest}' {
+    set -g window-size smallest
+    set -g @coview smallest
+    display-message 'co-view: SMALLEST - every device sees the whole session; big screens blank-letterbox'
+  } {
+    if-shell -F '#{==:#{@coview},smallest}' {
+      set -g window-size largest
+      set -g @coview largest
+      display-message 'co-view: LARGEST - biggest connected screen wins; smaller devices show a cropped view'
+    } {
+      set -g window-size latest
+      set -g @coview latest
+      display-message 'co-view: LATEST - the device you last typed on wins; whole session rescales to it'
+    }
+  }
+  refresh-client -S
+}
 EOS
 # Stand up the user's systemd manager + D-Bus user bus NOW, as root, so the rootless
 # phase (setup-user.sh, run via `su - $U`) finds the bus already up — no session-less
