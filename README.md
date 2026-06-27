@@ -753,8 +753,17 @@ mosh core@<vps>.<tailnet>.ts.net     # roaming-resilient; install via brew
 ```
 
 - **Key-only**: your keys come from `github.com/oso-gato.keys` (Day-0 sync). On macOS, store them in 1Password and use its SSH agent — see [macOS section](#macos--log-in-via-the-1password-ssh-agent) below.
-- **tmux**: every login auto-attaches a tmux session named after the authenticating key (`oSo`/`Alchemist`/`Fatima`). Sessions persist across disconnects and outlive box rebuilds and tailscaled restarts. Detach with `Ctrl-b d`; reattach by logging in again or `tmux attach -t <name>`. All keys share one tmux server, so `tmux attach -t oSo` hops between devices' sessions.
+- **tmux**: every login auto-attaches to **one shared `main` session group** — each connection gets its own view (`c<pid>`) of the same windows, so you can reach the same work from several devices at once. Sessions persist across disconnects and outlive box rebuilds and tailscaled restarts. Detach with `Ctrl-b d`; reattach by logging in again. See **Multi-device sessions** below for how the geometry follows whichever device you're actively typing on. (`LOGIN_KEY` is retained for per-device audit only, not session routing.)
 - **`passwd core`** (Day 0) set the password for sudo and Cockpit. SSH stays key-only.
+
+### Multi-device sessions (tmux geometry)
+
+Because every login joins one shared `main` tmux group, you can reach the same work from several devices at once (a macOS terminal, an iPad, …). A tmux **window has exactly one size** shared by every client viewing it, so the session is configured **`window-size latest`**: the **device you most recently typed on wins**, and the whole session rescales to that device's geometry.
+
+- **Switching devices is automatic.** Type on the Mac → the session is Mac-sized; pick up the iPad and type → it rescales to the iPad. A **fresh** login wins **on connect** (no keystroke needed); an **already-connected** device (e.g. a backgrounded mosh session) wins on its **next keystroke** — any key (even an arrow or `Esc`), no command required.
+- **The idle device never garbles.** A larger idle device shows the active (smaller) view top-left with a **blank** letterbox around it (`fill-character ' '`); a smaller idle device shows a clean **crop** that pans to the cursor. When the active device disconnects, the session falls back to whichever device remains.
+- **Inherent limit:** two **different-sized** devices viewing the **same** tab can't both be full-size at once — impossible in tmux (one window = one size). The active one is always full; the other degrades cleanly (never garbled). Devices on **different tabs** are each full-size.
+- **Switch the policy live:** `prefix + g` cycles `latest → smallest → largest`. `smallest` = every device sees the whole session sized to the smallest connected device (good for watching on a phone while working on a desktop); `largest` = the biggest screen always wins.
 
 ### Claude Code — just `claude`
 
