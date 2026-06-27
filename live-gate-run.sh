@@ -32,7 +32,11 @@ BUILDER="$HOME/.local/bin/build-candidate.sh"; [ -x "$BUILDER" ] || BUILDER="$HE
 [ -x "$BUILDER" ] || { echo "FATAL: build-candidate.sh not found (looked in ~/.local/bin and $HERE)"; exit 2; }
 
 SLUG="oso-gato/$REPO_NAME"
-SRC="$(mktemp -d)"; LOG="$(mktemp)"; PRESET="$(mktemp)"
+# The ephemeral PR-head tree lives under ONE identifiable home-volume dir so the crash-orphan sweeper
+# (throwaway-sweep.sh) can reap a tree this run leaks on `kill -9`/OOM (the EXIT trap only fires on a
+# clean exit). The tiny LOG/PRESET temp FILES stay in $TMPDIR — they are bytes, not a quota concern.
+FD_THROWAWAY_TMPDIR="${FD_THROWAWAY_TMPDIR:-$HOME/.cache/fd-throwaway}"; mkdir -p "$FD_THROWAWAY_TMPDIR" 2>/dev/null || true
+SRC="$(mktemp -d "$FD_THROWAWAY_TMPDIR/lg.XXXXXX")"; LOG="$(mktemp)"; PRESET="$(mktemp)"
 trap 'rm -rf "$SRC" "$LOG" "$PRESET"' EXIT
 
 # ---- CLONE-ON-DEMAND: fetch ONLY the PR head into the ephemeral tree (no pre-placed clone) ----
