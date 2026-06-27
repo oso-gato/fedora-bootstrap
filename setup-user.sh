@@ -226,11 +226,6 @@ install -m 0755 "$HERE/claudebox-busy-probe.sh" "$HOME/.local/bin/claudebox-busy
 # previously uninstalled (an orphan with no caller); install both so the live-gate harness can call them.
 install -m 0755 "$HERE/validate-candidate.sh"   "$HOME/.local/bin/validate-candidate.sh"
 install -m 0755 "$HERE/build-candidate.sh"      "$HOME/.local/bin/build-candidate.sh"
-# Throwaway-churn reaper: build-candidate.sh persists a dnf RPM bind cache + the podman layer cache
-# across candidate builds; throwaway-sweep.sh reaps the orphans a `kill -9`/crash leaves (the EXIT
-# traps miss) and caps both persistent caches so churn can't exhaust the VPS quota. Invoked at
-# live-gate-watch.sh start (self-throttled); may also be wired to a periodic timer/cron.
-install -m 0755 "$HERE/throwaway-sweep.sh"      "$HOME/.local/bin/throwaway-sweep.sh"
 # Pre-merge live-gate loop transport (Model C, dynamic): live-gate-watch.sh discovers ALL open
 # `live-validate`-labelled PRs ORG-WIDE in one query (no workload list), dedups per-(repo,commit);
 # live-gate-run.sh gates ONE PR — fetches the PR head into an ephemeral tree ON DEMAND (no
