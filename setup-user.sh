@@ -253,12 +253,17 @@ install -m 0644 "$HERE/systemd-units/live-gate-watch.service"          "$HOME/.c
 install -m 0644 "$HERE/systemd-units/live-gate-watch.timer"            "$HOME/.config/systemd/user/"
 
 # ---- image signature verification scaffolding ----
-# Default policy: reject everything; then trust two repos unconditionally
+# Default policy: reject everything; then trust THREE repos unconditionally
 # (insecureAcceptAnything): ghcr.io/oso-gato/* (the production workloads that
-# actually RUN) and registry.fedoraproject.org/fedora (the class-(a) Fedora BASE
+# actually RUN); registry.fedoraproject.org/fedora (the class-(a) Fedora BASE
 # the validation/ host-validation spikes+gates pull as disposable test fixtures —
-# never a run-set image). Plus containers-storage (local save/load, for the
-# throwaway tar cache the fixtures are cached in). See the merge block below.
+# never a run-set image); and quay.io/fedora/fedora-toolbox (the claudebox base
+# pinned in distrobox.ini — distrobox RE-PULLS it on every `claudebox-rebuild`, so
+# without this scope the rebuild fails `Source image ... is rejected by policy` the
+# moment the cached toolbox layer is gone. The first day-zero assemble happens to
+# run BEFORE this file exists, which is exactly why only SUBSEQUENT rebuilds broke).
+# Plus containers-storage (local save/load, for the throwaway tar cache the
+# fixtures are cached in). See the merge block below.
 #
 # DO NOT add JSON "comment" keys (e.g. "//") inside policy.json: podman's
 # containers/image policy parser is strict and REJECTS unknown keys, which makes
@@ -286,6 +291,7 @@ if [ ! -e "$HOME/.config/containers/policy.json" ]; then
         "docker": {
             "ghcr.io/oso-gato": [{ "type": "insecureAcceptAnything" }],
             "registry.fedoraproject.org/fedora": [{ "type": "insecureAcceptAnything" }],
+            "quay.io/fedora/fedora-toolbox": [{ "type": "insecureAcceptAnything" }],
             "": [{ "type": "reject" }]
         },
         "containers-storage": { "": [{ "type": "insecureAcceptAnything" }] }
@@ -308,6 +314,12 @@ d = t.setdefault("docker", {})
 changed = False
 if "registry.fedoraproject.org/fedora" not in d:
     d["registry.fedoraproject.org/fedora"] = [{"type": "insecureAcceptAnything"}]; changed = True
+if "quay.io/fedora/fedora-toolbox" not in d:
+    # the claudebox base pinned in distrobox.ini; distrobox re-pulls it on every
+    # `claudebox-rebuild`, so a default-reject policy that lacks this scope breaks
+    # EVERY rebuild after the first (the first day-zero assemble runs before this
+    # file exists). REPAIRS an already-deployed host in place on the next setup.sh.
+    d["quay.io/fedora/fedora-toolbox"] = [{"type": "insecureAcceptAnything"}]; changed = True
 cs = t.get("containers-storage")
 if cs is None:
     t["containers-storage"] = {"": [{"type": "insecureAcceptAnything"}]}; changed = True
