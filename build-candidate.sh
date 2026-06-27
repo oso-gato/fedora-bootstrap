@@ -1,62 +1,75 @@
 #!/usr/bin/env bash
-# build-candidate.sh — the pre-merge BUILD step the host live-gate needs.
+# build-candidate.sh — build ONE disposable candidate TARGET on the host engine + live-gate it.
 #
-# Build a workload's candidate as a DISPOSABLE image on the host's TOP-LEVEL engine,
-# live-gate it via validate-candidate.sh, then discard it (base layers stay cached for the
-# next churn). This is the host's half of the pre-merge loop: CI publishes nothing pullable
-# on an OPEN PR (build.yml push:false on pull_request) and the dev box's NESTED engine cannot
-# live-run a PID-1 image (own-netns ping_group_range RO; own-pidns mount-proc denied), so the
-# host is the ONLY surface that can build the candidate AND faithfully run it for a verdict.
+# The host's half of the pre-merge loop: CI publishes nothing pullable on an OPEN PR
+# (build.yml push:false on pull_request) and the dev box's NESTED engine cannot live-run a PID-1
+# image (own-netns ping_group_range RO; own-pidns mount-proc denied), so the host is the ONLY
+# surface that can build the candidate AND faithfully run it for a verdict.
 #
 # Sanctioned by policy/CLAUDE.md (v1.2.25) DISPOSABLE-VALIDATION-BUILD carve-out — this build:
-#   - is tagged localhost/disposable/<name>:val-<sha>   (NEVER a ghcr.io/oso-gato deploy ref)
+#   - is tagged localhost/disposable/<name>:<suffix>    (NEVER a ghcr.io/oso-gato deploy ref)
 #   - is NEVER `podman push`ed                          (the host holds no write:packages cred)
 #   - is run --rm by the gate and `rmi`'d on teardown
 #   - is NEVER a WORKLOAD_CONTAINERS member / never enters the workload-refresh deploy path
 #
+# Model C (dynamic): the orchestrator (live-gate-run.sh) fetches the PR head into an EPHEMERAL
+# tree once and calls this builder ONCE PER declared build target (CFILE varies per target — e.g.
+# fedora-desktop's xrdp=Containerfile vs grd=Containerfile.grd). So the primary path is
+# "build context already materialized"; the legacy "git clone + ref" path is kept for standalone
+# manual runs.
+#
 # Usage:
-#   build-candidate.sh <name> <repo-dir> [git-ref] [Containerfile]
+#   build-candidate.sh <name> <src> [git-ref] [Containerfile]
 #     <name>       workload name (disposable tag + log only; a bare name, never a ref)
-#     <repo-dir>   a local git clone of the workload repo
-#     [git-ref]    optional ref to build (e.g. 'pull/31/head', a branch, a sha). A 'pull/N/head'
-#                  ref is fetched first. Omit = build the clone's current HEAD.
-#     [Containerfile]  default: Containerfile
-#   env passed THROUGH to validate-candidate.sh:  CAND_FENCE  CAND_PROBE  HEALTH (as $2)
-#   env:  BUILD_ARGS (extra `--build-arg ...`)   BUILD_ISOLATION (e.g. chroot; default = engine default)
+#     <src>        EITHER a materialized source tree (the build context — model C / default)
+#                  OR a local git clone (combined with [git-ref] for the legacy/manual path)
+#     [git-ref]    optional; ONLY with a git-clone <src>: ref to fetch+archive (e.g. pull/31/head).
+#                  Omit (the model-C path) => <src> IS the build context as-is.
+#     [Containerfile]  default: $CAND_CFILE, else Containerfile
+#   env passed THROUGH to validate-candidate.sh: CAND_FENCE CAND_PROBE HEALTH (as $2)
+#                                                CAND_SECRET_ENV CAND_SECRET_MOUNT
+#                                                CAND_MEMORY CAND_PIDS CAND_HEALTH_*
+#   env:  CAND_TAG (disposable tag suffix; default val-<sha>)   BUILD_ARGS   BUILD_ISOLATION
 set -uo pipefail
 
-NAME="${1:?usage: build-candidate.sh <name> <repo-dir> [git-ref] [Containerfile]}"
-REPO="${2:?repo-dir required}"
+NAME="${1:?usage: build-candidate.sh <name> <src> [git-ref] [Containerfile]}"
+SRC_IN="${2:?src (a materialized tree OR a git clone) required}"
 REF_IN="${3:-}"
-CFILE="${4:-Containerfile}"
+CFILE="${4:-${CAND_CFILE:-Containerfile}}"
 
 # Carve-out guard: <name> must be a bare workload name, so the tag can only be localhost/disposable/<name>.
 case "$NAME" in */*|*:*|ghcr.io*|registry.*) echo "FATAL: <name> must be a bare workload name, not a ref ($NAME)"; exit 2;; esac
-[ -d "$REPO/.git" ] || { echo "FATAL: $REPO is not a git clone"; exit 2; }
+[ -d "$SRC_IN" ] || { echo "FATAL: $SRC_IN is not a directory"; exit 2; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 GATE="$HERE/validate-candidate.sh"
 [ -x "$GATE" ] || GATE="$HOME/.local/bin/validate-candidate.sh"
 [ -x "$GATE" ] || { echo "FATAL: validate-candidate.sh not found (looked in $HERE and ~/.local/bin)"; exit 2; }
 
-# Resolve the ref (fetch a PR head first if asked).
-if [ -n "$REF_IN" ]; then
+# Resolve the build context + a SHA for the tag.
+#   (1) legacy/standalone: <src> is a git clone + [git-ref] given -> fetch the ref, archive it to a
+#       throwaway tree (no working-tree mutation). The throwaway tree is cleaned on exit.
+#   (2) model C (default): <src> IS the build context (an ephemeral PR-head tree the caller owns +
+#       cleans). No archive, no extra temp dir -> nothing for THIS script to leak.
+CLEAN_SRC=""
+if [ -n "$REF_IN" ] && [ -d "$SRC_IN/.git" ]; then
   echo "== fetch $REF_IN =="
-  git -C "$REPO" fetch -q origin "$REF_IN" || { echo "FATAL: git fetch $REF_IN failed"; exit 2; }
-  REF=FETCH_HEAD
+  git -C "$SRC_IN" fetch -q origin "$REF_IN" || { echo "FATAL: git fetch $REF_IN failed"; exit 2; }
+  SHA="$(git -C "$SRC_IN" rev-parse --short FETCH_HEAD)" || { echo "FATAL: cannot resolve ref"; exit 2; }
+  SRC="$(mktemp -d)"; CLEAN_SRC="$SRC"
+  git -C "$SRC_IN" archive --format=tar FETCH_HEAD | tar -x -C "$SRC" || { echo "FATAL: archive/extract failed"; exit 2; }
 else
-  REF=HEAD
+  SRC="$SRC_IN"
+  if [ -d "$SRC/.git" ]; then SHA="$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo nogit)"; else SHA=nogit; fi
 fi
-SHA="$(git -C "$REPO" rev-parse --short "$REF")" || { echo "FATAL: cannot resolve ref"; exit 2; }
-TAG="localhost/disposable/${NAME}:val-${SHA}"   # carve-out namespace — never pushed, never a deploy ref
 
-# THROWAWAY SOURCE TREE: export the ref to a temp dir (no working-tree mutation). Discarded on exit;
-# the clone's git objects + the engine's layer cache persist, so N churns reuse the warm base.
-SRC="$(mktemp -d)"
-trap 'rm -rf "$SRC"; podman rmi -f "$TAG" >/dev/null 2>&1 || true' EXIT
-git -C "$REPO" archive --format=tar "$REF" | tar -x -C "$SRC" || { echo "FATAL: archive/extract failed"; exit 2; }
+TAG="localhost/disposable/${NAME}:${CAND_TAG:-val-${SHA}}"   # carve-out namespace — never pushed, never a deploy ref
+# shellcheck disable=SC2064
+trap "[ -n \"$CLEAN_SRC\" ] && rm -rf \"$CLEAN_SRC\"; podman rmi -f \"$TAG\" >/dev/null 2>&1 || true" EXIT
 
-echo "== build DISPOSABLE candidate $TAG (host top-level engine; cache retained, no --no-cache) =="
+[ -f "$SRC/$CFILE" ] || { echo "FATAL: $CFILE not found in candidate tree"; echo "VERDICT: RED (missing $CFILE)"; exit 1; }
+
+echo "== build DISPOSABLE candidate $TAG (Containerfile=$CFILE; host top-level engine; cache retained, no --no-cache) =="
 iso=(); [ -n "${BUILD_ISOLATION:-}" ] && iso=(--isolation="$BUILD_ISOLATION")
 # shellcheck disable=SC2086
 if ! podman build "${iso[@]}" ${BUILD_ARGS:-} -t "$TAG" -f "$SRC/$CFILE" "$SRC"; then
@@ -67,5 +80,5 @@ echo "== live-gate the candidate via Gate B (validate-candidate.sh) =="
 "$GATE" "$TAG" "${HEALTH:-}"
 rc=$?
 
-echo "candidate ${NAME}@${SHA}: gate exit=$rc  (disposable image rmi'd on exit; base layers cached)"
+echo "candidate ${NAME}@${SHA} [${CFILE}]: gate exit=$rc  (disposable image rmi'd on exit; base layers cached)"
 exit "$rc"

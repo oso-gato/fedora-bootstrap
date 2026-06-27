@@ -1,45 +1,83 @@
 #!/usr/bin/env bash
-# live-gate-watch.sh — poll workload repos for PRs labelled `live-validate` and live-gate each
+# live-gate-watch.sh — DYNAMIC org-wide discovery of PRs labelled `live-validate`, live-gating each
 # new candidate commit exactly once. Driven by live-gate-watch.timer (systemd --user).
 #
-# The pre-merge loop's transport (with live-gate-run.sh): fedora-dev opens/labels a PR -> this
-# picks it up -> builds + gates the candidate DISPOSABLY on the host -> posts GREEN/RED back to the
+# Model C (repo-set-agnostic): instead of iterating a hard-coded workload list, this polls the WHOLE
+# org in ONE query for any open PR carrying the `live-validate` label, across EVERY repo. So as repos
+# are created / removed / renamed / merged, Arthur maintains NO list — labelling a PR is the entire
+# opt-in. The per-PR build/gate is clone-on-demand (live-gate-run.sh fetches the PR head into an
+# ephemeral tree), so a repo needs no pre-placed clone here either.
+#
+# The pre-merge loop's transport (with live-gate-run.sh): fedora-dev opens/labels a PR -> this picks
+# it up -> builds + gates the candidate DISPOSABLY on the host -> posts GREEN/RED/SKIPPED back to the
 # PR -> fedora-dev iterates (RED) or Arthur merges (GREEN). The host comments, NEVER merges.
 #
 # NOT gated on any workload's session: the gate runs a throwaway container that never touches the
-# running workload, so an active fedora-dev dev session never blocks validation (by design — the
-# loop's whole point is to validate WHILE fedora-dev is being worked in). Self-serializing so two
-# timer firings never overlap; per-commit `.done` marker so each SHA is gated exactly once.
+# running workload, so an active dev session never blocks validation (by design). Self-serializing
+# (flock) so two timer firings never overlap; per-(repo,SHA) `.done` marker so each commit is gated
+# exactly once.
+#
+# Optional safety/testing filter: set LIVE_GATE_WORKLOADS (space-separated bare repo names) to
+# RESTRICT discovery to those repos. Unset (the DEFAULT) = org-wide, no list.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RUNNER="$HOME/.local/bin/live-gate-run.sh"; [ -x "$RUNNER" ] || RUNNER="$HERE/live-gate-run.sh"
 STATE="$HOME/.local/state/live-gate"; mkdir -p "$STATE"
-# Workloads to watch (the host operates these). Override via LIVE_GATE_WORKLOADS (space-separated).
-read -r -a WORKLOADS <<< "${LIVE_GATE_WORKLOADS:-fedora-dev}"
+ORG="${LIVE_GATE_ORG:-oso-gato}"
+LABEL="${LIVE_GATE_LABEL:-live-validate}"
+
+# Optional allowlist FILTER (default: empty = org-wide). When set, discovery is restricted to it.
+declare -A ALLOW=(); ALLOW_ON=0
+if [ -n "${LIVE_GATE_WORKLOADS:-}" ]; then
+  ALLOW_ON=1; for w in $LIVE_GATE_WORKLOADS; do ALLOW["$w"]=1; done
+fi
 
 exec 9>"$STATE/watch.lock"
 flock -n 9 || { echo "[live-gate-watch] another run holds the lock; skipping"; exit 0; }
 [ -x "$RUNNER" ] || { echo "FATAL: live-gate-run.sh not found"; exit 2; }
 
-for WL in "${WORKLOADS[@]}"; do
-  REPO="$HOME/$WL"
-  [ -d "$REPO/.git" ] || { echo "[live-gate-watch] $WL: no clone at $REPO; skipping"; continue; }
-  prs="$(gh pr list --repo "oso-gato/$WL" --label live-validate --state open --json number,headRefOid 2>/dev/null)" \
-    || { echo "[live-gate-watch] $WL: gh pr list failed; skipping"; continue; }
-  mapfile -t rows < <(printf '%s' "$prs" | python3 -c 'import sys,json
-for p in json.load(sys.stdin): print(p["number"], p["headRefOid"])' 2>/dev/null)
-  [ "${#rows[@]}" -eq 0 ] && { echo "[live-gate-watch] $WL: no live-validate PRs"; continue; }
-  for row in "${rows[@]}"; do
-    num="${row%% *}"; sha="${row##* }"
-    marker="$STATE/${WL}-${sha}.done"
-    if [ -e "$marker" ]; then
-      echo "[live-gate-watch] $WL#$num @ ${sha:0:7} already gated ($(cat "$marker")); skip"
-      continue
-    fi
-    echo "[live-gate-watch] gating $WL#$num @ ${sha:0:7}"
-    if "$RUNNER" "$WL" "$num"; then v=GREEN; else v=RED; fi
-    printf '%s %s\n' "$v" "$(date -Iseconds 2>/dev/null || echo now)" > "$marker"
-    echo "[live-gate-watch] $WL#$num @ ${sha:0:7} -> $v"
-  done
+# ---- DISCOVERY: one org-wide query for ALL open `live-validate` PRs. `gh search prs` exposes
+# repository + number (NOT the head SHA — headRefOid is not a search JSON field), so resolve the
+# head SHA per PR with a cheap `gh pr view`. Fallback: the search/issues REST endpoint. ----
+rows=""
+if rows="$(gh search prs --owner "$ORG" --state open --label "$LABEL" \
+             --limit 200 --json repository,number 2>/dev/null)" && [ -n "$rows" ]; then
+  mapfile -t PRS < <(printf '%s' "$rows" | python3 -c 'import sys,json
+for p in json.load(sys.stdin): print(p["repository"]["name"], p["number"])' 2>/dev/null)
+else
+  echo "[live-gate-watch] gh search prs failed/empty; trying search/issues REST fallback"
+  rows="$(gh api -X GET search/issues -f q="org:$ORG is:pr is:open label:$LABEL" --paginate 2>/dev/null)" || {
+    echo "[live-gate-watch] discovery failed (both gh search prs and search/issues); skipping this poll"; exit 0; }
+  # repository_url tail = repo name; number = PR number.
+  mapfile -t PRS < <(printf '%s' "$rows" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+for it in d.get("items", []):
+    print(it["repository_url"].rsplit("/",1)[-1], it["number"])' 2>/dev/null)
+fi
+
+[ "${#PRS[@]}" -eq 0 ] && { echo "[live-gate-watch] no open $LABEL PRs in org:$ORG"; exit 0; }
+
+for row in "${PRS[@]}"; do
+  repo="${row%% *}"; num="${row##* }"
+  [ -n "$repo" ] && [ -n "$num" ] || continue
+  if [ "$ALLOW_ON" = 1 ] && [ -z "${ALLOW[$repo]:-}" ]; then
+    echo "[live-gate-watch] $repo#$num: not in LIVE_GATE_WORKLOADS allowlist; skip"; continue
+  fi
+  sha="$(gh pr view "$num" --repo "$ORG/$repo" --json headRefOid -q .headRefOid 2>/dev/null)" || sha=""
+  [ -n "$sha" ] || { echo "[live-gate-watch] $repo#$num: cannot resolve head SHA; skip this poll"; continue; }
+  marker="$STATE/${repo}-${sha}.done"
+  if [ -e "$marker" ]; then
+    echo "[live-gate-watch] $repo#$num @ ${sha:0:7} already gated ($(cat "$marker")); skip"
+    continue
+  fi
+  echo "[live-gate-watch] gating $repo#$num @ ${sha:0:7}"
+  "$RUNNER" "$repo" "$num"; rc=$?
+  case "$rc" in
+    0) v=GREEN;;
+    3) v=SKIP;;
+    *) v=RED;;
+  esac
+  printf '%s %s\n' "$v" "$(date -Iseconds 2>/dev/null || echo now)" > "$marker"
+  echo "[live-gate-watch] $repo#$num @ ${sha:0:7} -> $v"
 done
