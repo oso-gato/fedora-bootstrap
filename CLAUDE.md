@@ -224,6 +224,37 @@ desktop is a *virtual* display rendered in software (llvmpipe), reached only ove
 (ssh / RDP / VNC / web, over the tailnet or the hardened public doors). A change that requires a
 physical display, GPU, or seat is a **defect**, not an option.
 
+## PRINCIPLE 0 — THE SELF-SUSTAINING APPARATUS (primary purpose)
+
+`fedora-dev` + `fedora-bootstrap` are **ONE self-sustaining development apparatus** whose primary
+purpose is to **keep the human OUT of the loop until genuinely needed**; this box RUNS the live-gate
+(Gate B) that validates the loop. The agent works to an **AUTONOMY MANDATE** — it does most of the
+work and thinking, **builds 2–3 options, tests them (throwaway build + live-gate), discards what
+doesn't fit, and lands the answer itself** (it does not shop options); it recommends **and
+self-tests** its recommendation; it **tears down and rebuilds to a zero-base** rather than defending
+a first draft. Options-decisions to the human are **RARE**.
+
+**Engage the human for EXACTLY TWO reasons:** (1) **materially complete** → the clickable APPROVE to
+merge; (2) **materially blocked** → a genuine roadblock needing a decision. Status checks and "which
+should I do" are not reasons.
+
+**DEFINITION OF DONE** (all four): (1) the FULL objective is materially achieved (not a ~5% slice);
+(2) validated through the loop via **TWO-TIER validation** — **Tier 1 (DEFAULT): in-box** — the dev
+box's `podman build` IS the throwaway; it builds + validates + iterates GREEN in its own nested engine
+with NO host involvement, for everything it CAN build+validate. **Tier 2 (HOST, via the
+`live-validate` label) ONLY when** the dev box CANNOT build/validate the throwaway (e.g. the
+systemd-PID-1 GRD lineage the nested engine can't boot) OR for the FINAL pre-production shipment (the
+host runs a throwaway build, proves it LIVE on a real host, tears it down) → then the host live-gate
+verdict must be GREEN too. PROVEN, not merely built (where even the host can't gate it, strongest
+available validation + a host-validation handoff); (3) adheres to the BUILD PRINCIPLES below
+(incl. Principle 10 THROWAWAY TREE & CHURN); (4) a **TLDR** is written and
+the agent has **critically self-examined** it (options considered+discarded, reasoning, fit to both
+the design and the task objective, genuine gaps) — dry-run AS IF the human; if it fails its own
+scrutiny, return to the loop, don't present. The PR is the agent's **PROOF OF WORK**.
+
+Full text: `policy/CLAUDE.md` → **THE SELF-SUSTAINING APPARATUS — AUTONOMY MANDATE & DEFINITION OF
+DONE** (this box's PR-only / never-merge stop-points are unchanged — see PIPELINE CONTEXT above).
+
 ## BUILD PRINCIPLES (binding for every code change)
 
 | # | Principle | Rule |
@@ -237,6 +268,7 @@ physical display, GPU, or seat is a **defect**, not an option.
 | 7 | EXPOSURE | Public IP carries key-only ssh and mosh ONLY. Cockpit and every sensitive port are tailnet-only. etserver is never installed (replaced fleet-wide by mosh). |
 | 8 | VALIDATE | setup.sh ends with verify.sh; a bootstrap is done when every check PASSes. **Prove runtime/terminal behaviour empirically, not by reasoning:** for tmux multi-client geometry, TUI redraw, and the like, drive multiple sized PTY clients with a real harness and assert the actual bytes each client renders (a naive byte VT model mis-reads UTF-8 fills like `·` as garbage) — not just a reported window size. |
 | 9 | LEAST PRIVILEGE / LAYERS | Provisioning splits by identity: the SYSTEM layer (packages, /etc, system services) runs as root once via setup-host.sh; the ROOTLESS layer (podman, distrobox, Claude Code) runs as the operating user via setup-user.sh. The user is a password-gated `wheel` admin with NO blanket NOPASSWD; the in-box agent gets only a scoped passwordless allowlist (policy/sudoers.claudebox), grown solely by committing to the repo, and is OS-blocked from everything else (host installs stay hard-denied). Privileged files are written in place by root, never staged via a user-owned /tmp file. |
+| 10 | THROWAWAY TREE & CHURN | Validate every build as a DISPOSABLE throwaway, never against the live tree. Use the LIVE tree where possible; for anything that must DIFFER, bolt on a SEPARATE, TEMPORARY throwaway tree that (a) **NEVER mutates the IMMUTABLE live tree** — host + dev-container base are immutable, so the throwaway tree + all build caches live on the **WRITABLE home volume**; (b) **STILL obeys Principle 2 PROVENANCE** — class a/b/c, GPG/signature/checksum verified, NO loosening because it's a throwaway; (c) is **THROWN AWAY** after the build (`localhost/disposable/<name>:val-<sha>`, never pushed, `--rm` + `rmi`'d; temp tree removed on teardown). **CHURN BALANCE:** persist the ONE durable input — the dnf PACKAGE CACHE (a plain BIND dir on the home volume, **NOT an image layer**, so it survives `rmi` and EVERY disposal) — and let everything else (candidate image, its layers, temp tree, run container) be EPHEMERAL by design. Still structure Containerfiles **HEAVY/STABLE-EARLY** (base, dnf install, class-(c) artifact fetch+verify) and **CHURN-LATE** (COPY'd scripts/config), and **NEVER `--no-cache` / prune during churn** (reserved for the monthly clean `--no-cache` rebuild). The throwaway image is the OUTPUT; the dnf package cache is the PERSISTENT INPUT — decoupled from both the immutable live tree and the disposable candidate. **CHURN MECHANISM (proven, no re-download across N PRs):** per-PR/per-SHA disposal removes the candidate image + temp tree — and, when it was the sole referrer, its intermediate layers too — **but NEVER the dnf package cache** (not keyed to PR/SHA; SHARED across all iterations). The design is **ONE persistent thing, everything else ephemeral by design: (1) the persistent dnf PACKAGE CACHE — the ROBUST mechanism** (bind-mounted `-v <home>/.cache/fd-dnf:/var/cache/libdnf5:rw`; a plain dir, NOT an image layer, surviving `rmi` and every disposal): when the dnf install LINE changes (an add-on PR) the layer re-runs but RPMs are **served from cache, not re-downloaded** — PROVEN a forced dnf re-run downloaded **0 B (vs 9.4 MiB cold), 3.7× faster**; only a genuinely-new package downloads once. (buildah `--mount=type=cache` does NOT work under `--isolation=chroot`, verified — the bind `-v` package cache is the mechanism.) **(2) EPHEMERAL LAYERS — ephemeral BY DESIGN, an ADVANTAGE:** a throwaway's layers are pruned with its sole candidate's `rmi`, so (a) layer storage **self-bounds** (no accumulation / no layer-cache to GC), (b) each throwaway **rebuilds FRESH** from the package cache → CURRENT package versions, no stale-frozen-layer risk (freshness for free), (c) the only cost is a few local **CPU-seconds (~3.6 s warm), never bandwidth**. While a candidate image lives (churn-late edits, or a kept image), its layer cache also lets the rebuild skip the dnf `RUN` — a free accelerator — but nothing relies on layers surviving disposal. **ISOLATION:** each build has its OWN throwaway tree + unique `val-<sha>` tag + unique `vcand-$$` run container (no cross-build contamination), and the dnf package cache (and any live layer cache) is content-addressed so it cannot serve a wrong version. **STORAGE SAFETY (limited VPS):** (a) candidate image+tree self-destruct via `trap … EXIT` (GREEN/RED/error); (b) an ORPHAN SWEEPER reaps `kill -9`/crash leaks (stale `localhost/disposable/*`, `vcand-*`, orphan temp dirs) at watcher start + periodically; (c) a BOUNDED cache-GC caps the persistent dnf package cache age-then-size (RPMs >45 days pruned first, then LRU size-prune to ≤15 GB; both overridable env) so it never exhausts the quota — layers self-bound via `rmi`, dangling ones swept opportunistically. |
 
 ### Class-(c) sources — the bounded last-resort exception (fleet-wide; identical in fedora-desktop + fedora-dev + fedora-bootstrap)
 
