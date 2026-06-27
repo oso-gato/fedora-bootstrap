@@ -37,6 +37,38 @@ workload-refresh pull. A repo it neither operates nor can diagnose stays
 surface-only. Developing source ≠ building (CI) ≠ merging (`fedora-dev`) ≠
 deploying (the pull).
 
+The dev↔host loop runs autonomously EXCEPT the final merge: develop → open PR
+(feature pushes are autonomous) → label it `live-validate` → the host live-gate
+(Gate B) DISCOVERS it ORG-WIDE by that label (no repo list to maintain), fetches
+the PR head on-demand, applies a STRUCTURAL GUARD (only builds a candidate
+carrying a `Containerfile`/`.live-gate`, else skips cleanly), builds it DISPOSABLY
+per the repo's own in-repo `.live-gate` contract (PARSED, never executed) under
+loopback-only fences, and posts a GREEN/RED verdict comment → iterate (RED: push
+a fix, or SUPERSEDE the branch if the approach was wrong; GREEN: BUILD UPON it)
+until green → Arthur's discrete clickable APPROVE → fedora-dev merges. The human
+is OUT of the per-iteration loop — only the merge is a click. Repos are discovered
+DYNAMICALLY: create/rename/merge/delete freely; enroll one just by labelling its
+PR `live-validate` and shipping a `.live-gate`. On the host this is wired by
+`live-gate-watch.sh` → `live-gate-run.sh` → `build-candidate.sh` +
+`validate-candidate.sh` (the host comments the verdict, never merges; no per-repo
+clone or workload list is maintained — discovery is the org-wide label query).
+
+**Post-merge deploy — the other half I own.** Once `fedora-dev` merges and CI
+republishes `:latest`, I redeploy — the only box that touches the live host. A
+workload refreshes via `workload-refresh@<name>.timer` (monthly `*-*-15 04:00`
++2 h jitter) or on demand `systemctl --user start workload-refresh@<name>.service`.
+`container-refresh.sh` flocks `<name>.lock`, busy-probes (`claudebox-busy-probe.sh`
+AND-checks the in-container `session.lock` + `box-rebuild.lock`; busy → append
+`<name>.pending`, exit 10), captures the prior image id, `podman pull`s,
+digest-compares, and on change `systemctl --user restart <name>.service` (Quadlet,
+`Notify=healthy` blocks until healthy). **Unhealthy → automatic digest rollback:**
+retag `:latest` back to the prior id and restart (works only because the Quadlet is
+`Pull=missing`); on success clear `.pending` + write `<name>.rolled-back` (and does
+NOT re-arm the hourly `workload-refresh-retry@<name>.timer`, since registry `:latest`
+is still bad). A manual rollback beyond this is **STOP-AND-SURFACE**. The host
+itself has no image/Quadlet — its deploy analogue is the operator re-running
+`setup.sh` as root.
+
 ## RELEASING A NEW VERSION
 
 Every change that ships ANY visible delta (code or doc) gets a version bump
@@ -203,7 +235,7 @@ physical display, GPU, or seat is a **defect**, not an option.
 | 5 | NO SECRETS | No passwords, keys, or tokens in this repo, ever. Tailscale auth is interactive or via TS_AUTHKEY env at run time. |
 | 6 | GUARDRAILS ARE CODE | Claude Code's law lives in policy/ (enterprise tier: /etc/claude-code/ inside the box) and is re-stamped on every setup.sh run. Changing the rules = changing this repo. |
 | 7 | EXPOSURE | Public IP carries key-only ssh and mosh ONLY. Cockpit and every sensitive port are tailnet-only. etserver is never installed (replaced fleet-wide by mosh). |
-| 8 | VALIDATE | setup.sh ends with verify.sh; a bootstrap is done when every check PASSes. |
+| 8 | VALIDATE | setup.sh ends with verify.sh; a bootstrap is done when every check PASSes. **Prove runtime/terminal behaviour empirically, not by reasoning:** for tmux multi-client geometry, TUI redraw, and the like, drive multiple sized PTY clients with a real harness and assert the actual bytes each client renders (a naive byte VT model mis-reads UTF-8 fills like `·` as garbage) — not just a reported window size. |
 | 9 | LEAST PRIVILEGE / LAYERS | Provisioning splits by identity: the SYSTEM layer (packages, /etc, system services) runs as root once via setup-host.sh; the ROOTLESS layer (podman, distrobox, Claude Code) runs as the operating user via setup-user.sh. The user is a password-gated `wheel` admin with NO blanket NOPASSWD; the in-box agent gets only a scoped passwordless allowlist (policy/sudoers.claudebox), grown solely by committing to the repo, and is OS-blocked from everything else (host installs stay hard-denied). Privileged files are written in place by root, never staged via a user-owned /tmp file. |
 
 ### Class-(c) sources — the bounded last-resort exception (fleet-wide; identical in fedora-desktop + fedora-dev + fedora-bootstrap)
@@ -259,6 +291,10 @@ rule is carried for fleet parity so any future need inherits the identical bound
 | selinux-autoenforce.sh | drives the one-time SELinux disabled→enforcing convergence (soak-confirm + flip; post-enforce health check + auto-revert). Installed to `/usr/local/sbin/selinux-autoenforce`; invoked by the **four** `selinux-*` system units `setup-host.sh` stamps (`selinux-enforce.timer` + `-flip.service`; `selinux-postenforce.timer` + `.service`) + a `/var/lib/fedora-bootstrap/selinux-chain.state` marker. The repo's first **system-scoped** stamped units (workload-refresh units are user-scoped). |
 | container-refresh.sh | per-workload refresh: busy-probe + pull + digest compare + `systemctl --user restart <name>.service` + rollback on health failure |
 | claudebox-busy-probe.sh | generic busy probe — `podman exec` + AND-check session.lock + box-rebuild.lock; exit 0/1/2 = idle/busy/broken |
+| live-gate-watch.sh | live-gate DISCOVERY (Gate B). One org-wide `gh` query for every `live-validate`-labelled open PR (no repo list), resolves each head SHA, per-`(repo,SHA)` `.done` dedup + `flock` self-serialize, invokes `live-gate-run.sh`. Runs inside claudebox (needs `gh`/`git`; drives the host engine via `CONTAINER_HOST`); a `systemd --user` timer. `LIVE_GATE_WORKLOADS` is an optional allowlist FILTER (unset = org-wide) |
+| live-gate-run.sh | clone-on-demand + orchestration for one PR: fetches ONLY the PR head into an ephemeral tree, applies the STRUCTURAL GUARD (gateable only with a top-level `.live-gate`/`Containerfile*`, else neutral `SKIPPED`), PARSES the in-repo `.live-gate` (never `source`s it), builds + gates every declared target, posts the combined GREEN/RED verdict comment, tears the tree down. The host comments, never merges |
+| build-candidate.sh | pre-merge BUILD step: exports a PR ref to a throwaway tree, `podman build`s a DISPOSABLE candidate (`localhost/disposable/<name>:val-<sha>`, never pushed, `--rm`/`rmi`'d; base layers stay cached), hands it to `validate-candidate.sh`. Sanctioned by the v1.2.25 carve-out |
+| validate-candidate.sh | Gate B itself: runs the disposable candidate fenced (`CAND_FENCE`, loopback-only, no real secrets) and probes its OWN loopback (`CAND_PROBE` — does it actually serve, not just health) → PASS/FAIL |
 | systemd-units/ | instance templates for workload-refresh + retry |
 | policy/CLAUDE.md | host-claudebox runtime law (stamped at /etc/claude-code/CLAUDE.md inside the box) |
 | policy/managed-settings.json | deny-rule guardrails (defense-in-depth) + bypass-permissions disabled (managed tier) |

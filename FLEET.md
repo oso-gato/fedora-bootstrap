@@ -27,8 +27,57 @@ APPROVE** (a free-text "yes" is not approval).
 **Handoff:** propose → open PR → `fedora-dev` lists + presents the PRs → you APPROVE → `fedora-dev`
 merges → CI builds + cosign-signs → GHCR → `fedora-bootstrap` pulls + redeploys. Build is always CI;
 operate/deploy is always `fedora-bootstrap`; merge is always `fedora-dev` (or Arthur on the web).
+
+**The promotion gate is REFSPEC-AWARE and fail-closed:** routine feature-branch pushes (an explicit
+non-`main`, non-`HEAD`, non-tag destination refspec) run AUTONOMOUSLY with no prompt; only a push
+that could touch `main` (a bare `git push`, a `main`/`HEAD`/`refs/tags/*` destination,
+`--all`/`--mirror`/`--tags`, or any unparseable / quoted / chained target) PLUS the merge verbs
+(`gh pr merge`, `gh pr create --merge|--squash|--rebase|--auto`, `gh api …/merge|/merges`) route to
+an in-session clickable `ask` only Arthur can answer. There is NO approval-marker mechanism (the
+shipped hook uses native `ask`); server-side branch protection on `main` is the PRIMARY backstop.
 Mechanically enforced by the `gate-push.sh` PreToolUse hook + `managed-settings.json` + the CI
 control-plane diff-guard — not prose-only.
+
+## The dev↔host live-gate loop
+
+The dev↔host loop runs autonomously EXCEPT the final merge: develop → open PR (feature pushes are
+autonomous) → label it `live-validate` → the host live-gate (Gate B) DISCOVERS it ORG-WIDE by that
+label (no repo list to maintain), fetches the PR head on-demand, applies a STRUCTURAL GUARD (only
+builds a candidate carrying a `Containerfile`/`.live-gate`, else skips cleanly), builds it DISPOSABLY
+per the repo's own in-repo `.live-gate` contract (PARSED, never executed) under loopback-only fences,
+and posts a GREEN/RED verdict comment → iterate (RED: push a fix, or SUPERSEDE the branch if the
+approach was wrong; GREEN: BUILD UPON it) until green → Arthur's discrete clickable APPROVE →
+fedora-dev merges. The human is OUT of the per-iteration loop — only the merge is a click. Repos are
+discovered DYNAMICALLY: create/rename/merge/delete freely; enroll one just by labelling its PR
+`live-validate` and shipping a `.live-gate`.
+
+## Post-merge deploy (the host's other half)
+
+The loop's tail. Once `fedora-dev` merges and CI republishes
+`ghcr.io/oso-gato/<name>:latest` (+ cosign-signed), `fedora-bootstrap` redeploys — the only box that
+touches the live host. A workload refreshes via `workload-refresh@<name>.timer` (monthly, +jitter) or
+on demand `systemctl --user start workload-refresh@<name>.service`, which runs `container-refresh.sh`:
+it `flock`s `<name>.lock`, busy-probes via `claudebox-busy-probe.sh` (AND-checks the in-container
+`session.lock` + `box-rebuild.lock`; busy → defer to `<name>.pending`, exit 10), captures the prior
+image id, `podman pull`s, digest-compares, and on change `systemctl --user restart <name>.service`
+(Quadlet `Notify=healthy` blocks until healthy). **Unhealthy → automatic digest rollback:** retag
+`:latest` back to the prior id and restart (works because the Quadlet is `Pull=missing`), clear
+`.pending`, write `<name>.rolled-back`. A manual rollback beyond this is STOP-AND-SURFACE. The host
+itself has no image/Quadlet — its deploy analogue is the operator re-running `setup.sh` as root.
+
+**Box-to-box handoffs (who picks up what):**
+- **propose → open PR** — any box, on a repo it owns.
+- **STOP at the PR** — `fedora-bootstrap` and `fedora-desktop` are PR-only; their refspec-aware
+  `gate-push.sh` lets feature-branch pushes run autonomously but routes any `main`-touching push or
+  merge verb to Arthur's clickable `ask`.
+- **live-validate → host verdict** — the PR author / `fedora-dev` labels a PR `live-validate`;
+  `fedora-bootstrap` DISCOVERS it org-wide, builds it disposably, and comments GREEN/RED;
+  `fedora-dev` iterates on RED.
+- **APPROVE → merge** — Arthur clicks; `fedora-dev` merges (sole authority, control-plane included);
+  server-side branch protection on `main` is the primary backstop.
+- **merged → deploy** — `fedora-bootstrap` pulls + redeploys via `workload-refresh@<name>`
+  (busy-probe gated; auto-rollback on healthcheck failure).
+- **wrong box** — a box asked to do another box's step STOP-AND-SURFACEs for the human to re-route.
 
 ## The three boxes
 
@@ -61,3 +110,9 @@ throwaway no-secret sandbox; never operates a host.
 - **Sources** (dnf → vendor `.repo` → AppImage/`.war`, GPG/sha-verified) · **no secrets in image
   layers** · **headless everywhere** (software-GL); sensitive ports tailnet-only, the desktop's web
   gate the one public door.
+- **Multi-device terminal:** one shared `main` tmux group; a tmux window has ONE size shared by all
+  co-viewing clients, so `/etc/tmux.conf` is `window-size latest` (the device that last sent input
+  wins → whole session rescales) + `fill-character ' '` (idle larger device blank-letterboxes, never
+  `·`-garbles) + `prefix+g` to cycle latest/smallest/largest. Differently-sized devices on the SAME
+  tab can NEVER both be full-size (one program = one pty = one cell grid) — a tmux invariant, not a
+  bug to "fix"; the active device wins and the rest degrade cleanly (crop/blank-letterbox).

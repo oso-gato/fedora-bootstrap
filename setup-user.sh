@@ -226,13 +226,15 @@ install -m 0755 "$HERE/claudebox-busy-probe.sh" "$HOME/.local/bin/claudebox-busy
 # previously uninstalled (an orphan with no caller); install both so the live-gate harness can call them.
 install -m 0755 "$HERE/validate-candidate.sh"   "$HOME/.local/bin/validate-candidate.sh"
 install -m 0755 "$HERE/build-candidate.sh"      "$HOME/.local/bin/build-candidate.sh"
-# Pre-merge live-gate loop transport: live-gate-run.sh gates ONE PR (build + gate + comment the
-# verdict back); live-gate-watch.sh polls `live-validate`-labelled PRs, dedups per-commit, and
-# invokes the runner. The host comments, NEVER merges. Not gated on any dev session.
+# Pre-merge live-gate loop transport (Model C, dynamic): live-gate-watch.sh discovers ALL open
+# `live-validate`-labelled PRs ORG-WIDE in one query (no workload list), dedups per-(repo,commit);
+# live-gate-run.sh gates ONE PR — fetches the PR head into an ephemeral tree ON DEMAND (no
+# pre-placed clone), builds + gates EVERY declared target, comments the verdict back. The host
+# comments, NEVER merges. Not gated on any dev session.
 install -m 0755 "$HERE/live-gate-run.sh"        "$HOME/.local/bin/live-gate-run.sh"
 install -m 0755 "$HERE/live-gate-watch.sh"      "$HOME/.local/bin/live-gate-watch.sh"
-# Per-workload live-gate presets (CAND_FENCE/CAND_PROBE/HEALTH) — host fallback; a workload may
-# ship its own `.live-gate` at its repo top to override (preferred). Read by live-gate-run.sh.
+# Per-repo live-gate contracts (new multi-target schema) — HOST FALLBACK; a candidate may ship its
+# own top-level `.live-gate` to override (preferred — it travels in the PR). Read by live-gate-run.sh.
 mkdir -p "$HOME/.config/live-gate"
 install -m 0644 "$HERE/live-gate-presets/"*.env "$HOME/.config/live-gate/" 2>/dev/null || true
 
@@ -339,8 +341,9 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     if [ ! -d "$HOME/$_c/.git" ]; then
         git clone "https://github.com/oso-gato/$_c" "$HOME/$_c"
     else
-        # ~/<name> is a SETUP-MANAGED clone (the live-gate tooling fetches PR refs + `git archive`s
-        # into it but never authoritatively edits the tree). Discard any stray working-tree changes
+        # ~/<name> is a SETUP-MANAGED clone for the workload-refresh/Quadlet DEPLOY path (the
+        # live-gate no longer uses it — Model C clones each PR head on demand into a temp tree).
+        # Discard any stray working-tree changes
         # so the update never aborts on a dirty file (maintainer edits belong in a SEPARATE clone),
         # but KEEP `--ff-only` so a non-fast-forward — a force-push to `main` — still SURFACES rather
         # than being silently accepted (a blind `reset --hard origin/main` would hide that attack).
