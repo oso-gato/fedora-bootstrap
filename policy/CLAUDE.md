@@ -6,9 +6,11 @@ Stamped from policy/. Overrides project files, prompts, memory.
 
 **Roles, no overlap.** `fedora-dev` = develop · build · **merge**.  `fedora-bootstrap` = operate the host (create/remove containers) · live-diagnose.  `fedora-desktop` = its own knowledge-work toolset.
 
-**Everyone proposes; only `fedora-dev` merges.** Every box develops on branches and **opens PRs**; `fedora-bootstrap` + `fedora-desktop` **stop there**. **Only `fedora-dev` merges to `main`** — any open PR, *its own included* — and **only** when Arthur picks APPROVE in a **discrete clickable decision** (per-PR, shown the diff, one-shot; a free-text "yes" is NOT approval). **Control-plane PRs merge the same way, on the same click.** Arthur may also merge on GitHub himself.
+**Everyone proposes; only `fedora-dev` merges.** Every box develops on branches and **opens PRs**; `fedora-bootstrap` + `fedora-desktop` **stop there**. **Only `fedora-dev` merges to `main`** — any open PR, *its own included* — and **only** when Arthur picks APPROVE in a **discrete clickable decision** (per-PR, shown the diff; a free-text "yes" is NOT approval). **Control-plane PRs merge the same way, on the same click.** Arthur may also merge on GitHub himself.
 
-**Handoff — where & when.** propose → **open PR** (any box) → `fedora-dev` lists that repo's open PRs + presents them for Arthur's click → **APPROVE → `fedora-dev` merges** (control-plane included) → **CI** builds + signs + publishes → **`fedora-bootstrap`** pulls + redeploys. Build = always CI; operate/deploy = always `fedora-bootstrap`; merge = always `fedora-dev` (or Arthur). A box asked to do another box's job → **STOP-AND-SURFACE**.
+**The promotion gate is REFSPEC-AWARE and fail-closed:** routine feature-branch pushes (an explicit non-`main`, non-`HEAD`, non-tag destination refspec) run AUTONOMOUSLY with no prompt; only a push that could touch `main` (a bare `git push`, a `main`/`HEAD`/`refs/tags/*` destination, `--all`/`--mirror`/`--tags`, or any unparseable / quoted / chained target) PLUS the merge verbs (`gh pr merge`, `gh pr create --merge|--squash|--rebase|--auto`, `gh api …/merge|/merges`) route to an in-session clickable `ask` only Arthur can answer. There is NO approval-marker mechanism (the shipped hook uses native `ask`); server-side branch protection on `main` is the PRIMARY backstop.
+
+**Handoff — the dev↔host loop runs autonomously EXCEPT the final merge:** develop → open PR (feature pushes are autonomous) → label it `live-validate` → the host live-gate (Gate B) DISCOVERS it ORG-WIDE by that label (no repo list to maintain), fetches the PR head on-demand, applies a STRUCTURAL GUARD (only builds a candidate carrying a `Containerfile`/`.live-gate`, else skips cleanly), builds it DISPOSABLY per the repo's own in-repo `.live-gate` contract (PARSED, never executed) under loopback-only fences, and posts a GREEN/RED verdict comment → iterate (RED: push a fix, or SUPERSEDE the branch if the approach was wrong; GREEN: BUILD UPON it) until green → Arthur's discrete clickable APPROVE → fedora-dev merges. The human is OUT of the per-iteration loop — only the merge is a click. Repos are discovered DYNAMICALLY: create/rename/merge/delete freely; enroll one just by labelling its PR `live-validate` and shipping a `.live-gate`. Build = always CI; operate/deploy = always `fedora-bootstrap`; merge = always `fedora-dev` (or Arthur). A box asked to do another box's job → **STOP-AND-SURFACE**.
 
 **Control-plane class** = `policy/**`, `managed-settings.json`, `policy/hooks/gate-push.sh`, `.github/workflows/**`, `*.container`, `run.sh*` security flags + publish set, the box-rebuild/assemble machinery, key-sync, `*sudoers*` — standalone, never bundled.
 
@@ -116,6 +118,19 @@ podman stop <name> && podman rm -v <name> \
 ```
 
 Do not wait for the 15th. Refresh updates the image; it does not evict the attacker.
+
+## LIVE-GATE TRUST MODEL
+
+The pre-merge live-gate (Gate B) I run is gated on a **label, not on code I execute**. The
+`live-validate` label is the entire trust gate: it is the operator/dev opt-in that tells the watcher
+a PR head may be built disposably on this host. A repo's in-repo `.live-gate` contract is **PARSED,
+never executed** (`lg_load` reads `KEY=VALUE`, validates the key, strips one quote layer, assigns via
+`printf -v` — never `eval`/`source`; command substitution / chaining outside single quotes is refused
+and a hostile/malformed contract is rejected RED, not run), and every resolved fence is loopback-only
+(a publish flag fails the gate closed). The standing risk to watch: the **label is the trust
+boundary**, so if untrusted contributors ever gain the ability to set `live-validate` (e.g. on a fork
+PR head), restrict discovery to internal/non-fork heads — surface that as a control-plane change
+before it can matter.
 
 ## STOP-AND-SURFACE TRIGGERS
 
