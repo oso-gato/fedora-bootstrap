@@ -715,6 +715,30 @@ systemctl --user cat claudebox-rebuild-run.service | grep TimeoutStartSec   # ex
 
 **Rollback** — unit only; `git checkout` the prior commit and re-run `setup.sh`.
 
+#### Upgrading to v1.2.31 (from v1.0.0)
+
+Multi-device tmux geometry — **config re-stamp only, no host package/service/security-flag change**. Supersedes the v1.2.18 fix. Symptom it removes: connecting a *small* client (iPad/Prompt 3) over mosh/ssh made a *large* client (Ghostty) on the same shared session "completely garbled" (it recovered when the small client disconnected). Root cause, proven against tmux 3.6 source + a live multi-client harness: **a tmux window has exactly one size, shared by every client viewing it** — so two differently-sized devices on the *same tab* can't each be full-size (unfixable in tmux). The mismatched client isn't "garbage": tmux fills its surplus area every frame with `fill-character` (compiled default `·` middle-dot) — that dot-fill on a big idle screen *is* the garble. The old `window-size smallest` sized the shared window to the *smallest* client, dotting every larger screen. New `/etc/tmux.conf`:
+
+- **`window-size latest`** (default) — the session follows whichever device most recently sent **input**: type on the Mac and it's Mac-sized; pick up the iPad and type and it rescales to the iPad. Both stay connected (mosh-friendly); the idle device blank-letterboxes/crops cleanly and reclaims full size on its next keystroke; when the active device disconnects the session falls back to whoever remains. Seamless macOS↔iPad handoff.
+- **`fill-character ' '`** — idle larger device's surplus is blank, not `·`.
+- **`prefix + g`** cycles `latest → smallest` (every device sees the WHOLE session sized to the smallest, big screens blank-letterbox) `→ largest` (biggest wins, smaller devices crop) `→ latest`.
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null        # re-stamps /etc/tmux.conf; no host package/service change
+```
+
+**Verify**:
+
+```sh
+grep -E 'window-size|fill-character' /etc/tmux.conf   # expect: window-size latest + fill-character ' '
+```
+
+Then, from two clients of different sizes, type on each in turn — the whole session rescales to whichever you last typed on; `prefix+g` cycles the policy and shows the active mode. (Existing windows untouched; reconnect to pick up the new server config, or `tmux kill-server` after detaching all clients.)
+
+**Rollback** — config only; `git checkout v1.2.30` (or the prior commit) and re-run `./setup.sh < /dev/null` to re-stamp the previous `/etc/tmux.conf`.
+
 ---
 
 ## Operating the host (as the maintainer)
