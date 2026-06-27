@@ -71,8 +71,8 @@ itself has no image/Quadlet — its deploy analogue is the operator re-running
 
 ## RELEASING A NEW VERSION
 
-Every change that ships ANY visible delta (code or doc) gets a version bump
-and a tag. Sequence:
+Every change that ships ANY visible delta (code or doc) gets a version bump.
+Sequence:
 
 1. Apply the change (scripts, units, policy, distrobox.ini, README, etc.).
 2. Bump version markers IN LOCKSTEP — they must agree:
@@ -82,22 +82,32 @@ and a tag. Sequence:
 3. Add a README "Upgrading to vX.Y.Z" subsection per the RELEASE-DOC
    CONVENTION below.
 4. Commit (single commit per release; do not batch multiple releases).
-5. `git push origin main`.
-6. `git tag -a vX.Y.Z -m "vX.Y.Z: <subject>"` then `git push origin vX.Y.Z`.
+5. Open a PR; `fedora-dev` merges to `main` on Arthur's clickable APPROVE (THE
+   FLEET) — the box never direct-pushes `main`. The host applies the merged
+   release by re-running `setup.sh`.
 
 Semver: patch for any user-visible change including pure docs; minor for
 additive features that don't break existing usage; major for breaking
 changes. Doc-only fixes still patch-bump.
 
-Tags are immutable once pushed. Never `git tag -f` to amend a released tag.
-A mistake in a tagged release ships as a new patch release with a subsection
-pointing back to the issue.
+**No per-release git tag.** The version-of-record is the in-tree `VERSION` +
+`setup.sh` header + README front-matter + the README "Upgrading to vX.Y.Z"
+subsection (the changelog). The host deploys `main` (not tags), rollback is
+`git checkout <commit>` + re-run `setup.sh`, and nothing external pins to a
+release — so a per-release tag was redundant friction (the `v1.0.0`–`v1.2.19`
+tags remain as history; releases since are untagged with no ill effect).
+Tagging stays OPTIONAL — for a genuine milestone you deliberately choose to
+name, never a per-release obligation.
+
+A mistake in a released version ships as a new patch release with a subsection
+pointing back to the issue (and, where it documented something unsafe, a dated
+`> **⚠️ Corrected in vX.Y.Z:**` callout on the original — see RELEASE-DOC).
 
 ## RELEASE-DOC CONVENTION (binding)
 
 README has a top-level section "Upgrading an existing host to a new release".
 EVERY release adds a subsection inside it. Prior versions' subsections are
-historical record — never modify them after their tag is pushed. TWO additive (never-rewriting) exceptions: (1) **RELOCATION** — older subsections may be moved verbatim to `UPGRADING.md` to keep README scannable; leave the latest 1–2 subsections + a pointer in README, content unchanged. (2) **dated SAFETY-CORRECTION / SUPERSESSION note** — a `> **⚠️ Corrected in vX.Y.Z:**` callout (beside a subsection documenting something factually wrong or unsafe) OR a `> **⚠️ Superseded in vX.Y.Z:**` callout (beside a still-valid procedure that a later release replaced with a better one) may be appended, pointing to the procedure in the current release's subsection. Never silently rewrite the original steps.
+historical record — never modify them after the release is merged. TWO additive (never-rewriting) exceptions: (1) **RELOCATION** — older subsections may be moved verbatim to `UPGRADING.md` to keep README scannable; leave the latest 1–2 subsections + a pointer in README, content unchanged. (2) **dated SAFETY-CORRECTION / SUPERSESSION note** — a `> **⚠️ Corrected in vX.Y.Z:**` callout (beside a subsection documenting something factually wrong or unsafe) OR a `> **⚠️ Superseded in vX.Y.Z:**` callout (beside a still-valid procedure that a later release replaced with a better one) may be appended, pointing to the procedure in the current release's subsection. Never silently rewrite the original steps.
 
 Subsection title:
 - `"Upgrading to vX.Y.Z (from v1.0.0)"` — default. v1.0.0 is the binding
@@ -185,7 +195,7 @@ NEVER:
 - Put release-doc-writing rules in README. They live HERE (this file).
   README's Upgrading-section intro is a short human-facing pointer with no
   rules, no convention text, no structural description.
-- Modify a prior version's subsection after its tag is pushed. If a doc
+- Modify a prior version's subsection after the release is merged. If a doc
   fix is genuinely needed, ship a new patch release that adds a NOTE under
   the prior subsection AND links to that note from the new release's
   subsection.
