@@ -37,6 +37,14 @@ exec 9>"$STATE/watch.lock"
 flock -n 9 || { echo "[live-gate-watch] another run holds the lock; skipping"; exit 0; }
 [ -x "$RUNNER" ] || { echo "FATAL: live-gate-run.sh not found"; exit 2; }
 
+# ---- ORPHAN SWEEP + CACHE GC (opportunistic, self-throttled, flock-guarded) ----
+# Reap throwaway images/containers/trees a `kill -9`/crash left behind (the per-run EXIT traps only
+# fire on a clean exit) and bound the persistent build caches so churn can't exhaust the VPS quota.
+# Self-throttled (FD_SWEEP_INTERVAL_MIN, default 30m) so calling it every poll is ~free. For an idle
+# host that gates infrequently, ALSO wire a periodic timer/cron (see the README "Upgrading" note).
+SWEEP="$HOME/.local/bin/throwaway-sweep.sh"; [ -x "$SWEEP" ] || SWEEP="$HERE/throwaway-sweep.sh"
+[ -x "$SWEEP" ] && "$SWEEP" || true
+
 # ---- DISCOVERY: one org-wide query for ALL open `live-validate` PRs. `gh search prs` exposes
 # repository + number (NOT the head SHA — headRefOid is not a search JSON field), so resolve the
 # head SHA per PR with a cheap `gh pr view`. Fallback: the search/issues REST endpoint. ----
