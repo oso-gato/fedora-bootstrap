@@ -71,6 +71,22 @@ build cache, discard only the candidate — the podman layer cache on the home v
 the candidate tag, so Containerfiles are structured heavy/stable-early (base, dnf, class-(c)
 fetch+verify) and churn-late (COPY'd scripts/config); a 50× iteration reuses the heavy layers (zero
 re-download). NEVER `--no-cache`/prune during churn — that is the monthly clean rebuild only.
+**Churn mechanism (proven, no re-download across N PRs/iterations).** The per-PR/per-SHA disposal
+removes ONLY the disposable image + temp tree, NEVER the caches — the PR/SHA is not the cache's
+disposal signal; the caches are not keyed to PR/SHA and are SHARED across all iterations. TWO
+persistent caches on the home volume serve churn: (1) the podman LAYER CACHE — late-layer churn
+reuses the heavy layers, the dnf `RUN` never executes → zero download (survives `rmi`); (2) a
+persistent dnf PACKAGE CACHE bind-mounted into the build (`-v <home>/.cache/fd-dnf:/var/cache/libdnf5:rw`)
+— when the dnf install LINE changes (an add-on PR) the layer re-runs but the RPMs are served from
+cache, not re-downloaded (~3× faster, 94 s→33 s; only a genuinely-new package downloads once).
+buildah `--mount=type=cache` does NOT work under the dev box's required `--isolation=chroot`, so the
+bind `-v` package cache + the layer cache are the two mechanisms (not the layer cache alone).
+**Isolation:** each build gets its own throwaway tree + a unique `val-<sha>` tag + a unique `vcand-$$`
+run container (no cross-build contamination), and the shared caches are content-addressed, so they
+cannot serve a wrong version. **Storage safety (limited VPS):** (a) the candidate image + tree
+self-destruct via `trap … EXIT` (GREEN/RED/error); (b) an orphan sweeper reaps `kill -9`/crash leaks
+(stale `localhost/disposable/*`, `vcand-*`, orphan temp dirs) at watcher start + periodically; (c) a
+bounded cache-GC caps the two persistent caches by size/age so they never exhaust the quota.
 
 ## The self-sustaining apparatus — autonomy mandate & definition of done
 
