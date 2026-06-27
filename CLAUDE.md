@@ -224,6 +224,31 @@ desktop is a *virtual* display rendered in software (llvmpipe), reached only ove
 (ssh / RDP / VNC / web, over the tailnet or the hardened public doors). A change that requires a
 physical display, GPU, or seat is a **defect**, not an option.
 
+## PRINCIPLE 0 — THE SELF-SUSTAINING APPARATUS (primary purpose)
+
+`fedora-dev` + `fedora-bootstrap` are **ONE self-sustaining development apparatus** whose primary
+purpose is to **keep the human OUT of the loop until genuinely needed**; this box RUNS the live-gate
+(Gate B) that validates the loop. The agent works to an **AUTONOMY MANDATE** — it does most of the
+work and thinking, **builds 2–3 options, tests them (throwaway build + live-gate), discards what
+doesn't fit, and lands the answer itself** (it does not shop options); it recommends **and
+self-tests** its recommendation; it **tears down and rebuilds to a zero-base** rather than defending
+a first draft. Options-decisions to the human are **RARE**.
+
+**Engage the human for EXACTLY TWO reasons:** (1) **materially complete** → the clickable APPROVE to
+merge; (2) **materially blocked** → a genuine roadblock needing a decision. Status checks and "which
+should I do" are not reasons.
+
+**DEFINITION OF DONE** (all four): (1) the FULL objective is materially achieved (not a ~5% slice);
+(2) validated through the loop — in-box build/assembly GREEN **and** the host live-gate verdict GREEN
+(PROVEN, not merely built; where the host can't gate it, strongest available validation + a
+host-validation handoff); (3) adheres to the BUILD PRINCIPLES below; (4) a **TLDR** is written and
+the agent has **critically self-examined** it (options considered+discarded, reasoning, fit to both
+the design and the task objective, genuine gaps) — dry-run AS IF the human; if it fails its own
+scrutiny, return to the loop, don't present. The PR is the agent's **PROOF OF WORK**.
+
+Full text: `policy/CLAUDE.md` → **THE SELF-SUSTAINING APPARATUS — AUTONOMY MANDATE & DEFINITION OF
+DONE** (this box's PR-only / never-merge stop-points are unchanged — see PIPELINE CONTEXT above).
+
 ## BUILD PRINCIPLES (binding for every code change)
 
 | # | Principle | Rule |

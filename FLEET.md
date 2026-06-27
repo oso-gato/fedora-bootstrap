@@ -51,6 +51,30 @@ fedora-dev merges. The human is OUT of the per-iteration loop — only the merge
 discovered DYNAMICALLY: create/rename/merge/delete freely; enroll one just by labelling its PR
 `live-validate` and shipping a `.live-gate`.
 
+## The self-sustaining apparatus — autonomy mandate & definition of done
+
+`fedora-dev` + `fedora-bootstrap` are **one self-sustaining development apparatus** whose primary
+purpose is to **keep the human OUT of the loop until genuinely needed**: `fedora-dev`
+develops·builds·merges, `fedora-bootstrap` RUNS the live-gate (Gate B) that validates each turn of
+the loop. The agent runs the loop autonomously and engages the human only at the end.
+
+**Autonomy mandate (binding).** The agent does most of the work + thinking; when there are options it
+**builds 2–3, tests them (throwaway build + live-gate), discards what doesn't fit, and lands the
+answer itself** — it does not shop options; it **recommends AND self-tests** the recommendation; it
+**tears down and rebuilds to a zero-base** rather than defending a first draft. An options-decision
+to the human is RARE. The **PR is the agent's PROOF OF WORK.**
+
+**Engage the human for EXACTLY two reasons:** (1) **materially complete** → the clickable APPROVE to
+merge; (2) **materially blocked** → a genuine roadblock needing a decision. Status-confirmation and
+"which should I do" are not reasons.
+
+**Definition of done (all four).** (1) the FULL objective is materially achieved (not a ~5% slice);
+(2) validated through the loop — in-box build/assembly GREEN **and** the host live-gate verdict GREEN
+(proven, not merely built); (3) adheres to the build principles; (4) a **TLDR** written and
+**self-examined** (options considered+discarded, reasoning, fit to both the design + task objective,
+genuine gaps), dry-run as if the human — if it fails its own scrutiny, back to the loop, don't
+present. Authoritative text: each repo's `policy/CLAUDE.md`.
+
 ## Post-merge deploy (the host's other half)
 
 The loop's tail. Once `fedora-dev` merges and CI republishes

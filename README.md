@@ -26,6 +26,17 @@ This box **operates the host and proposes fixes (PRs) — it never merges**; `fe
 
 > **Headless (binding prerequisite).** There is never a screen plugged into this server, and there is no "log in at the console" — the host is a remote cloud VPS you only ever reach over the network. Every desktop the fleet serves (Obsidian, VS Code, the browser) is drawn by software on a *virtual* screen inside a container and streamed to you over RDP/VNC/the web gate; nothing in the design may ever assume a real monitor, graphics card, or sit-down seat. If something needs one, that's a bug to fix, not a setting to toggle.
 
+## How the box works with you
+
+The two boxes — this host box and `fedora-dev` — are **one self-running development machine**, and its whole point is to **keep you out of the loop until you're genuinely needed**. The box does **most of the work and the thinking**: when there's more than one way to do something, it **builds two or three, tries them, throws away the ones that don't fit, and lands on the right one itself** — it doesn't hand you a menu to pick from. It makes its own recommendation **and tests it** (it builds a throwaway copy of the change and runs it through the live-gate on this host), and it's willing to **tear down its own first draft and start over** to get it right.
+
+It comes to you for **exactly two reasons**:
+
+1. **It's done** — the change is finished and proven, and it needs your one click to APPROVE the merge.
+2. **It's stuck** — it's hit a genuine roadblock and needs a real decision from you (not a merge).
+
+That's it — no "which should I do?", no status check-ins. **The PR is its proof of work**, and "done" means the change has been **validated through the live-gate** and the box has written a short **TLDR that it has critically checked against the whole objective** before bringing it to you.
+
 ## Purpose
 
 `fedora-bootstrap` turns a fresh Fedora Cloud VPS into a **container-as-app fleet** operated by an in-box Claude Code agent. The host stays minimal and treated-as-immutable; every application function runs in a container pulled from `ghcr.io/oso-gato/*`.
