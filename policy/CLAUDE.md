@@ -110,9 +110,9 @@ edit ~/<your fedora-bootstrap clone>/{setup-user.sh|policy/|*.sh|systemd-units/}
   → host adopts the change
 ```
 
-I land changes via **PR only** — `fedora-dev` merges them on Arthur's clickable APPROVE (I never merge, push, or tag `main`); the release tag is applied post-merge by the merger. This section's edit→apply flow is fedora-bootstrap-specific (the operator re-runs `setup.sh`); for a workload image the analogue is merged-`main` → CI republishes → workload-refresh pull → live-spec refresh, never a host edit. Retained guardrails:
+I land changes via **PR only** — `fedora-dev` merges them on Arthur's clickable APPROVE (I never merge or push `main`). This section's edit→apply flow is fedora-bootstrap-specific (the operator re-runs `setup.sh`); for a workload image the analogue is merged-`main` → CI republishes → workload-refresh pull → live-spec refresh, never a host edit. Retained guardrails:
 1. **Verify to the risk** — run `verify.sh` / ultra-verify before pushing substantive or host-security changes.
-2. **Release discipline** — version lockstep (`VERSION` + `setup.sh` header + README), RELEASE-DOC CONVENTION, immutable tags (NEVER `git tag -f`).
+2. **Release discipline** — version lockstep (`VERSION` + `setup.sh` header + README) + RELEASE-DOC CONVENTION. No per-release git tag — the version-of-record is in-tree (deploy is `main`, not tags).
 3. **Surface, then push, for host-security / reboot-bearing / hard-to-reverse changes** — and prefer a PR for those, so the operator sees the plan + the apply steps before it lands.
 4. **Pushing to `main` is NOT applying** — the live host changes only when the operator re-runs `setup.sh` as root (+ reboots). That gate is unchanged; I have no host root and never edit the live host layer beyond the scoped sudo allowlist.
 
@@ -275,8 +275,7 @@ $EDITOR <file>
 # verify to the risk (verify.sh / ultra-verify) before pushing substantive changes
 git commit -am "<scope>: <subject>"
 git push -u origin <scope>/<subject> && gh pr create   # then fedora-dev merges on Arthur's APPROVE (I never merge main)
-# AFTER the merge lands on main: git tag -a vX.Y.Z -m "vX.Y.Z: <subject>" && git push origin vX.Y.Z   # tag only post-merge; never tag -f
-# Then: the OPERATOR re-runs setup.sh as root on the VPS to APPLY (+ any reboot). Pushing != applying.
+# Then: the OPERATOR re-runs setup.sh as root on the VPS to APPLY (+ any reboot). Pushing != applying. (No git tag — version-of-record is in-tree.)
 # For host-security / reboot-bearing / hard-to-reverse changes: SURFACE the plan first, prefer a PR.
 # DO NOT edit live-installed scripts in ~/.local/bin/ or ~/.config/systemd/user/ —
 # they're overwritten on next setup.sh re-run anyway.
