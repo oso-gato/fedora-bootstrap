@@ -6,6 +6,14 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# DEFENSE-IN-DEPTH for the box-rebuild race: NEVER enter the box while a claudebox rebuild is in
+# progress. The watcher's `distrobox enter claudebox` would otherwise trigger a SECOND, concurrent
+# distrobox-init during the rebuild's own first-enter and collide on the pre-init hooks / deadlock on
+# distrobox's name-keyed fifo — failing or hanging the box build. ExecCondition runs BEFORE ExecStart
+# and a nonzero exit cleanly SKIPS this firing (the unit is NOT marked failed). box-rebuild.sh already
+# stops this timer for the rebuild window; this guard additionally covers any firing that races the
+# stop, or a manually-started rebuild. (`is-active` exits 0 when active, so `!` ⇒ skip during rebuild.)
+ExecCondition=/usr/bin/bash -c '! systemctl --user is-active --quiet claudebox-rebuild-run.service'
 # The watcher uses gh + git (claudebox tools — NOT on the minimal host) and drives the host podman
 # engine via the box's CONTAINER_HOST bridge, so run it INSIDE the claudebox. distrobox lives on the
 # host; `bash -lc` loads the box login env (CONTAINER_HOST + gh/git on PATH); gh auth is the shared
