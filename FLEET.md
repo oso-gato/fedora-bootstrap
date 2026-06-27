@@ -67,26 +67,36 @@ immutable live tree (host + dev-container base are immutable; the throwaway tree
 live on the writable home volume), still obeys provenance (Sources — class a/b/c, GPG/sha-verified;
 no loosening because it's a throwaway), and is thrown away after the build
 (`localhost/disposable/<name>:val-<sha>`, never pushed, `--rm`/`rmi`). **Churn balance:** persist the
-build cache, discard only the candidate — the podman layer cache on the home volume survives `rmi` of
-the candidate tag, so Containerfiles are structured heavy/stable-early (base, dnf, class-(c)
-fetch+verify) and churn-late (COPY'd scripts/config); a 50× iteration reuses the heavy layers (zero
-re-download). NEVER `--no-cache`/prune during churn — that is the monthly clean rebuild only.
+ONE durable input — the dnf package cache (a plain bind dir on the home volume, NOT an image layer, so
+it survives `rmi` and every disposal) — and let everything else (candidate image, its layers, temp
+tree, run container) be ephemeral by design. Containerfiles are still structured heavy/stable-early
+(base, dnf, class-(c) fetch+verify) and churn-late (COPY'd scripts/config); NEVER `--no-cache`/prune
+during churn — that is the monthly clean rebuild only.
 **Churn mechanism (proven, no re-download across N PRs/iterations).** The per-PR/per-SHA disposal
-removes ONLY the disposable image + temp tree, NEVER the caches — the PR/SHA is not the cache's
-disposal signal; the caches are not keyed to PR/SHA and are SHARED across all iterations. TWO
-persistent caches on the home volume serve churn: (1) the podman LAYER CACHE — late-layer churn
-reuses the heavy layers, the dnf `RUN` never executes → zero download (survives `rmi`); (2) a
-persistent dnf PACKAGE CACHE bind-mounted into the build (`-v <home>/.cache/fd-dnf:/var/cache/libdnf5:rw`)
-— when the dnf install LINE changes (an add-on PR) the layer re-runs but the RPMs are served from
-cache, not re-downloaded (~3× faster, 94 s→33 s; only a genuinely-new package downloads once).
-buildah `--mount=type=cache` does NOT work under the dev box's required `--isolation=chroot`, so the
-bind `-v` package cache + the layer cache are the two mechanisms (not the layer cache alone).
+removes the disposable image + temp tree — and, when it was the sole referrer, its intermediate layers
+too — but NEVER the dnf package cache (not keyed to PR/SHA; SHARED across all iterations). One
+persistent thing, everything else ephemeral by design: (1) the persistent dnf PACKAGE CACHE — the
+ROBUST mechanism, bind-mounted into the build (`-v <home>/.cache/fd-dnf:/var/cache/libdnf5:rw`); a
+plain dir, NOT an image layer, so it survives `rmi` and every disposal. When the dnf install LINE
+changes (an add-on PR) the layer re-runs but the RPMs are served from cache, not re-downloaded —
+proven: a forced dnf re-run downloaded 0 B (vs 9.4 MiB cold), 3.7× faster; only a genuinely-new
+package downloads once. (buildah `--mount=type=cache` does NOT work under the dev box's required
+`--isolation=chroot`, so the bind `-v` package cache is the mechanism.) (2) EPHEMERAL LAYERS —
+ephemeral by design, and that is the advantage: a throwaway's layers are pruned with its sole
+candidate's `rmi`, so (a) layer storage self-bounds on the limited VPS (no accumulation, no separate
+layer cache to GC), (b) each throwaway rebuilds fresh from the package cache → current package
+versions, no stale-frozen-layer risk (freshness for free), (c) the only cost is a few local
+CPU-seconds (~3.6 s warm), never bandwidth. While a candidate image is still present (churn-late edits,
+or a kept image) its layer cache also lets the rebuild skip the dnf `RUN` — a free accelerator — but
+nothing depends on layers surviving disposal.
 **Isolation:** each build gets its own throwaway tree + a unique `val-<sha>` tag + a unique `vcand-$$`
-run container (no cross-build contamination), and the shared caches are content-addressed, so they
-cannot serve a wrong version. **Storage safety (limited VPS):** (a) the candidate image + tree
-self-destruct via `trap … EXIT` (GREEN/RED/error); (b) an orphan sweeper reaps `kill -9`/crash leaks
-(stale `localhost/disposable/*`, `vcand-*`, orphan temp dirs) at watcher start + periodically; (c) a
-bounded cache-GC caps the two persistent caches by size/age so they never exhaust the quota.
+run container (no cross-build contamination), and the dnf package cache (and any live layer cache) is
+content-addressed, so it cannot serve a wrong version. **Storage safety (limited VPS):** (a) the
+candidate image + tree self-destruct via `trap … EXIT` (GREEN/RED/error); (b) an orphan sweeper reaps
+`kill -9`/crash leaks (stale `localhost/disposable/*`, `vcand-*`, orphan temp dirs) at watcher start +
+periodically; (c) a bounded cache-GC caps the persistent dnf package cache age-then-size (RPMs older
+than 45 days pruned first, then LRU size-prune to ≤15 GB; both overridable env) so it never exhausts
+the quota — layers self-bound via `rmi`, dangling ones swept opportunistically.
 
 ## The self-sustaining apparatus — autonomy mandate & definition of done
 
