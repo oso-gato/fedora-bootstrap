@@ -24,6 +24,29 @@ PHASE "user 2/5 ssh keys (from github.com/${GH_KEYS_USER:-oso-gato}.keys, tagged
 bash "$HERE/sync-authorized-keys.sh"
 
 PHASE "user 3/5 claudebox (declarative assemble from distrobox.ini) + Claude policy"
+# ORDER-CRITICAL: the assemble below pulls the claudebox base (quay.io/fedora/
+# fedora-toolbox, distrobox.ini) — but the image-trust policy.json is written/
+# merged later, in user 4/5. On an ALREADY-DEPLOYED host whose policy.json
+# already default-rejects everything but ghcr.io/oso-gato + Fedora base, that pull
+# is REJECTED before user 4/5 ever runs to fix it ("Source image ... is rejected
+# by policy") — so a re-run of setup.sh fails here every time. Pre-trust the
+# toolbox base NOW, before the assemble, so the script self-heals. Idempotent; a
+# FRESH host has no policy.json yet and assembles under the permissive default
+# (then user 4/5 writes the full policy WITH the toolbox scope), so this is a
+# no-op there. The full create/merge in user 4/5 is unchanged.
+if [ -e "$HOME/.config/containers/policy.json" ]; then
+    python3 - "$HOME/.config/containers/policy.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+docker = d.setdefault("transports", {}).setdefault("docker", {})
+if "quay.io/fedora/fedora-toolbox" not in docker:
+    docker["quay.io/fedora/fedora-toolbox"] = [{"type": "insecureAcceptAnything"}]
+    with open(p, "w") as f:
+        json.dump(d, f, indent=4); f.write("\n")
+    print("[policy] pre-assemble: trusted quay.io/fedora/fedora-toolbox (claudebox base)")
+PY
+fi
 cd "$HERE" && distrobox assemble create --file distrobox.ini
 echo ">> first enter builds the box (dnf install claude-code from Anthropic + init hooks) — this can take a minute"
 distrobox enter claudebox -- true   # triggers distrobox-init; fails loudly HERE, not mislabeled later
