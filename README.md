@@ -28,14 +28,16 @@ This box **operates the host and proposes fixes (PRs) — it never merges**; `fe
 
 ## How the box works with you
 
-The two boxes — this host box and `fedora-dev` — are **one self-running development machine**, and its whole point is to **keep you out of the loop until you're genuinely needed**. The box does **most of the work and the thinking**: when there's more than one way to do something, it **builds two or three, tries them, throws away the ones that don't fit, and lands on the right one itself** — it doesn't hand you a menu to pick from. It makes its own recommendation **and tests it** (it builds a throwaway copy of the change and runs it through the live-gate on this host), and it's willing to **tear down its own first draft and start over** to get it right.
+The two boxes — this host box and `fedora-dev` — are **one self-running development machine**, and its whole point is to **keep you out of the loop until you're genuinely needed**. The box does **most of the work and the thinking**: when there's more than one way to do something, it **builds two or three, tries them, throws away the ones that don't fit, and lands on the right one itself** — it doesn't hand you a menu to pick from. It makes its own recommendation **and tests it**, and it's willing to **tear down its own first draft and start over** to get it right.
+
+How it tests is **two-tier**, and most of it never touches this host. **By default it tests in its own dev box** — `fedora-dev` builds a throwaway copy of the change and runs it right there in its own sandbox, fixing and rebuilding over and over with no involvement from this host at all. **It only brings a change to this host's live-gate for two reasons:** when the change is something the dev box simply can't run on its own (for example a full-desktop image that needs to boot like a real machine), or as the **final dress rehearsal** before shipping — this host builds it one last time, proves it works **live on a real server**, then throws it away, and only then is the change offered to you to approve. Every test copy is a **throwaway** that's deleted afterwards, but the box keeps the heavy download/build work cached between attempts, so iterating fifty times doesn't mean downloading the same thing fifty times.
 
 It comes to you for **exactly two reasons**:
 
 1. **It's done** — the change is finished and proven, and it needs your one click to APPROVE the merge.
 2. **It's stuck** — it's hit a genuine roadblock and needs a real decision from you (not a merge).
 
-That's it — no "which should I do?", no status check-ins. **The PR is its proof of work**, and "done" means the change has been **validated through the live-gate** and the box has written a short **TLDR that it has critically checked against the whole objective** before bringing it to you.
+That's it — no "which should I do?", no status check-ins. **The PR is its proof of work**, and "done" means the change has been **validated** (in the dev box, and on this host's live-gate when that tier applies) and the box has written a short **TLDR that it has critically checked against the whole objective** before bringing it to you.
 
 ## Purpose
 

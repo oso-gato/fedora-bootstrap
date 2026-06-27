@@ -51,6 +51,27 @@ fedora-dev merges. The human is OUT of the per-iteration loop — only the merge
 discovered DYNAMICALLY: create/rename/merge/delete freely; enroll one just by labelling its PR
 `live-validate` and shipping a `.live-gate`.
 
+**Validation is TWO-TIER — NOT "every change goes to the host."** **Tier 1 — in-box (the default):**
+`fedora-dev`'s own `podman build` IS the throwaway — it develops, validates, and iterates in its
+nested engine (build → validate → fix → rebuild) with NO host involvement, for everything it CAN
+build+validate. Almost all iteration lives here. **Tier 2 — the host live-gate (engaged via the
+`live-validate` label), in EXACTLY two scenarios:** (1) the dev box CANNOT build/validate the
+throwaway — e.g. the systemd-PID-1 GRD desktop lineage the nested engine can't boot — so the host
+builds + gates it; (2) the FINAL pre-production shipment — after all in-box iteration is done, the
+host runs a throwaway build, proves it LIVE on a real host, tears it down, and only THEN is
+merge-to-main presented.
+
+**Throwaway tree & churn (build discipline, both tiers).** Use the LIVE tree where possible; for
+anything that must DIFFER, bolt on a SEPARATE temporary throwaway tree that never mutates the
+immutable live tree (host + dev-container base are immutable; the throwaway tree + all build caches
+live on the writable home volume), still obeys provenance (Sources — class a/b/c, GPG/sha-verified;
+no loosening because it's a throwaway), and is thrown away after the build
+(`localhost/disposable/<name>:val-<sha>`, never pushed, `--rm`/`rmi`). **Churn balance:** persist the
+build cache, discard only the candidate — the podman layer cache on the home volume survives `rmi` of
+the candidate tag, so Containerfiles are structured heavy/stable-early (base, dnf, class-(c)
+fetch+verify) and churn-late (COPY'd scripts/config); a 50× iteration reuses the heavy layers (zero
+re-download). NEVER `--no-cache`/prune during churn — that is the monthly clean rebuild only.
+
 ## The self-sustaining apparatus — autonomy mandate & definition of done
 
 `fedora-dev` + `fedora-bootstrap` are **one self-sustaining development apparatus** whose primary
@@ -69,8 +90,10 @@ merge; (2) **materially blocked** → a genuine roadblock needing a decision. St
 "which should I do" are not reasons.
 
 **Definition of done (all four).** (1) the FULL objective is materially achieved (not a ~5% slice);
-(2) validated through the loop — in-box build/assembly GREEN **and** the host live-gate verdict GREEN
-(proven, not merely built); (3) adheres to the build principles; (4) a **TLDR** written and
+(2) validated through the loop at the right tier — in-box build/assembly GREEN by default, **and** the
+host live-gate verdict GREEN when Tier 2 applies (the dev box can't gate it, or the final
+pre-production shipment) — proven, not merely built; (3) adheres to the build principles (incl. the
+throwaway-tree & churn discipline above); (4) a **TLDR** written and
 **self-examined** (options considered+discarded, reasoning, fit to both the design + task objective,
 genuine gaps), dry-run as if the human — if it fails its own scrutiny, back to the loop, don't
 present. Authoritative text: each repo's `policy/CLAUDE.md`.

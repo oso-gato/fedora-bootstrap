@@ -239,9 +239,15 @@ merge; (2) **materially blocked** → a genuine roadblock needing a decision. St
 should I do" are not reasons.
 
 **DEFINITION OF DONE** (all four): (1) the FULL objective is materially achieved (not a ~5% slice);
-(2) validated through the loop — in-box build/assembly GREEN **and** the host live-gate verdict GREEN
-(PROVEN, not merely built; where the host can't gate it, strongest available validation + a
-host-validation handoff); (3) adheres to the BUILD PRINCIPLES below; (4) a **TLDR** is written and
+(2) validated through the loop via **TWO-TIER validation** — **Tier 1 (DEFAULT): in-box** — the dev
+box's `podman build` IS the throwaway; it builds + validates + iterates GREEN in its own nested engine
+with NO host involvement, for everything it CAN build+validate. **Tier 2 (HOST, via the
+`live-validate` label) ONLY when** the dev box CANNOT build/validate the throwaway (e.g. the
+systemd-PID-1 GRD lineage the nested engine can't boot) OR for the FINAL pre-production shipment (the
+host runs a throwaway build, proves it LIVE on a real host, tears it down) → then the host live-gate
+verdict must be GREEN too. PROVEN, not merely built (where even the host can't gate it, strongest
+available validation + a host-validation handoff); (3) adheres to the BUILD PRINCIPLES below
+(incl. Principle 10 THROWAWAY TREE & CHURN); (4) a **TLDR** is written and
 the agent has **critically self-examined** it (options considered+discarded, reasoning, fit to both
 the design and the task objective, genuine gaps) — dry-run AS IF the human; if it fails its own
 scrutiny, return to the loop, don't present. The PR is the agent's **PROOF OF WORK**.
@@ -262,6 +268,7 @@ DONE** (this box's PR-only / never-merge stop-points are unchanged — see PIPEL
 | 7 | EXPOSURE | Public IP carries key-only ssh and mosh ONLY. Cockpit and every sensitive port are tailnet-only. etserver is never installed (replaced fleet-wide by mosh). |
 | 8 | VALIDATE | setup.sh ends with verify.sh; a bootstrap is done when every check PASSes. **Prove runtime/terminal behaviour empirically, not by reasoning:** for tmux multi-client geometry, TUI redraw, and the like, drive multiple sized PTY clients with a real harness and assert the actual bytes each client renders (a naive byte VT model mis-reads UTF-8 fills like `·` as garbage) — not just a reported window size. |
 | 9 | LEAST PRIVILEGE / LAYERS | Provisioning splits by identity: the SYSTEM layer (packages, /etc, system services) runs as root once via setup-host.sh; the ROOTLESS layer (podman, distrobox, Claude Code) runs as the operating user via setup-user.sh. The user is a password-gated `wheel` admin with NO blanket NOPASSWD; the in-box agent gets only a scoped passwordless allowlist (policy/sudoers.claudebox), grown solely by committing to the repo, and is OS-blocked from everything else (host installs stay hard-denied). Privileged files are written in place by root, never staged via a user-owned /tmp file. |
+| 10 | THROWAWAY TREE & CHURN | Validate every build as a DISPOSABLE throwaway, never against the live tree. Use the LIVE tree where possible; for anything that must DIFFER, bolt on a SEPARATE, TEMPORARY throwaway tree that (a) **NEVER mutates the IMMUTABLE live tree** — host + dev-container base are immutable, so the throwaway tree + all build caches live on the **WRITABLE home volume**; (b) **STILL obeys Principle 2 PROVENANCE** — class a/b/c, GPG/signature/checksum verified, NO loosening because it's a throwaway; (c) is **THROWN AWAY** after the build (`localhost/disposable/<name>:val-<sha>`, never pushed, `--rm` + `rmi`'d; temp tree removed on teardown). **CHURN BALANCE:** persist the BUILD CACHE, discard only the candidate — the podman LAYER CACHE on the home volume **SURVIVES `rmi`** of the candidate tag (verified in-box). Structure Containerfiles **HEAVY/STABLE-EARLY** (base, dnf install, class-(c) artifact fetch+verify) and **CHURN-LATE** (COPY'd scripts/config) so a 50× iteration reuses the heavy layers → **zero re-download**. **NEVER `--no-cache` / prune during churn** (reserved for the monthly clean `--no-cache` rebuild). The throwaway is the OUTPUT; the cache is the PERSISTENT INPUT — decoupled from both the immutable live tree and the disposable candidate. (buildah `--mount=type=cache` does NOT persist under the dev box's required `--isolation=chroot`, verified — the layer cache is the mechanism.) |
 
 ### Class-(c) sources — the bounded last-resort exception (fleet-wide; identical in fedora-desktop + fedora-dev + fedora-bootstrap)
 
