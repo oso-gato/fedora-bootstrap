@@ -295,8 +295,9 @@ transforms a named (c) artifact, fetches no further network, installs nothing on
 deterministically, and is deleted. **A loose executable / script / tarball on `$PATH` is NEVER
 permitted under (c).** Each (c) artifact gets a **disclosure row** in the PACKAGES table (pinned
 canonical URL + version + signature/checksum kind); the table's **enumeration line lists every
-(c) artifact in use**. **Mechanical backstop (CI):** the control-plane diff-guard asserts every
-binary on `$PATH` resolves to an rpm (`rpm -qf`).
+(c) artifact in use**. **Backstop:** there is NO CI guard — the in-session clickable merge gate
+(Arthur's click) is the sole backstop; the discipline that every binary on `$PATH` resolves to an
+rpm (`rpm -qf`) is asserted at PR-review time against the disclosure rows, not by a CI job.
 
 **Class-(c) artifacts in use: none.** This host/box ships no upstream binary artifact today; the
 rule is carried for fleet parity so any future need inherits the identical bounded definition.

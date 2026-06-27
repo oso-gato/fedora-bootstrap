@@ -34,9 +34,9 @@ that could touch `main` (a bare `git push`, a `main`/`HEAD`/`refs/tags/*` destin
 `--all`/`--mirror`/`--tags`, or any unparseable / quoted / chained target) PLUS the merge verbs
 (`gh pr merge`, `gh pr create --merge|--squash|--rebase|--auto`, `gh api …/merge|/merges`) route to
 an in-session clickable `ask` only Arthur can answer. There is NO approval-marker mechanism (the
-shipped hook uses native `ask`); server-side branch protection on `main` is the PRIMARY backstop.
-Mechanically enforced by the `gate-push.sh` PreToolUse hook + `managed-settings.json` + the CI
-control-plane diff-guard — not prose-only.
+shipped hook uses native `ask`); the in-session `gate-push.sh` clickable gate (Arthur's click) is
+the sole backstop — `main` is intentionally not branch-protected and there is no CI label-gate
+(single-operator fleet: the click already gates every merge).
 
 ## The dev↔host live-gate loop
 
@@ -147,7 +147,9 @@ itself has no image/Quadlet — its deploy analogue is the operator re-running `
   `fedora-bootstrap` DISCOVERS it org-wide, builds it disposably, and comments GREEN/RED;
   `fedora-dev` iterates on RED.
 - **APPROVE → merge** — Arthur clicks; `fedora-dev` merges (sole authority, control-plane included);
-  server-side branch protection on `main` is the primary backstop.
+  the in-session `gate-push.sh` clickable gate (Arthur's click) is the sole backstop — `main` is
+  intentionally not branch-protected and there is no CI label-gate (single-operator fleet: the click
+  already gates every merge).
 - **merged → deploy** — `fedora-bootstrap` pulls + redeploys via `workload-refresh@<name>`
   (busy-probe gated; auto-rollback on healthcheck failure).
 - **wrong box** — a box asked to do another box's step STOP-AND-SURFACEs for the human to re-route.
@@ -179,7 +181,7 @@ throwaway no-secret sandbox; never operates a host.
   `IMAGE=ghcr.io/oso-gato/<name>:latest` for a host deploy; **never hand-roll `podman`.**
 - **Control-plane class** (`policy/**`, `managed-settings.json`, `gate-push.sh`,
   `.github/workflows/**`, `*.container`, `run.sh*` security flags, key-sync, `*sudoers*`): standalone,
-  never bundled; needs the human-applied `control-plane-approved` label.
+  never bundled; FLAGGED in the merge TLDR for Arthur's scrutiny before he approves (no CI label-gate).
 - **Sources** (dnf → vendor `.repo` → AppImage/`.war`, GPG/sha-verified) · **no secrets in image
   layers** · **headless everywhere** (software-GL); sensitive ports tailnet-only, the desktop's web
   gate the one public door.
