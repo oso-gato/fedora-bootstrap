@@ -1,0 +1,94 @@
+# =============================================================================
+#  .live-gate — SAMPLE / SCHEMA REFERENCE  (copy to a workload repo's TOP LEVEL as `.live-gate`)
+# =============================================================================
+# A workload image repo ships this file at its repo root so the host pre-merge live-gate (Gate B)
+# knows HOW to build + run + probe a candidate of THAT repo. It travels IN the PR head, so the gate
+# always uses the contract that matches the code under test (no out-of-band host list to maintain).
+#
+# It is CONSUMED SAFELY — PARSED, NOT SOURCED. The host (live-gate-run.sh) reads this file line by
+# line and assigns each KEY=VALUE with `printf -v`; it NEVER `.`/`source`s it, so nothing here is
+# ever executed on the host (this file travels in the UNTRUSTED PR head). Grammar the parser enforces:
+#   * one `KEY=VALUE` per line (no `;`-chained multi-assignment lines);
+#   * keys must be schema keys (LIVE_GATE_TARGETS / CAND_* / the suffixed knobs below) — others ignored;
+#   * single-quoted values are taken VERBATIM — `$( )`, backticks, `&&`, `;`, `<`, `>` inside them are
+#     inert here and run only LATER, INSIDE the fenced container (single-quote your HEALTH/PROBE cmd);
+#   * double-quoted values: only the bash escapes \" \$ \\ \` are unescaped, $VAR is NOT expanded, and
+#     command substitution ($( ) or a backtick) is REFUSED (the whole contract is rejected RED);
+#   * unquoted values must be a bare token (no spaces / shell metacharacters);
+#   * no cross-variable references ($OTHER) — each key stands alone (inline the value).
+# A contract that violates the grammar (or smuggles command substitution / chaining) is rejected with
+# a RED verdict and is NOT executed.
+#
+# Resolution order the host applies (live-gate-run.sh):
+#   1. this in-tree `.live-gate`            (preferred — auto-tracks the repo)
+#   2. host ~/.config/live-gate/<repo>.env  (fallback preset, same schema)
+#   3. generic default                       (single target: Containerfile, image HEALTHCHECK, no probe)
+#
+# -----------------------------------------------------------------------------
+#  TARGETS
+# -----------------------------------------------------------------------------
+# Space-separated list of build targets. EACH target is built + gated independently and ALL must be
+# GREEN for the PR's overall verdict to be GREEN. Target names must match [A-Za-z0-9_].
+# Omit LIVE_GATE_TARGETS entirely => a single implicit target named `default`.
+#
+#   LIVE_GATE_TARGETS="xrdp grd"
+#
+# -----------------------------------------------------------------------------
+#  PER-TARGET KNOBS  — every key is suffixed with _<target> (e.g. CFILE_grd).
+#  A bare/global form (CAND_FENCE, CAND_PROBE, HEALTH, CAND_CFILE, CAND_SECRET_*, CAND_MEMORY,
+#  CAND_PIDS, CAND_HEALTH_*) acts as the fallback for any target that does not set its own — this
+#  is also how a legacy single-set preset (no LIVE_GATE_TARGETS) is consumed.
+# -----------------------------------------------------------------------------
+#
+#  CFILE_<t>   — the Containerfile to build for this target, relative to the repo root.
+#                Default: Containerfile. THIS is how a multi-lineage repo points grd at its own
+#                Containerfile.grd instead of the default xrdp Containerfile.
+#                  CFILE_xrdp="Containerfile"
+#                  CFILE_grd="Containerfile.grd"
+#
+#  FENCE_<t>   — the podman run flags for the disposable launch = the workload's REAL run.sh
+#                contract MINUS the public publish (-p) and MINUS real secrets/volumes.
+#                DEFAULT WHEN UNSET: the HARDEST fence `--network=none --cap-drop=ALL`. The probe
+#                runs on the candidate's OWN loopback via `podman exec`, so a loopback-only workload
+#                needs NO egress — leave the fence unset to stay networkless. A target that
+#                genuinely needs egress / devices / systemd OPTS IN here EXPLICITLY, e.g. a
+#                systemd-PID-1 lineage:
+#                  FENCE_grd="--systemd=always --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --device /dev/fuse"
+#                The gate ALWAYS adds its own --rm + a throwaway --name + hard --memory/--pids-limit.
+#                NEVER put a publish flag here: the gate is loopback-only by construction and FAILS
+#                CLOSED (RED) on any -p / --publish / -P / --publish-all in the resolved fence.
+#
+#  HEALTH_<t>  — explicit health-cmd (OCI build drops the Containerfile HEALTHCHECK, so the gate
+#                passes one explicitly). Runs inside the candidate; exit 0 = healthy.
+#                  HEALTH_xrdp='pgrep -x sshd'
+#
+#  PROBE_<t>   — the "does it actually serve" access-path assertion, run INSIDE the candidate via
+#                `podman exec` (hits the candidate's OWN loopback — nothing is published to the
+#                host). Exit 0 = serves. Stronger than HEALTH (a healthy-but-not-serving image
+#                fails here). Omit for a health-only gate.
+#                  PROBE_xrdp='[ "$(curl -sk -o /dev/null -w "%{http_code}" https://127.0.0.1:8443/)" = 200 ]'
+#
+#  SECRET_MOUNT_<t> + SECRET_ENV_<t>
+#              — scratch secrets for a target whose entrypoint requires a secrets file. SECRET_ENV
+#                is KEY=VALUE lines (newline-separated); the gate writes them 0600 and bind-mounts
+#                the file READ-ONLY at SECRET_MOUNT. Values are DISPOSABLE test values — NEVER real,
+#                NEVER baked into a layer, NEVER logged. The gate never logs in; it only needs the
+#                entrypoint's fail-fast required keys present so the candidate provisions + serves.
+#                  SECRET_MOUNT_xrdp='/etc/myapp/secrets.env'
+#                  SECRET_ENV_xrdp='ADMIN_PW=gate-scratch-not-a-real-secret'
+#
+#  MEMORY_<t> / PIDS_<t>          — gate-imposed resource caps (default 2g / 512). Raise for heavy
+#                                   targets (full desktop + JVM/Tomcat + DB).
+#  HEALTH_START_<t>               — --health-start-period (default 90s).
+#  HEALTH_TRIES_<t> / HEALTH_SLEEP_<t> — gate's healthy-wait budget = TRIES × SLEEP s (default 18 × 6).
+#
+# -----------------------------------------------------------------------------
+#  MINIMAL EXAMPLE — a single-target, loopback-only sshd box (networkless fence by default):
+# -----------------------------------------------------------------------------
+#   LIVE_GATE_TARGETS="default"
+#   CFILE_default="Containerfile"
+#   HEALTH_default='pgrep -x sshd'
+#   PROBE_default="timeout 6 bash -c 'exec 3<>/dev/tcp/127.0.0.1/22; read -t 5 -u 3 b; case \"\$b\" in SSH-*) exit 0;; *) exit 1;; esac'"
+#
+# A full multi-lineage example (xrdp + grd, systemd fence, scratch secrets, raised caps) is the
+# shipped host fallback live-gate-presets/fedora-desktop.env — read it as a worked reference.
