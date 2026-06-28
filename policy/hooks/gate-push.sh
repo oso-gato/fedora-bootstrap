@@ -244,7 +244,7 @@ if has_git_push "$cmd"; then
     if [ "$clean" -eq 1 ] && is_safe_push "$cmd"; then
         exit 0
     fi
-    deny "fedora-bootstrap is PR-only and NEVER pushes main: this push could touch main (bare push / main|HEAD|tag destination / --all|--mirror|--tags / unparseable). Push an explicit non-main FEATURE-branch refspec instead (those run autonomously), then open a PR — fedora-dev merges it on Arthur's APPROVE."
+    deny "fedora-bootstrap is PR-only and NEVER pushes main: this push could touch main (bare push / main|HEAD|tag destination / --all|--mirror|--tags / unparseable). Push an explicit non-main FEATURE-branch refspec instead, and BARE — those run autonomously, but a pipe/redirect/chain (| tail, 2>&1, &&) makes even a feature push unparseable and lands here; re-run the push ALONE and capture its output in a separate command — then open a PR; fedora-dev merges it on Arthur's APPROVE."
 fi
 
 # ----------------------------------------------------------------------------
