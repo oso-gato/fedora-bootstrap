@@ -67,6 +67,16 @@
 #                host). Exit 0 = serves. Stronger than HEALTH (a healthy-but-not-serving image
 #                fails here). Omit for a health-only gate.
 #                  PROBE_xrdp='[ "$(curl -sk -o /dev/null -w "%{http_code}" https://127.0.0.1:8443/)" = 200 ]'
+#                PROBE may also INVOKE A SHIPPED SCRIPT for richer, lineage-aware assertions — e.g.
+#                  PROBE_grd='bash /usr/local/share/<repo>/bin/gate-deep-probe.sh grd'
+#                where the script is COPY'd into the image (no Containerfile change, no new packages).
+#                It can prove far more than "serves": the desktop SESSION is actually RENDERING, the
+#                RDP server is configured, the Guacamole auth chain is wired, multi-user per-user ports
+#                are bound — all inside the loopback candidate, self-diagnosing (a failed check dumps
+#                its reason into the RED verdict for in-loop iteration). Keep it loopback-only +
+#                tool-frugal: a real RDP-pixel frame needs a PUBLISHED port + host-side
+#                xfreerdp/Xvfb/ImageMagick, so that stays operator-run. Proven by fedora-desktop's
+#                deeper Gate-B probe — zero host/apparatus change (the gate is workload-agnostic).
 #
 #  SECRET_MOUNT_<t> + SECRET_ENV_<t>
 #              — scratch secrets for a target whose entrypoint requires a secrets file. SECRET_ENV
