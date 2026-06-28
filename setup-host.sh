@@ -65,15 +65,9 @@ dnf -y -q --repo=tailscale-stable makecache >/dev/null 2>&1 || true
 # Cockpit's recommended add-in plugins are weak deps, so they are never pulled. The Packages table is the
 # allowlist of what IS installed; an add-in that isn't listed simply isn't there (do NOT drop this flag).
 #
-# LEAF over METAPACKAGE (Build Principle 4): install_weak_deps=False blocks Recommends but NOT a
-# metapackage's hard Requires, so a metapackage can silently drag in components we never use. We install
-# `fail2ban-server` (the daemon + client + fail2ban.service + the *-multiport ban actions), NOT the
-# `fail2ban` metapackage — which HARD-pulls `fail2ban-firewalld`->`firewalld` (a whole firewall whose
-# stock zone silently blocks mosh's UDP on the next reboot) and `fail2ban-sendmail`->`esmtp` (an MTA).
-# `fail2ban-server` needs only nftables (the ban backend), keeping the footprint minimal.
 dnf -y --setopt=install_weak_deps=False install \
     distrobox flatpak-session-helper podman tmux mosh openssh-server tailscale \
-    dnf5-plugin-automatic fail2ban-server \
+    dnf5-plugin-automatic \
     cockpit cockpit-podman cockpit-files \
     cockpit-networkmanager cockpit-selinux
 
@@ -310,7 +304,7 @@ else
     echo ">> no $selc (SELinux userspace absent?) — skipping SELinux config." >&2
 fi
 
-PHASE "host 5/7 ssh: permit only LOGIN_KEY from authorized_keys + fail2ban brute-force jail"
+PHASE "host 5/7 ssh: permit only LOGIN_KEY from authorized_keys"
 # Whitelist ONLY the LOGIN_KEY variable (never the unsafe blanket `yes`, which would also
 # permit LD_PRELOAD et al.). The keys themselves are synced into the user's own ~/.ssh by
 # setup-user.sh (user layer).
@@ -322,39 +316,16 @@ PermitUserEnvironment LOGIN_KEY
 EOS
 systemctl reload sshd 2>/dev/null || systemctl restart sshd
 
-# fail2ban: brute-force mitigation on the public sshd port (22). Fedora 44 has journald, so
-# `backend = auto` picks systemd (reads sshd's AUTHPRIV events from the journal — no rsyslog
-# needed on the host). tailnet CGNAT 100.64.0.0/10 is ignoreip'd so Tailscale-side logins
-# from your own devices are never throttled. The host is nftables-native (no iptables, no firewalld —
-# we install fail2ban-server, the leaf, not the `fail2ban` metapackage; see host 2/7), and
-# fail2ban-server guarantees nftables, so the ban backend is `nftables[type=multiport]`. Bantime 1h matches fedora-dev's
-# v1.1.9 jail for symmetric posture.
-install -d /etc/fail2ban/jail.d
-tee /etc/fail2ban/jail.d/sshd-fedora-bootstrap.local >/dev/null <<'EOS'
-[DEFAULT]
-bantime  = 1h
-findtime = 10m
-maxretry = 5
-backend  = auto
-ignoreip = 127.0.0.1/8 ::1 100.64.0.0/10
-banaction = nftables[type=multiport]
-
-[sshd]
-enabled = true
-port    = 22
-logpath = %(sshd_log)s
-EOS
-systemctl enable --now fail2ban.service
-# Re-assert config on re-runs (drop-in changes don't reload automatically).
-systemctl reload fail2ban.service 2>/dev/null || systemctl restart fail2ban.service
-
-# Converge to the leaf footprint (Build Principle 4): hosts provisioned before v1.1.15 installed the
-# `fail2ban` METAPACKAGE, which hard-pulled fail2ban-firewalld->firewalld + fail2ban-sendmail->esmtp —
-# none used, and the latent firewalld's stock zone blocks mosh's UDP after a reboot. Mark the leaf daemon
-# (+ its SELinux module) user-owned so the removal can't cascade THEM out, then drop the metapackage and
-# its baggage. Idempotent: a clean no-op on a fresh host (nothing installed to mark or remove).
-dnf mark user fail2ban-server fail2ban-selinux 2>/dev/null || true
-dnf remove -y fail2ban fail2ban-firewalld fail2ban-sendmail firewalld esmtp libesmtp 2>/dev/null || true
+# NO fail2ban (removed v1.2.39). The public ssh door is KEY-ONLY (PasswordAuthentication off in the
+# Fedora Cloud Base default) — there is no password to brute-force, so a fail2ban jail bought nothing
+# here; the keys are the access control. (The matching fedora-dev change drops it on the dev box too,
+# where it never even ran for lack of journald.) Converge an already-deployed host to the no-fail2ban
+# footprint: stop+disable the service, drop the jail file, and remove the package (leaf + SELinux
+# module) PLUS any legacy `fail2ban` METAPACKAGE baggage (firewalld/esmtp) a pre-v1.1.15 host may still
+# carry. Idempotent: a clean no-op on a fresh host (nothing installed to stop or remove).
+systemctl disable --now fail2ban.service 2>/dev/null || true
+rm -f /etc/fail2ban/jail.d/sshd-fedora-bootstrap.local
+dnf remove -y fail2ban fail2ban-server fail2ban-selinux fail2ban-firewalld fail2ban-sendmail firewalld esmtp libesmtp 2>/dev/null || true
 
 PHASE "host 6/7 tailscale (host node + Tailscale SSH; Cockpit over tailnet)"
 # Routing posture — ON BY DEFAULT for this deployment: this box is meant to BE an exit node and to reach the
@@ -373,10 +344,9 @@ ACCEPT_ROUTES="$(ts_bool "${TS_ACCEPT_ROUTES:-}")"; ADVERTISE_EXIT="$(ts_bool "$
 if [ "$ADVERTISE_EXIT" = true ]; then
     printf 'net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n' > /etc/sysctl.d/99-tailscale.conf
     sysctl -p /etc/sysctl.d/99-tailscale.conf >/dev/null
-    # Fedora Cloud Base ships no firewalld, and we no longer pull it in (fail2ban-server, the leaf, not
-    # the `fail2ban` metapackage — see host 2/7), so this is a DEFENSIVE no-op kept only in case a future
-    # package re-introduces firewalld. (Note: pre-v1.1.15 the metapackage DID drag firewalld in, and its
-    # stock zone blocked mosh — that is the bug v1.1.15 fixes.) Only if firewalld is actually running do
+    # Fedora Cloud Base ships no firewalld, and we install nothing that pulls it in, so this is a
+    # DEFENSIVE no-op kept only in case a future package re-introduces firewalld. Only if firewalld is
+    # actually running do
     # the exit-node docs (kb/1103, known issue tailscale/tailscale#3416) require masquerade so forwarded
     # internet egress is NAT'd.
     if systemctl is-active --quiet firewalld; then
