@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.39 (live-gate.sample: document the deeper-probe pattern - PROBE may invoke a shipped script for richer lineage-aware assertions; doc-only, no host change.)
+# Version: 1.2.40 (docs-access-honesty: correct two false public-exposure claims in README. The Access table marked dev-container ssh/mosh as public=no and the prose claimed the public IP exposes exactly two surfaces, but this host deploys the fedora-dev Quadlet which publishes public key-only ssh:4444 + mosh 61001-62000/udp; the table cell + sentence now list the dev container's key-only public door as a third hardened surface, native RDP/VNC + Cockpit remaining tailnet-only. Found during the SSH/Mosh connectivity audit. Docs only; no host package/service/deploy-path change. Prior: v1.2.39 (live-gate.sample: document the deeper-probe pattern - PROBE may invoke a shipped script for richer lineage-aware assertions; doc-only, no host change.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
