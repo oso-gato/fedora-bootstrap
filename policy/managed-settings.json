@@ -1,5 +1,9 @@
 {
   "effortLevel": "xhigh",
+  "env": {
+    "DISABLE_UPDATES": "1",
+    "DISABLE_AUTOUPDATER": "1"
+  },
   "permissions": {
     "deny": [
       "Bash(dnf copr:*)",
@@ -21,8 +25,6 @@
       "Bash(snap install:*)",
       "Write(~/.local/bin/**)",
       "Write(/usr/local/bin/**)",
-      "Bash(git push:*)",
-      "Bash(gh pr merge:*)",
       "mcp__*merge*",
       "mcp__*__merge*",
       "mcp__*__*merge*",

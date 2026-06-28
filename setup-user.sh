@@ -49,7 +49,25 @@ PY
 fi
 cd "$HERE" && distrobox assemble create --file distrobox.ini
 echo ">> first enter builds the box (dnf install claude-code from Anthropic + init hooks) — this can take a minute"
-distrobox enter claudebox -- true   # triggers distrobox-init; fails loudly HERE, not mislabeled later
+distrobox enter claudebox -- true   # triggers distrobox-init (dnf install claude-code + tools)
+# AUTHORITATIVE build barrier — do NOT trust the `-- true` exit alone. distrobox-enter only WAITS for
+# init completion in the enter that actually `podman start`ed the box; a *concurrent* enter that finds
+# it already running skips the wait and returns 0 while dnf is still in flight (this is exactly the
+# rebuild race the live-gate watcher caused — now prevented in box-rebuild.sh + the watcher's
+# ExecCondition). Belt-and-suspenders: assert the init's real signature (claude-code installed) before
+# touching the box further, so a half-built box can never be mislabeled "built" at the policy/verify
+# steps below. Loud, bounded wait (<< the run service's TimeoutStartSec); a genuine dnf failure already
+# made the `-- true` above exit nonzero (set -e), so reaching here means init merely needs to finish.
+for _i in $(seq 1 120); do
+    if distrobox enter claudebox -- command -v claude >/dev/null 2>&1; then break; fi
+    sleep 5
+done
+distrobox enter claudebox -- command -v claude >/dev/null 2>&1 || {
+    echo "FATAL: claudebox init did not complete — claude-code is not installed after the box build." \
+         "The distrobox-init dnf install failed or was interrupted (e.g. a concurrent 'distrobox enter'" \
+         "raced it). Aborting the rebuild rather than leaving a half-built box." >&2
+    exit 1
+}
 # Guard: the box's root maps to THIS user via keep-id (NOT real root), so the bridge + policy steps
 # below can only read the repo at /run/host$HERE if the clone dir is traversable+readable by this
 # user. Day-0 clones to /opt/fedora-bootstrap (root umask 022 -> world-traversable), which is fine; a
@@ -169,7 +187,13 @@ Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:%h/.local/bin
 ExecStart=$HERE/box-rebuild.sh
-TimeoutStartSec=480
+# 1800s (fleet standard — matches live-gate-watch.service). Supersedes the v1.2.30 480s cap, whose
+# analysis assumed a RACE-FREE rebuild (~150s, worst-case cold pull ~450s) — but v1.2.29's 15s
+# live-gate watcher races the rebuild and adds contention/hangs, so 480s clipped legit rebuilds and
+# turned the race into a hard SIGTERM kill. With the watcher now stood down for the rebuild window
+# (box-rebuild.sh), a rebuild runs clean well under this; the larger cap only widens the backstop for
+# a genuinely stuck rebuild and gives the in-script readiness wait room to fail loudly first.
+TimeoutStartSec=1800
 EOF
 
 cat > "$HOME/.config/systemd/user/claudebox-rebuild.service" <<'EOF'
@@ -293,17 +317,25 @@ install -m 0644 "$HERE/systemd-units/live-gate-watch.timer"            "$HOME/.c
 # EVERY image pull fail with `invalid policy ... Unknown key "//"` (exit 125).
 # Upgrade guidance lives here, in shell comments, NOT in the emitted JSON.
 #
-# To enforce signatures once every workload CI signs via cosign + GitHub Actions
-# OIDC, replace the ghcr.io/oso-gato stanza below with either:
-#   keyPath: { "type": "sigstoreSigned", "keyPath": "/etc/containers/cosign-pub-keys/oso-gato.pub" }
-#   keyless: { "type": "sigstoreSigned",
-#              "signedIdentity": { "type": "matchRepoDigestOrExact" },
-#              "fulcio": { "caData": "...",
-#                          "oidcIssuer": "https://token.actions.githubusercontent.com",
-#                          "subjectEmail": "..." } }
-# The same sigstoreSigned tightening applies to the registry.fedoraproject.org/fedora
-# base (Fedora publishes sigstore signatures) — upgrade both stanzas in lockstep so the
-# fixture base is never held to a weaker bar than the production run-set.
+# ENFORCEMENT IS DELIBERATELY DEFERRED (a researched decision, NOT a TODO):
+# our CI cosign-signs KEYLESS (GitHub Actions OIDC), so the signer identity is a
+# URI SAN (the workflow ref), NOT an email. podman's native containers-policy.json
+# `sigstoreSigned`/`fulcio` matches ONLY `subjectEmail` — there is NO URI /
+# workflow-identity / regexp field, and caData + rekorPublicKeyData are mandatory
+# with no system trust root (verified vs containers-policy.json(5)). So a keyless
+# stanza CANNOT match these signatures — a `subjectEmail` keyless config would
+# silently fail to gate. Enforcing keyless would need EITHER a cosign-verify
+# pre-pull gate (cosign on the host — a footprint addition that fights Principle 2:
+# cosign is neither class-(a) Fedora nor a permitted loose binary) OR switching CI
+# to STATIC-key signing (the keyPath form below — a managed private key, which
+# keyless was chosen to avoid). For a SINGLE-OPERATOR, own-CI, own-GHCR, TLS-pulled
+# fleet the threat (a stolen GHCR push token) does not justify either cost: the
+# signature stays a useful AUDIT TRAIL and the run-trust gate is
+# insecureAcceptAnything BY DESIGN. Re-open ONLY on (a) multiple operators / an
+# untrusted publisher, or (b) podman gaining keyless URI-identity matching.
+#   keyPath form (the ONLY natively-enforceable option — adopt only if a future
+#   decision switches CI to static-key signing):
+#     { "type": "sigstoreSigned", "keyPath": "/etc/containers/cosign-pub-keys/oso-gato.pub" }
 install -d -m 0755 "$HOME/.config/containers"
 install -d -m 0755 "$HOME/.config/containers/registries.d"
 if [ ! -e "$HOME/.config/containers/policy.json" ]; then
@@ -394,6 +426,19 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
             && git merge --ff-only origin/main)
     fi
 
+    # (a2) DELEGATE to the workload's OWN spin-up.sh to ASK that container's setup questions
+    # and create its podman secrets (as THIS rootless user), WITHOUT launching — so day0 never
+    # duplicates a container's questions; each spin-up.sh is the single source of truth for what
+    # its container asks (a new workload type ships its own spin-up.sh and is asked automatically).
+    # The wizard reads /dev/tty (preserved through the `su` into this user) and emits its resolved
+    # env as one `export …` line, captured here WITHOUT clobbering the host's own TS_AUTHKEY.
+    GH_APP_ID=""; GH_APP_INSTALLATION_ID=""; GH_APP_SECRET=""
+    if [ -x "$HOME/$_c/spin-up.sh" ]; then
+        _collected="$(cd "$HOME/$_c" && COLLECT_ONLY=1 ./spin-up.sh)" \
+            || { echo "FATAL: $_c spin-up.sh collect failed" >&2; exit 1; }
+        _save_ts="${TS_AUTHKEY:-}"; eval "$_collected"; TS_AUTHKEY="$_save_ts"
+    fi
+
     # (b) Install the container's Quadlet into systemd's user search path.
     # Enforces the fleet contract: every workload repo MUST ship <name>.container.
     if [ ! -f "$HOME/$_c/$_c.container" ]; then
@@ -403,6 +448,20 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     fi
     install -d -m 0755 "$HOME/.config/containers/systemd"
     install -m 0644 "$HOME/$_c/$_c.container" "$HOME/.config/containers/systemd/"
+
+    # (b2) Activate the standing GitHub App credential in the INSTALLED Quadlet from the answers
+    # collected above: uncomment the `# Secret=`/`# Environment=` lines + fill the PUBLIC ids.
+    # Idempotent; a no-op when no App was provisioned. The PEM lives ONLY in the podman secret the
+    # wizard created — never in this file, never in the repo. (The daemon-reload after the loop
+    # picks up the change.)
+    if [ -n "${GH_APP_ID:-}" ] && [ -n "${GH_APP_SECRET:-}" ]; then
+        _q="$HOME/.config/containers/systemd/$_c.container"
+        sed -i \
+          -e "s|^# *Secret=gh_app_key,type=mount,target=gh_app_key.*|Secret=${GH_APP_SECRET},type=mount,target=gh_app_key|" \
+          -e "s|^# *Environment=GH_APP_ID=.*|Environment=GH_APP_ID=${GH_APP_ID} GH_APP_INSTALLATION_ID=${GH_APP_INSTALLATION_ID}|" \
+          "$_q"
+        echo "  -> ${_c}: standing GitHub App credential wired (podman secret '${GH_APP_SECRET}', App ${GH_APP_ID})."
+    fi
 
     # (c) Enable the refresh + retry timers. The Quadlet-generated <name>.service
     # is enabled separately by the operator (or by the per-version upgrade
