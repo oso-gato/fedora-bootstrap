@@ -146,6 +146,15 @@ Tailscale join (one-time per host): with `TS_AUTHKEY=tskey-…` set it's unatten
 
 > **Security note:** with accept-routes ON, the in-box Claude Code can reach your LAN. Scope its access via tailnet ACLs (tag the VPS, grant only specific hosts/ports — never the bare `/24`).
 
+#### Credentials Day-0 asks for — the Tailscale key + an optional GitHub App
+
+- **Host Tailscale auth key** — `day0.sh` prompts for it first (`tskey-…`; **Enter** = browser web-login). Generate it in the Tailscale admin console → **Settings → Keys → Generate auth key**.
+- **Per-workload questions (delegated)** — as `setup.sh` brings up each bundled workload (currently `fedora-dev`), it runs **that workload's own `spin-up.sh`** to ask **its** setup questions, so each container is the single source of truth for what it asks. For `fedora-dev` that's its **Tailscale auth key** + an optional **standing GitHub App credential** (paste the App ID, Installation ID, and the private-key PEM — it streams into a podman secret, **never a file**). The App is **optional + fail-safe**: decline it and that box uses its own `gh auth login` instead.
+
+**Create the GitHub App once** — github.com → **Settings → Developer settings → GitHub Apps → New GitHub App** (owned by `oso-gato`): uncheck **Webhook → Active**; **Repository permissions** = Contents **R/W** + Pull requests **R/W** + Workflows **R/W**; **Create** → note the **App ID**; **Generate a private key** (`.pem`); **Install** on your repos → note the **Installation ID**.
+
+> The host's **own** GitHub App (for the host-claudebox's standing auth) and wiring the bundled box's collected Tailscale key into its Quadlet are tracked **follow-ups** (same feature family as the deferred fedora-desktop per-user work).
+
 #### What unfolds after that reboot — boots, stages, and when the workload lands
 
 The convergence above is also when the fleet first comes up — hands-off, with no `podman` command from you. `setup.sh` does **not** start `fedora-dev.service`; `setup-user.sh` installs `fedora-dev`'s Quadlet and enables **only** the `workload-refresh@`/`-retry@` timers, and it does so *after* the setup boot has already reached `default.target`. So the workload's first pull is deferred to the first full multi-user boot that reaches `default.target` with the Quadlet already present — the **permissive soak boot** — driven by the Quadlet's `WantedBy=default.target` and `core`'s lingering user manager. The default enforcing happy path is 1 manual + 2 automatic reboots (4 boots):
