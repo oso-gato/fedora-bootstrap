@@ -317,17 +317,25 @@ install -m 0644 "$HERE/systemd-units/live-gate-watch.timer"            "$HOME/.c
 # EVERY image pull fail with `invalid policy ... Unknown key "//"` (exit 125).
 # Upgrade guidance lives here, in shell comments, NOT in the emitted JSON.
 #
-# To enforce signatures once every workload CI signs via cosign + GitHub Actions
-# OIDC, replace the ghcr.io/oso-gato stanza below with either:
-#   keyPath: { "type": "sigstoreSigned", "keyPath": "/etc/containers/cosign-pub-keys/oso-gato.pub" }
-#   keyless: { "type": "sigstoreSigned",
-#              "signedIdentity": { "type": "matchRepoDigestOrExact" },
-#              "fulcio": { "caData": "...",
-#                          "oidcIssuer": "https://token.actions.githubusercontent.com",
-#                          "subjectEmail": "..." } }
-# The same sigstoreSigned tightening applies to the registry.fedoraproject.org/fedora
-# base (Fedora publishes sigstore signatures) — upgrade both stanzas in lockstep so the
-# fixture base is never held to a weaker bar than the production run-set.
+# ENFORCEMENT IS DELIBERATELY DEFERRED (a researched decision, NOT a TODO):
+# our CI cosign-signs KEYLESS (GitHub Actions OIDC), so the signer identity is a
+# URI SAN (the workflow ref), NOT an email. podman's native containers-policy.json
+# `sigstoreSigned`/`fulcio` matches ONLY `subjectEmail` — there is NO URI /
+# workflow-identity / regexp field, and caData + rekorPublicKeyData are mandatory
+# with no system trust root (verified vs containers-policy.json(5)). So a keyless
+# stanza CANNOT match these signatures — a `subjectEmail` keyless config would
+# silently fail to gate. Enforcing keyless would need EITHER a cosign-verify
+# pre-pull gate (cosign on the host — a footprint addition that fights Principle 2:
+# cosign is neither class-(a) Fedora nor a permitted loose binary) OR switching CI
+# to STATIC-key signing (the keyPath form below — a managed private key, which
+# keyless was chosen to avoid). For a SINGLE-OPERATOR, own-CI, own-GHCR, TLS-pulled
+# fleet the threat (a stolen GHCR push token) does not justify either cost: the
+# signature stays a useful AUDIT TRAIL and the run-trust gate is
+# insecureAcceptAnything BY DESIGN. Re-open ONLY on (a) multiple operators / an
+# untrusted publisher, or (b) podman gaining keyless URI-identity matching.
+#   keyPath form (the ONLY natively-enforceable option — adopt only if a future
+#   decision switches CI to static-key signing):
+#     { "type": "sigstoreSigned", "keyPath": "/etc/containers/cosign-pub-keys/oso-gato.pub" }
 install -d -m 0755 "$HOME/.config/containers"
 install -d -m 0755 "$HOME/.config/containers/registries.d"
 if [ ! -e "$HOME/.config/containers/policy.json" ]; then
