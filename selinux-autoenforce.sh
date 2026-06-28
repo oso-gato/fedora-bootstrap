@@ -90,7 +90,10 @@ gate_once(){
         case "$sysstate" in running|degraded) ;; *) why="systemctl is-system-running='$sysstate' (want: running/degraded)" ;; esac
     fi
     if [ -z "$why" ]; then
-        for s in sshd.service tailscaled.service cockpit.socket fail2ban.service; do
+        # fail2ban was removed fleet-wide (v1.2.41 — key-only doors, nothing to brute-force);
+        # it MUST NOT be in this critical-services list or the gate can never PASS and the host
+        # is pinned permissive (fresh) / auto-reverted from enforcing.
+        for s in sshd.service tailscaled.service cockpit.socket; do
             systemctl is-active --quiet "$s" || { why="$s not active"; break; }
         done
     fi
@@ -99,7 +102,7 @@ gate_once(){
         [ "${avc:-0}" -eq 0 ] || why="${avc} SELinux AVC denial(s) since boot"
     fi
     if [ -n "$why" ]; then log "gate FAIL: $why"; return 1; fi
-    log "gate PASS: system running; sshd/tailscaled/cockpit/fail2ban active; 0 AVC denials since boot"
+    log "gate PASS: system running; sshd/tailscaled/cockpit active; 0 AVC denials since boot"
     return 0
 }
 
