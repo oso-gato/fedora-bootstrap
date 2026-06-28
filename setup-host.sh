@@ -304,17 +304,19 @@ else
     echo ">> no $selc (SELinux userspace absent?) — skipping SELinux config." >&2
 fi
 
-PHASE "host 5/7 ssh: permit only LOGIN_KEY from authorized_keys"
-# Whitelist ONLY the LOGIN_KEY variable (never the unsafe blanket `yes`, which would also
-# permit LD_PRELOAD et al.). The keys themselves are synced into the user's own ~/.ssh by
-# setup-user.sh (user layer).
-tee /etc/ssh/sshd_config.d/20-login-key.conf >/dev/null <<'EOS'
-# fedora-bootstrap: let authorized_keys carry environment="LOGIN_KEY=<device>",
-# whitelisted to that single variable, so each session is tagged by the key that
-# authenticated (used to name the per-device tmux session).
-PermitUserEnvironment LOGIN_KEY
-EOS
-systemctl reload sshd 2>/dev/null || systemctl restart sshd
+PHASE "host 5/7 ssh: key-only door (keys = all of github.com/<user>.keys)"
+# The login door is key-only (Fedora Cloud default). Authorized keys are ALL keys
+# published on the GitHub account — synced into the user's own ~/.ssh by
+# setup-user.sh (user layer); the account is the single trust root. No in-image
+# allowlist and no LOGIN_KEY tagging (symmetric with the dev box). Converge an
+# already-deployed host: drop the old per-device LOGIN_KEY sshd drop-in if present
+# and reload sshd so PermitUserEnvironment is no longer set. Idempotent no-op on a
+# fresh host. (PermitUserEnvironment was only ever scoped to LOGIN_KEY and is now
+# unused; removing it keeps the door minimal.)
+if [ -f /etc/ssh/sshd_config.d/20-login-key.conf ]; then
+    rm -f /etc/ssh/sshd_config.d/20-login-key.conf
+    systemctl reload sshd 2>/dev/null || systemctl restart sshd
+fi
 
 # NO fail2ban (removed v1.2.39). The public ssh door is KEY-ONLY (PasswordAuthentication off in the
 # Fedora Cloud Base default) — there is no password to brute-force, so a fail2ban jail bought nothing
@@ -454,15 +456,12 @@ PHASE "host 7/7 tmux drop-in + config + bring up '$U' rootless user manager"
 # input+output (Prompt 3 / WebSSH, and the initial garble even on native
 # terminals). Session groups give shared windows + per-session size (tmux(1):
 # "Sessions in the same group share the same set of windows ... the current and
-# previous window ... remain independent"). A single "main" group (not per-
-# LOGIN_KEY) is deliberate: the primary access path is keyless Tailscale SSH,
-# which is terminated by tailscaled and never sets LOGIN_KEY (an OpenSSH
-# authorized_keys feature), so a per-key model would collapse to "main" on the
-# tailnet anyway AND would fragment the workspace across access methods. One
-# "main" group = one continuous workspace over tailnet ssh, public ssh, and mosh.
-# LOGIN_KEY is retained purely for per-device audit/attribution (authorized_keys
-# + PermitUserEnvironment), not for session routing. The per-connection "c<pid>"
-# session self-destroys on disconnect; work persists in the detached "main" base.
+# previous window ... remain independent"). A single "main" group is deliberate:
+# the primary access path is keyless Tailscale SSH, so a per-key/per-device model
+# would collapse to "main" on the tailnet anyway AND would fragment the workspace
+# across access methods. One "main" group = one continuous workspace over tailnet
+# ssh, public ssh, and mosh. The per-connection "c<pid>" session self-destroys on
+# disconnect; work persists in the detached "main" base.
 tee /etc/profile.d/zz-tmux-attach.sh >/dev/null <<'EOS'
 # ssh/mosh logins each get their own session in the shared "main" group.
 case $- in *i*) ;; *) return ;; esac

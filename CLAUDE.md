@@ -325,7 +325,7 @@ rule is carried for fleet parity so any future need inherits the identical bound
 | setup.sh | orchestrator (run as root): runs the system layer then the rootless layer in their correct identities |
 | setup-host.sh | **system layer**, as root — packages, /etc, system services, tailnet, host dnf-automatic, creates `core` + its rootless prerequisites |
 | setup-user.sh | **rootless layer**, as `core` — user podman socket, ssh keys, claudebox, Claude policy, the `claude` + `claudebox-rebuild` wrappers + the box-rebuild units, workload-refresh harness, verify (no host privilege) |
-| sync-authorized-keys.sh | authorizes `core`'s allowlisted SSH keys from `github.com/<user>.keys` (fingerprint allowlist = the access policy; other keys ignored), tags each `environment="LOGIN_KEY=<device>"`; defensive (never wipes keys on a failed fetch) |
+| sync-authorized-keys.sh | authorizes `core`'s SSH keys from `github.com/<user>.keys` — ALL keys on the account (the account is the single trust root; no in-image allowlist, no LOGIN_KEY tagging — symmetric with the dev box); defensive (never wipes keys on a failed/empty fetch) |
 | distrobox.ini | claudebox, declaratively (image pin, pre-init Anthropic repo on the `latest` channel, packages) |
 | box-rebuild.sh | the full claudebox rebuild (`distrobox rm -f` → re-run setup-user.sh); detached so it outlives the box it recreates |
 | claudebox-daily.sh | daily-refresh decision: rebuild now if idle, else defer to session exit |
