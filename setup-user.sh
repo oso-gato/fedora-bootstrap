@@ -426,6 +426,19 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
             && git merge --ff-only origin/main)
     fi
 
+    # (a2) DELEGATE to the workload's OWN spin-up.sh to ASK that container's setup questions
+    # and create its podman secrets (as THIS rootless user), WITHOUT launching — so day0 never
+    # duplicates a container's questions; each spin-up.sh is the single source of truth for what
+    # its container asks (a new workload type ships its own spin-up.sh and is asked automatically).
+    # The wizard reads /dev/tty (preserved through the `su` into this user) and emits its resolved
+    # env as one `export …` line, captured here WITHOUT clobbering the host's own TS_AUTHKEY.
+    GH_APP_ID=""; GH_APP_INSTALLATION_ID=""; GH_APP_SECRET=""
+    if [ -x "$HOME/$_c/spin-up.sh" ]; then
+        _collected="$(cd "$HOME/$_c" && COLLECT_ONLY=1 ./spin-up.sh)" \
+            || { echo "FATAL: $_c spin-up.sh collect failed" >&2; exit 1; }
+        _save_ts="${TS_AUTHKEY:-}"; eval "$_collected"; TS_AUTHKEY="$_save_ts"
+    fi
+
     # (b) Install the container's Quadlet into systemd's user search path.
     # Enforces the fleet contract: every workload repo MUST ship <name>.container.
     if [ ! -f "$HOME/$_c/$_c.container" ]; then
@@ -435,6 +448,20 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     fi
     install -d -m 0755 "$HOME/.config/containers/systemd"
     install -m 0644 "$HOME/$_c/$_c.container" "$HOME/.config/containers/systemd/"
+
+    # (b2) Activate the standing GitHub App credential in the INSTALLED Quadlet from the answers
+    # collected above: uncomment the `# Secret=`/`# Environment=` lines + fill the PUBLIC ids.
+    # Idempotent; a no-op when no App was provisioned. The PEM lives ONLY in the podman secret the
+    # wizard created — never in this file, never in the repo. (The daemon-reload after the loop
+    # picks up the change.)
+    if [ -n "${GH_APP_ID:-}" ] && [ -n "${GH_APP_SECRET:-}" ]; then
+        _q="$HOME/.config/containers/systemd/$_c.container"
+        sed -i \
+          -e "s|^# *Secret=gh_app_key,type=mount,target=gh_app_key.*|Secret=${GH_APP_SECRET},type=mount,target=gh_app_key|" \
+          -e "s|^# *Environment=GH_APP_ID=.*|Environment=GH_APP_ID=${GH_APP_ID} GH_APP_INSTALLATION_ID=${GH_APP_INSTALLATION_ID}|" \
+          "$_q"
+        echo "  -> ${_c}: standing GitHub App credential wired (podman secret '${GH_APP_SECRET}', App ${GH_APP_ID})."
+    fi
 
     # (c) Enable the refresh + retry timers. The Quadlet-generated <name>.service
     # is enabled separately by the operator (or by the per-version upgrade
