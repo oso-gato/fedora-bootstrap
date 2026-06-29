@@ -234,36 +234,16 @@ desktop is a *virtual* display rendered in software (llvmpipe), reached only ove
 (ssh / RDP / VNC / web, over the tailnet or the hardened public doors). A change that requires a
 physical display, GPU, or seat is a **defect**, not an option.
 
-## PRINCIPLE 0 — THE SELF-SUSTAINING APPARATUS (primary purpose)
+## PRINCIPLE 0 — THE SELF-SUSTAINING APPARATUS
 
-`fedora-dev` + `fedora-bootstrap` are **ONE self-sustaining development apparatus** whose primary
-purpose is to **keep the human OUT of the loop until genuinely needed**; this box RUNS the live-gate
-(Gate B) that validates the loop. The agent works to an **AUTONOMY MANDATE** — it does most of the
-work and thinking, **builds 2–3 options, tests them (throwaway build + live-gate), discards what
-doesn't fit, and lands the answer itself** (it does not shop options); it recommends **and
-self-tests** its recommendation; it **tears down and rebuilds to a zero-base** rather than defending
-a first draft. Options-decisions to the human are **RARE**.
+Autonomy mandate, two-tier validation, and Definition of Done live in `policy/CLAUDE.md` (THE SELF-SUSTAINING APPARATUS section); that law is always in context. This box's role (PR-only, never-merge) is in **PIPELINE CONTEXT** above.
 
-**Engage the human for EXACTLY TWO reasons:** (1) **materially complete** → the clickable APPROVE to
-merge; (2) **materially blocked** → a genuine roadblock needing a decision. Status checks and "which
-should I do" are not reasons.
 
-**DEFINITION OF DONE** (all four): (1) the FULL objective is materially achieved (not a ~5% slice);
-(2) validated through the loop via **TWO-TIER validation** — **Tier 1 (DEFAULT): in-box** — the dev
-box's `podman build` IS the throwaway; it builds + validates + iterates GREEN in its own nested engine
-with NO host involvement, for everything it CAN build+validate. **Tier 2 (HOST, via the
-`live-validate` label) ONLY when** the dev box CANNOT build/validate the throwaway (e.g. the
-systemd-PID-1 GRD lineage the nested engine can't boot) OR for the FINAL pre-production shipment (the
-host runs a throwaway build, proves it LIVE on a real host, tears it down) → then the host live-gate
-verdict must be GREEN too. PROVEN, not merely built (where even the host can't gate it, strongest
-available validation + a host-validation handoff); (3) adheres to the BUILD PRINCIPLES below
-(incl. Principle 10 THROWAWAY TREE & CHURN); (4) a **TLDR** is written and
-the agent has **critically self-examined** it (options considered+discarded, reasoning, fit to both
-the design and the task objective, genuine gaps) — dry-run AS IF the human; if it fails its own
-scrutiny, return to the loop, don't present. The PR is the agent's **PROOF OF WORK**.
+## DOC ARCHITECTURE — DRY rule (binding)
 
-Full text: `policy/CLAUDE.md` → **THE SELF-SUSTAINING APPARATUS — AUTONOMY MANDATE & DEFINITION OF
-DONE** (this box's PR-only / never-merge stop-points are unchanged — see PIPELINE CONTEXT above).
+One authoritative home per concept; every other mention is a one-line pointer or deleted. Evidence and benchmarks live only in the principle they prove. Fleet-wide identical blocks are enforced by CI (`bin/fleet-guard-parity.sh`).
+
+**Layer roles.** `policy/CLAUDE.md` = binding law (stamped at every box rebuild; always in context) — owns autonomy mandate, two-tier validation, DoD, merge gate, and control-plane class. `CLAUDE.md` (this file) = per-repo build rules (BUILD PRINCIPLES table) + per-file purpose map. `FLEET.md` = cross-box map (human + agent-accessible); shared sections fleet-wide. `README.md` = human-only; not an authoritative source for any agent rule.
 
 ## BUILD PRINCIPLES (binding for every code change)
 
