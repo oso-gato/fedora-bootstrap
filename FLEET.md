@@ -90,12 +90,11 @@ itself has no image/Quadlet — its deploy analogue is the operator re-running `
 - **live-validate → host verdict** — the PR author / `fedora-dev` labels a PR `live-validate`;
   `fedora-bootstrap` DISCOVERS it org-wide, builds it disposably, and comments GREEN/RED;
   `fedora-dev` iterates on RED.
-- **APPROVE → merge** — Arthur clicks; `fedora-dev` merges (sole authority, control-plane included);
-  the in-session `gate-push.sh` clickable gate (Arthur's click) is the sole backstop. A
+- **APPROVE → merge** — Arthur clicks; `fedora-dev` merges (sole authority, control-plane included).
+  The in-session `gate-push.sh` clickable gate (Arthur's click) gates merge verbs in-session; a
   loop-neutral **`require-PR` ruleset** on `main` (no required reviews or status checks) is active
-  fleet-wide — it forces every change through a PR, closing the headless `claude -p` bypass; `main`
-  has no required-review branch protection and no CI label-gate beyond this thin floor (the click
-  already gates every merge).
+  fleet-wide, closing the headless direct-push bypass server-side. `main` has no required-review
+  branch protection and no CI label-gate beyond this thin floor (the click already gates every merge).
 - **merged → deploy** — `fedora-bootstrap` pulls + redeploys via `workload-refresh@<name>`
   (busy-probe gated; auto-rollback on healthcheck failure).
 - **wrong box** — a box asked to do another box's step STOP-AND-SURFACEs for the human to re-route.
