@@ -122,11 +122,16 @@ mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.local/state/cla
 # denied"); a normal SSH login already has the right value, so it is a no-op there. It holds a SHARED
 # session lock (so the DAILY refresh can tell a session is live and defer), and on exit it (a) follows
 # a Claude-triggered rebuild, or (b) runs a daily refresh that was deferred while you worked — your
-# "quit -> it rebuilds". It also injects --settings {"ultracode":true} so every session STARTS in
-# ultracode (xhigh effort + workflow-by-default); ultracode is SESSION-SCOPED and IGNORED in settings
-# files, so the wrapper is the only place it can be made a default (effortLevel:xhigh lives in
-# policy/managed-settings.json as the persistent floor for any non-wrapper path). Emitted via a
-# QUOTED heredoc so $(id -u)/"$@"/$HOME/$state AND the literal {"ultracode":true} stay LITERAL.
+# "quit -> it rebuilds". It also injects --model opus --settings {"ultracode":true} so every session
+# STARTS in ultracode (xhigh effort + workflow-by-default). ultracode REQUIRES an xhigh-capable model:
+# claude-code 2.1.195 changed the DEFAULT model to Sonnet 4.6, which has no ultracode mode, so without
+# the --model pin a rebuild to that client silently downgrades the model and ultracode vanishes even
+# though --settings is unchanged; the `opus` alias (always the latest Opus) restores the pre-downgrade
+# default and is immune to future client default-model changes (still /model-overridable mid-session).
+# Both ultracode AND the model default are SESSION-SCOPED / IGNORED in settings files, so the wrapper
+# is the only place they can be made a default (effortLevel:xhigh lives in policy/managed-settings.json
+# as the persistent floor for any non-wrapper path). Emitted via a QUOTED heredoc so
+# $(id -u)/"$@"/$HOME/$state AND the literal {"ultracode":true} stay LITERAL.
 cat > "$HOME/.local/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
@@ -151,7 +156,7 @@ fi
 # before the exec and the ptsname race does not arise there — it is intentionally not retried).
 attempt=0
 while :; do
-    flock -s "$state/session.lock" distrobox enter claudebox -- bash -lc 'exec /usr/bin/claude --settings "{\"ultracode\":true}" "$@"' bash "$@"
+    flock -s "$state/session.lock" distrobox enter claudebox -- bash -lc 'exec /usr/bin/claude --model opus --settings "{\"ultracode\":true}" "$@"' bash "$@"
     rc=$?
     { [ "$rc" -eq 125 ] || [ "$rc" -eq 126 ]; } && [ "$attempt" -lt 6 ] || break
     attempt=$((attempt + 1))
