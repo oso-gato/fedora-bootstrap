@@ -10,7 +10,7 @@ One script that turns a fresh cloud server into your **"mother platform"** — a
 - 🚧 **The split:** it **never builds** images (CI does), **never merges** (`fedora-dev` does), and **never edits the live host** by hand — you re-run the setup script as root to apply. "Proposing a change" is never "applying it."
 - 🔒 **No secrets in the repo.**
 
-Version: **1.2.45** — docs patch: README restructured for readability (upgrade log v1.1.15–v1.2.42 relocated to [UPGRADING.md](UPGRADING.md)). Prior: v1.2.44 — fix SELinux enforce-gate no longer requires the removed `fail2ban.service` (was silently pinning the host permissive). v1.2.43 — `claude` wrapper now auto-retries the transient post-rebuild PTY race. Full history in [UPGRADING.md](UPGRADING.md).
+See [UPGRADING.md](UPGRADING.md) for the version history.
 
 ## Where this sits — the fleet
 
