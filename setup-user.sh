@@ -86,8 +86,22 @@ distrobox enter claudebox -- test -r "/run/host$HERE/claudebox-init.sh" || {
 distrobox enter claudebox -- sudo bash "/run/host$HERE/claudebox-init.sh" "$(id -u)"
 # Stamp the enterprise policy into the box. The `sudo` here is the CONTAINER's root
 # (distrobox grants it passwordless inside the box), NOT the host's root.
+# Assemble the law: per-box header + <!--FLEET-CORE--> marker replaced by fleet-core.md
+# (fleet-core.md mastered in fedora-dev). Use the local live clone if present;
+# fall back to GitHub raw (public repo; on Day-0 the live clone may not exist yet).
 distrobox enter claudebox -- sudo mkdir -p /etc/claude-code
-distrobox enter claudebox -- sudo cp "/run/host$HERE/policy/CLAUDE.md" /etc/claude-code/CLAUDE.md
+_fc="${HOME}/.local/share/fedora-dev/policy/fleet-core.md"
+if [ ! -f "$_fc" ]; then
+    _fc=$(mktemp /tmp/fleet-core-XXXXXX)
+    curl -fsSL "https://raw.githubusercontent.com/oso-gato/fedora-dev/main/policy/fleet-core.md" \
+        > "$_fc" || { echo "FATAL: cannot fetch fleet-core.md from fedora-dev" >&2; rm -f "$_fc"; exit 1; }
+fi
+_law=$(mktemp /tmp/assembled-law-XXXXXX)
+sed -e "/<!--FLEET-CORE-->/r ${_fc}" \
+    -e "/<!--FLEET-CORE-->/d" \
+    "${HERE}/policy/CLAUDE.md" > "$_law"
+distrobox enter claudebox -- sudo cp "/run/host${_law}" /etc/claude-code/CLAUDE.md
+rm -f "$_law" "$_fc"
 distrobox enter claudebox -- sudo cp "/run/host$HERE/policy/managed-settings.json" /etc/claude-code/managed-settings.json
 # Stamp the managed PreToolUse hooks. managed-settings.json wires
 # /etc/claude-code/hooks/gate-push.sh as a Bash PreToolUse hook with
