@@ -50,6 +50,25 @@ for _tok in $CAND_FENCE; do
     -p*|--publish|--publish=*|--publish-all|--publish-all=*|-P)
       echo "  fence REJECTED: publish flag '$_tok' present (the gate is loopback-only by construction; no port may be published)"
       echo "VERDICT: RED (fence publishes a port)"; exit 1;;
+    --privileged|--privileged=true)
+      echo "  fence REJECTED: '$_tok' grants full host capabilities — not permitted in a validation fence"
+      echo "VERDICT: RED (fence requests privileged)"; exit 1;;
+    --cap-add=ALL|--cap-add=NET_ADMIN|--cap-add=SYS_ADMIN|--cap-add=NET_RAW)
+      echo "  fence REJECTED: '$_tok' adds a dangerous capability — not permitted in a validation fence"
+      echo "VERDICT: RED (fence adds dangerous cap)"; exit 1;;
+    --network=host|--network=slirp4netns|--network=pasta)
+      # Only --network=none or --network=lo are permitted. host/slirp/pasta give the candidate
+      # real or near-real network access (including the tailnet on the host), defeating containment.
+      echo "  fence REJECTED: '$_tok' grants network access beyond loopback — not permitted in a validation fence"
+      echo "VERDICT: RED (fence opens network)"; exit 1;;
+    --network=*)
+      # Reject any --network= value that is not none or the loopback interface name.
+      _net="${_tok#--network=}"
+      case "$_net" in
+        none|lo) ;;  # permitted
+        *) echo "  fence REJECTED: '--network=$_net' is not a permitted fence value (only none or lo)"
+           echo "VERDICT: RED (fence opens network)"; exit 1;;
+      esac;;
   esac
 done
 

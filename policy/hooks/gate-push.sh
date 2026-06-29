@@ -54,8 +54,11 @@
 #   #40506 — so a maliciously-injected agent that spawns `claude -p` bypasses THIS hook.
 #   Hard containment of a HOSTILE in-box agent is managed-settings (allowManagedHooksOnly
 #   + allowManagedPermissionRulesOnly + disableBypassPermissionsMode) + this box being
-#   PR-only (it holds no merge credential and never merges). This gate stops the realistic
-#   case: keeping feature-branch pushes autonomous while denying any main-touch / merge.
+#   PR-only (it holds no merge credential and never merges) + a `require-PR` ruleset on
+#   main (active, 0 bypass actors): the ruleset blocks any direct-push to main even from
+#   headless, but does NOT block a headless `gh pr merge` (that satisfies the PR requirement).
+#   This gate stops the realistic case: keeping feature-branch pushes autonomous while denying
+#   any main-touch / merge.
 # ============================================================================
 set -uo pipefail
 
@@ -159,6 +162,12 @@ scan_merge_verbs() {
     # (mergePullRequest / mergeBranch). Broad on purpose; fail closed.
     printf '%s' "$text" | grep -Eq '(^|[^[:alnum:]_./-])gh[[:space:]]+api([[:space:]]|$)' \
         && printf '%s' "$raw" | grep -Eqi 'merge' && return 0
+    # gh api … refs/heads/main — REST ref-update (PATCH) and ref-creation (POST).
+    # `gh api -X PATCH …/git/refs/heads/main` carries no merge substring and no
+    # `git push`, so the two checks above both miss it. Catch it here: any `gh api`
+    # call whose arguments contain the canonical main-ref path shape is gated.
+    printf '%s' "$text" | grep -Eq '(^|[^[:alnum:]_./-])gh[[:space:]]+api([[:space:]]|$)' \
+        && printf '%s' "$raw" | grep -Eq 'refs/heads/main|git/refs/heads/main' && return 0
     return 1
 }
 
