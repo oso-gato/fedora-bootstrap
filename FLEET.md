@@ -34,9 +34,10 @@ that could touch `main` (a bare `git push`, a `main`/`HEAD`/`refs/tags/*` destin
 `--all`/`--mirror`/`--tags`, or any unparseable / quoted / chained target) PLUS the merge verbs
 (`gh pr merge`, `gh pr create --merge|--squash|--rebase|--auto`, `gh api …/merge|/merges`) route to
 an in-session clickable `ask` only Arthur can answer. There is NO approval-marker mechanism (the
-shipped hook uses native `ask`); the in-session `gate-push.sh` clickable gate (Arthur's click) is
-the sole backstop — `main` is intentionally not branch-protected and there is no CI label-gate
-(single-operator fleet: the click already gates every merge).
+shipped hook uses native `ask`/`deny`). A loop-neutral **`require-PR` ruleset** on `main`
+(no required reviews or status checks) is active on all three repos — it forces every change
+through a PR, closing the headless `claude -p` bypass; `main` has no required-review branch
+protection and no CI label-gate beyond this thin floor (the click already gates every merge).
 
 ## The dev↔host live-gate loop
 
@@ -147,8 +148,10 @@ itself has no image/Quadlet — its deploy analogue is the operator re-running `
   `fedora-bootstrap` DISCOVERS it org-wide, builds it disposably, and comments GREEN/RED;
   `fedora-dev` iterates on RED.
 - **APPROVE → merge** — Arthur clicks; `fedora-dev` merges (sole authority, control-plane included);
-  the in-session `gate-push.sh` clickable gate (Arthur's click) is the sole backstop — `main` is
-  intentionally not branch-protected and there is no CI label-gate (single-operator fleet: the click
+  the in-session `gate-push.sh` clickable gate (Arthur's click) is the sole backstop. A
+  loop-neutral **`require-PR` ruleset** on `main` (no required reviews or status checks) is active
+  fleet-wide — it forces every change through a PR, closing the headless `claude -p` bypass; `main`
+  has no required-review branch protection and no CI label-gate beyond this thin floor (the click
   already gates every merge).
 - **merged → deploy** — `fedora-bootstrap` pulls + redeploys via `workload-refresh@<name>`
   (busy-probe gated; auto-rollback on healthcheck failure).
