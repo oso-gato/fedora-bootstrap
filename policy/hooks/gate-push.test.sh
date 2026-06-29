@@ -103,6 +103,8 @@ check DENY 'gh pr create --squash'
 check DENY 'gh pr create -t a -b b --merge'
 check DENY 'gh api repos/o/r/merges -f base=main'
 check DENY 'gh api -X PUT repos/o/r/pulls/5/merge'
+check DENY 'gh api -X PATCH repos/oso-gato/fedora-bootstrap/git/refs/heads/main -f sha=abc123'
+check DENY 'gh api repos/oso-gato/fedora-bootstrap/git/refs -f ref=refs/heads/main -f sha=abc123'
 
 echo
 echo "== DENY (adversarial: chained / quoted / escaped / variable evasions to main) =="
