@@ -18,7 +18,7 @@ PHASE "user 1/5 rootless podman socket"
 [ -S "$XDG_RUNTIME_DIR/bus" ] || { echo "FATAL: user D-Bus ($XDG_RUNTIME_DIR/bus) is not up — run the SYSTEM phase (setup.sh as root / setup-host.sh) first." >&2; exit 1; }
 systemctl --user enable --now podman.socket
 
-PHASE "user 2/5 ssh keys (from github.com/${GH_KEYS_USER:-oso-gato}.keys, tagged per device)"
+PHASE "user 2/5 ssh keys (from github.com/${GH_KEYS_USER:-oso-gato}.keys — all account keys)"
 # Writes THIS user's own ~/.ssh/authorized_keys (user layer; no host privilege). GitHub
 # is the key registry — no keys in this repo. Re-running resyncs.
 bash "$HERE/sync-authorized-keys.sh"

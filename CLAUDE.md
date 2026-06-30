@@ -31,43 +31,30 @@ and removing containers), it is the **only** box that sees the live containers,
 so it **live-diagnoses** them and develops fixes to the fleet image repos it
 operates (`fedora-bootstrap`, `fedora-dev`, and the workload images deployed
 here). But it **opens PRs only — it never merges, pushes, or tags `main`**:
-`fedora-dev` merges, on Arthur's clickable APPROVE (see THE FLEET in
-`policy/CLAUDE.md`). CI builds the image; the new image reaches the host via the
+`fedora-dev` merges, on Arthur's clickable APPROVE (see THE FLEET — mastered in
+`fedora-dev/policy/fleet-core.md`, spliced into the in-box law at the `<!--FLEET-CORE-->` marker;
+absent in this tree by design). CI builds the image; the new image reaches the host via the
 workload-refresh pull. A repo it neither operates nor can diagnose stays
 surface-only. Developing source ≠ building (CI) ≠ merging (`fedora-dev`) ≠
 deploying (the pull).
 
-The dev↔host loop runs autonomously EXCEPT the final merge: develop → open PR
-(feature pushes are autonomous) → label it `live-validate` → the host live-gate
-(Gate B) DISCOVERS it ORG-WIDE by that label (no repo list to maintain), fetches
-the PR head on-demand, applies a STRUCTURAL GUARD (only builds a candidate
-carrying a `Containerfile`/`.live-gate`, else skips cleanly), builds it DISPOSABLY
-per the repo's own in-repo `.live-gate` contract (PARSED, never executed) under
-loopback-only fences, and posts a GREEN/RED verdict comment → iterate (RED: push
-a fix, or SUPERSEDE the branch if the approach was wrong; GREEN: BUILD UPON it)
-until green → Arthur's discrete clickable APPROVE → fedora-dev merges. The human
-is OUT of the per-iteration loop — only the merge is a click. Repos are discovered
-DYNAMICALLY: create/rename/merge/delete freely; enroll one just by labelling its
-PR `live-validate` and shipping a `.live-gate`. On the host this is wired by
-`live-gate-watch.sh` → `live-gate-run.sh` → `build-candidate.sh` +
-`validate-candidate.sh` (the host comments the verdict, never merges; no per-repo
-clone or workload list is maintained — discovery is the org-wide label query).
+The dev↔host loop runs autonomously EXCEPT the final merge — full mechanics in **THE FLEET**
+(mastered in `fedora-dev/policy/fleet-core.md`, spliced into the in-box law at the `<!--FLEET-CORE-->`
+marker; absent in this tree by design) and mirrored in [FLEET.md](FLEET.md) ("The dev↔host live-gate
+loop"). On THIS host it is wired `live-gate-watch.sh` → `live-gate-run.sh` → `build-candidate.sh` +
+`validate-candidate.sh`: discovery is one org-wide `live-validate`-label query (no repo list), a
+STRUCTURAL GUARD builds only a candidate carrying a `Containerfile`/`.live-gate`, the in-repo
+`.live-gate` is PARSED, never executed, and the host posts a GREEN/RED verdict comment — it never
+merges; iterate until green → Arthur's discrete clickable APPROVE → `fedora-dev` merges.
 
-**Post-merge deploy — the other half I own.** Once `fedora-dev` merges and CI
-republishes `:latest`, I redeploy — the only box that touches the live host. A
-workload refreshes via `workload-refresh@<name>.timer` (monthly `*-*-15 04:00`
-+2 h jitter) or on demand `systemctl --user start workload-refresh@<name>.service`.
-`container-refresh.sh` flocks `<name>.lock`, busy-probes (`claudebox-busy-probe.sh`
-AND-checks the in-container `session.lock` + `box-rebuild.lock`; busy → append
-`<name>.pending`, exit 10), captures the prior image id, `podman pull`s,
-digest-compares, and on change `systemctl --user restart <name>.service` (Quadlet,
-`Notify=healthy` blocks until healthy). **Unhealthy → automatic digest rollback:**
-retag `:latest` back to the prior id and restart (works only because the Quadlet is
-`Pull=missing`); on success clear `.pending` + write `<name>.rolled-back` (and does
-NOT re-arm the hourly `workload-refresh-retry@<name>.timer`, since registry `:latest`
-is still bad). A manual rollback beyond this is **STOP-AND-SURFACE**. The host
-itself has no image/Quadlet — its deploy analogue is the operator re-running
-`setup.sh` as root.
+**Post-merge deploy — the other half I own.** Once `fedora-dev` merges and CI republishes `:latest`,
+I redeploy — the only box that touches the live host — via `workload-refresh@<name>` (monthly
+`*-*-15 04:00` +jitter, or on demand). Full mechanics + the load-bearing invariants live in
+`policy/CLAUDE.md` → **WORKLOAD REFRESH MECHANISM** + **REFRESH IS NOT A SECURITY BOUNDARY** (the
+stamped in-box law): busy-probe deferral via `.pending`; digest-compare; **unhealthy → automatic
+digest rollback, which works ONLY because the Quadlet is `Pull=missing`**; a `.rolled-back` marker
+that does NOT re-arm the retry; a manual rollback beyond that is **STOP-AND-SURFACE**. The host
+itself has no image/Quadlet — its deploy analogue is the operator re-running `setup.sh` as root.
 
 ## RELEASING A NEW VERSION
 
@@ -236,7 +223,12 @@ physical display, GPU, or seat is a **defect**, not an option.
 
 ## PRINCIPLE 0 — THE SELF-SUSTAINING APPARATUS
 
-Autonomy mandate, two-tier validation, and Definition of Done live in `policy/CLAUDE.md` (THE SELF-SUSTAINING APPARATUS section); that law is always in context. This box's role (PR-only, never-merge) is in **PIPELINE CONTEXT** above.
+Autonomy mandate, two-tier validation, and Definition of Done live in **THE SELF-SUSTAINING
+APPARATUS** section — mastered in `fedora-dev/policy/fleet-core.md` and spliced into the in-box law
+(`/etc/claude-code/CLAUDE.md`) from `policy/CLAUDE.md`'s `<!--FLEET-CORE-->` marker on every box
+rebuild; present in the stamped law, **absent in this repo tree by design** (single-source parity
+guard), always in context for the in-box agent. This box's role (PR-only, never-merge) is in
+**PIPELINE CONTEXT** above.
 
 
 ## DOC ARCHITECTURE — DRY rule (binding)
