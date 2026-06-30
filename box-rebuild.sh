@@ -2,7 +2,7 @@
 # fedora-bootstrap — full claudebox rebuild (destroy + recreate from the pinned manifest).
 #
 # Run by the user service claudebox-rebuild-run.service (as the operating user, DETACHED under
-# the user manager so it OUTLIVES the box it tears down — see setup-user.sh "user 3/4"). There is
+# the user manager so it OUTLIVES the box it tears down — see setup-user.sh "user 3/5"). There is
 # NO schedule; a rebuild is always deliberate, triggered one of two ways:
 #   * In-box:  Claude runs `claudebox-rebuild` -> writes ~/.local/state/claudebox/rebuild.request
 #              -> claudebox-rebuild.path fires -> claudebox-rebuild.service -> starts THIS via the

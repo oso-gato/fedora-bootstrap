@@ -28,29 +28,23 @@ APPROVE** (a free-text "yes" is not approval).
 merges → CI builds + cosign-signs → GHCR → `fedora-bootstrap` pulls + redeploys. Build is always CI;
 operate/deploy is always `fedora-bootstrap`; merge is always `fedora-dev` (or Arthur on the web).
 
-**The promotion gate is REFSPEC-AWARE and fail-closed:** routine feature-branch pushes (an explicit
-non-`main`, non-`HEAD`, non-tag destination refspec) run AUTONOMOUSLY with no prompt; only a push
-that could touch `main` (a bare `git push`, a `main`/`HEAD`/`refs/tags/*` destination,
-`--all`/`--mirror`/`--tags`, or any unparseable / quoted / chained target) PLUS the merge verbs
-(`gh pr merge`, `gh pr create --merge|--squash|--rebase|--auto`, `gh api …/merge|/merges`) route to
-an in-session clickable `ask` only Arthur can answer. There is NO approval-marker mechanism (the
-shipped hook uses native `ask`/`deny`). A loop-neutral **`require-PR` ruleset** on `main`
-(no required reviews or status checks) is active on all three repos — it forces every change
-through a PR, closing the headless `claude -p` bypass; `main` has no required-review branch
-protection and no CI label-gate beyond this thin floor (the click already gates every merge).
+**The promotion gate is refspec-aware and fail-closed** — routine feature-branch pushes run
+autonomously; only a `main`-touching push or a merge verb routes to Arthur's in-session clickable
+`ask` (full refspec spec: the `THE FLEET` merge-gate block in `fedora-dev/policy/fleet-core.md` —
+parity-guarded, absent in this tree by design; each box's terminal verb is the **Axis B** table
+below). The real server-side floor is a **loop-neutral `require-PR` ruleset on `main`, active on all
+three repos** (no required reviews or status checks) — it forces every change through a PR, closing
+the headless `claude -p` bypass; the in-session gate is in-session guidance, the ruleset is the boundary.
 
 ## The dev↔host live-gate loop
 
-The dev↔host loop runs autonomously EXCEPT the final merge: develop → open PR (feature pushes are
-autonomous) → label it `live-validate` → the host live-gate (Gate B) DISCOVERS it ORG-WIDE by that
-label (no repo list to maintain), fetches the PR head on-demand, applies a STRUCTURAL GUARD (only
-builds a candidate carrying a `Containerfile`/`.live-gate`, else skips cleanly), builds it DISPOSABLY
-per the repo's own in-repo `.live-gate` contract (PARSED, never executed) under loopback-only fences,
-and posts a GREEN/RED verdict comment → iterate (RED: push a fix, or SUPERSEDE the branch if the
-approach was wrong; GREEN: BUILD UPON it) until green → Arthur's discrete clickable APPROVE →
-fedora-dev merges. The human is OUT of the per-iteration loop — only the merge is a click. Repos are
-discovered DYNAMICALLY: create/rename/merge/delete freely; enroll one just by labelling its PR
-`live-validate` and shipping a `.live-gate`.
+The dev↔host loop runs autonomously except the final merge: develop → open PR → label it
+`live-validate` → the host live-gate (Gate B) discovers it org-wide, fetches the PR head, and builds
+it **disposably per its in-repo `.live-gate`** (PARSED, never executed) under loopback-only fences,
+posting a GREEN/RED verdict → iterate until green → **Arthur's discrete clickable APPROVE is the only
+human touch** → `fedora-dev` merges. Repos enroll dynamically — just label a PR `live-validate` and
+ship a `.live-gate`. Authoritative spec: the `THE FLEET` block in `fedora-dev/policy/fleet-core.md`
+(the parity-guarded source this map mirrors — absent in this tree by design).
 
 **Validation is TWO-TIER — NOT "every change goes to the host."** **Tier 1 — in-box (the default):**
 `fedora-dev`'s own `podman build` IS the throwaway — it develops, validates, and iterates in its
@@ -66,21 +60,21 @@ merge-to-main presented.
 
 ## The self-sustaining apparatus — autonomy mandate & definition of done
 
-Full law: `policy/CLAUDE.md` (THE SELF-SUSTAINING APPARATUS section); always in context. This box's role in the apparatus: run the host live-gate (Gate B) that validates each PR turn of the loop (see **The dev↔host live-gate loop** above).
+Full law: the **THE SELF-SUSTAINING APPARATUS** section, mastered in `fedora-dev/policy/fleet-core.md`
+and spliced into each box's in-box law (`/etc/claude-code/CLAUDE.md`) at the `<!--FLEET-CORE-->` marker
+on every rebuild — present in the stamped law, absent in this tree by design (single-source parity
+guard); always in context for the in-box agent. This box's role in the apparatus: run the host
+live-gate (Gate B) that validates each PR turn of the loop (see **The dev↔host live-gate loop** above).
 
 ## Post-merge deploy (the host's other half)
 
-The loop's tail. Once `fedora-dev` merges and CI republishes
-`ghcr.io/oso-gato/<name>:latest` (+ cosign-signed), `fedora-bootstrap` redeploys — the only box that
-touches the live host. A workload refreshes via `workload-refresh@<name>.timer` (monthly, +jitter) or
-on demand `systemctl --user start workload-refresh@<name>.service`, which runs `container-refresh.sh`:
-it `flock`s `<name>.lock`, busy-probes via `claudebox-busy-probe.sh` (AND-checks the in-container
-`session.lock` + `box-rebuild.lock`; busy → defer to `<name>.pending`, exit 10), captures the prior
-image id, `podman pull`s, digest-compares, and on change `systemctl --user restart <name>.service`
-(Quadlet `Notify=healthy` blocks until healthy). **Unhealthy → automatic digest rollback:** retag
-`:latest` back to the prior id and restart (works because the Quadlet is `Pull=missing`), clear
-`.pending`, write `<name>.rolled-back`. A manual rollback beyond this is STOP-AND-SURFACE. The host
-itself has no image/Quadlet — its deploy analogue is the operator re-running `setup.sh` as root.
+The loop's tail. Once `fedora-dev` merges and CI republishes `ghcr.io/oso-gato/<name>:latest`,
+`fedora-bootstrap` redeploys — the only box that touches the live host — via `workload-refresh@<name>`
+(monthly +jitter, or on demand): it busy-probes, digest-compares, restarts the Quadlet, and
+**auto-rolls-back to the prior digest on health failure** (works because the Quadlet is `Pull=missing`).
+Full mechanics + invariants: this repo's `policy/CLAUDE.md` → **WORKLOAD REFRESH MECHANISM** +
+**REFRESH IS NOT A SECURITY BOUNDARY** (the operating law). The host itself has no image/Quadlet — its
+deploy analogue is the operator re-running `setup.sh` as root.
 
 **Box-to-box handoffs (who picks up what):**
 - **propose → open PR** — any box, on a repo it owns.
