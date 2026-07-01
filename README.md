@@ -245,6 +245,20 @@ git pull --ff-only origin main
 
 Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.47`; no host behaviour change. **Rollback** — `git checkout <prior-commit>` (docs only, no functional effect either way).
 
+#### Upgrading to v1.2.48 (from v1.0.0)
+
+**Live-gate fence — remove security theater.** The pre-merge gate (`validate-candidate.sh`) drops an inert `--cap-add=…` reject arm: it matched only the `=` form, so a space-form `--cap-add X` word-split past it, and the only real candidate (`fedora-dev`) already uses exactly those caps — so it blocked nothing while implying it did. Granular capability/device/`security-opt` opt-ins a candidate declares in its **first-party** `.live-gate` are now allowed; **blanket `--privileged`, publish flags, and non-loopback `--network` stay rejected**, and the real containment is unchanged — the hard defaults `--network=none --cap-drop=ALL --rm --memory --pids-limit` + rootless podman. No change to any real candidate's validation run.
+
+**As root on the VPS:**
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+```
+
+Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.48`; normal candidate validation is unchanged (the `fedora-dev` preset still gates GREEN). **Rollback** — `git checkout <prior-commit>` + re-run `setup.sh`.
+
 ---
 
 ## Operating the host (as the maintainer)

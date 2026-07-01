@@ -51,11 +51,16 @@ for _tok in $CAND_FENCE; do
       echo "  fence REJECTED: publish flag '$_tok' present (the gate is loopback-only by construction; no port may be published)"
       echo "VERDICT: RED (fence publishes a port)"; exit 1;;
     --privileged|--privileged=true)
-      echo "  fence REJECTED: '$_tok' grants full host capabilities — not permitted in a validation fence"
+      echo "  fence REJECTED: '$_tok' grants blanket privilege — not permitted in a validation fence"
       echo "VERDICT: RED (fence requests privileged)"; exit 1;;
-    --cap-add=ALL|--cap-add=NET_ADMIN|--cap-add=SYS_ADMIN|--cap-add=NET_RAW)
-      echo "  fence REJECTED: '$_tok' adds a dangerous capability — not permitted in a validation fence"
-      echo "VERDICT: RED (fence adds dangerous cap)"; exit 1;;
+    # NO --cap-add denylist arm (v1.2.48): granular capability/device/security-opt opt-ins a candidate
+    # declares in its FIRST-PARTY .live-gate (e.g. fedora-dev's `--cap-add NET_ADMIN --cap-add SYS_ADMIN
+    # --device /dev/net/tun --device /dev/fuse --security-opt label=disable`, required for its nested
+    # rootless podman) are ALLOWED. The former `--cap-add=…` reject was theater — it matched only the
+    # `=` form, so the space form `--cap-add X` word-split past it, and the sole real candidate uses
+    # exactly those caps — so it blocked nothing while implying it did. Blanket --privileged stays
+    # rejected above; the real containment is the hard defaults (--network=none --cap-drop=ALL --rm
+    # --memory --pids-limit) + rootless podman + the publish / non-loopback-network rejects here.
     --network=host|--network=slirp4netns|--network=pasta)
       # Only --network=none or --network=lo are permitted. host/slirp/pasta give the candidate
       # real or near-real network access (including the tailnet on the host), defeating containment.
