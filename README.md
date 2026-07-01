@@ -172,7 +172,7 @@ The convergence above is also when the fleet first comes up — hands-off, with 
 
 ### Upgrading an existing host to a new release
 
-Each release has one self-contained code block to paste into the VPS root terminal — find your target version and paste its block. Paths from `v1.1.1` through `v1.2.42` are archived in [UPGRADING.md](UPGRADING.md); the three most recent releases follow.
+Each release has one self-contained code block to paste into the VPS root terminal — find your target version and paste its block. Paths from `v1.1.1` through `v1.2.42` are archived in [UPGRADING.md](UPGRADING.md); the most recent releases follow.
 
 > Release-doc rules live in [CLAUDE.md](CLAUDE.md) (agent-facing).
 
@@ -230,6 +230,34 @@ git pull --ff-only origin main
 ```
 
 Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.45`; no host behaviour change. **Rollback** — `git checkout <prior-commit>` (docs only, no functional effect either way).
+
+#### Upgrading to v1.2.46 through v1.2.47 (from v1.0.0)
+
+Two trivial patches, no host behaviour change. **v1.2.46** restored `setup.sh`'s executable bit — it had regressed to mode `0644`, so a fresh `git clone`'s Day-0 wizard died with `setup.sh: Permission denied`. **v1.2.47** is a less-is-more documentation/comment reduction: duplicated dev↔host-loop / post-merge-deploy / merge-gate prose across `CLAUDE.md` + `FLEET.md` is DRY'd to single-source pointers (canonical homes: the parity-guarded fleet-core blocks + this repo's `policy/CLAUDE.md`), the dangling "SELF-SUSTAINING APPARATUS" pointers gain a fleet-core breadcrumb, a self-contradicting post-merge-tag clause is removed from the stamped law, stale `user 3/4` + `tagged per device` comments are corrected, and `setup.sh`'s recursive header changelog + the completed `LIVE-GATE-HANDOFF.md` narrative are trimmed.
+
+**As root on the VPS:**
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+```
+
+Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.47`; no host behaviour change. **Rollback** — `git checkout <prior-commit>` (docs only, no functional effect either way).
+
+#### Upgrading to v1.2.48 (from v1.0.0)
+
+**Live-gate fence — remove security theater.** The pre-merge gate (`validate-candidate.sh`) drops an inert `--cap-add=…` reject arm: it matched only the `=` form, so a space-form `--cap-add X` word-split past it, and the only real candidate (`fedora-dev`) already uses exactly those caps — so it blocked nothing while implying it did. Granular capability/device/`security-opt` opt-ins a candidate declares in its **first-party** `.live-gate` are now allowed; **blanket `--privileged`, publish flags, and non-loopback `--network` stay rejected**, and the real containment is unchanged — the hard defaults `--network=none --cap-drop=ALL --rm --memory --pids-limit` + rootless podman. No change to any real candidate's validation run.
+
+**As root on the VPS:**
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+```
+
+Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.48`; normal candidate validation is unchanged (the `fedora-dev` preset still gates GREEN). **Rollback** — `git checkout <prior-commit>` + re-run `setup.sh`.
 
 ---
 

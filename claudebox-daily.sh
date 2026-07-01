@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — DAILY claudebox refresh DECISION (update method 1). NOT the rebuild itself.
 #
-# Run by claudebox-rebuild-daily.service (timer-activated, see setup-user.sh "user 3/4"). Keeps the
+# Run by claudebox-rebuild-daily.service (timer-activated, see setup-user.sh "user 3/5"). Keeps the
 # box from drifting even if you never ask for a rebuild — WITHOUT ever interrupting live work:
 #   * No claudebox session active  -> start the detached rebuild now.
 #   * A session IS active          -> do NOT interrupt; drop a rebuild.pending marker. The `claude`
