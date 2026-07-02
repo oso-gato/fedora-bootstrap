@@ -272,6 +272,20 @@ git pull --ff-only origin main
 
 Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.49`. On a fresh disabled host, the Day-0 reboot converges to enforcing in **2 reboots**; confirm with `getenforce` → `Enforcing` once the second boot settles. An already-enforcing host is a no-op; an already-permissive-labeled host flips to enforcing live with no reboot. **Rollback** — `git checkout <prior-commit> && ./setup.sh < /dev/null` (restores the multi-reboot chain); to stay permissive, `SELINUX_TARGET=permissive ./setup.sh`.
 
+#### Upgrading to v1.2.50 (from v1.0.0)
+
+**Less-is-more cleanup (over-engineering audit), no security or loop-critical change.** `throwaway-sweep.sh`'s dnf-cache GC collapses from a hand-rolled age-then-LRU two-stage walk to a single blunt size cap (over cap → clear the dir; it re-warms free on a throwaway), and its dangling-layer prune de-tunes to a plain `podman image prune -f` (drops the `FD_DNF_CACHE_MAX_AGE_DAYS` + `FD_BUILDCACHE_AGE` knobs). The live-gate poll relaxes from `15s` + `AccuracySec=1s` to a plain `60s` (the ~90s build dominates; cadence is pickup-latency only). The tmux `prefix+g` co-view tri-state toggle + `@coview` + tutorial messages are dropped — the `window-size latest` base (the real multi-device Mac↔iPad fix) stays. The crash-orphan reaper, live-gate core, and workload rollback are untouched. *If you use `prefix+g` to force smallest/largest co-view, that's the one behavioural removal — revert that hunk if so.*
+
+**As root on the VPS:**
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+```
+
+Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.50`; no host behaviour change (the caches just GC more bluntly, the live-gate polls at 60s, and `prefix+g` is unbound in tmux). **Rollback** — `git checkout <prior-commit> && ./setup.sh < /dev/null`.
+
 ---
 
 ## Operating the host (as the maintainer)

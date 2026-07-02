@@ -2,14 +2,12 @@
 Description=Poll workload repos for `live-validate` PRs to live-gate
 
 [Timer]
-# Fast poll for snappy turn-around during active development (host is NAT/tailnet-only — no inbound
-# webhook is possible). 15s is safe: the watcher self-serializes (flock), so while a build is running
-# the intervening firings skip instantly; an idle firing is a cheap box-enter + one `gh pr list`.
-# AccuracySec=1s is REQUIRED for systemd to honor a sub-minute interval (default accuracy batches to
-# ~1min). The build+gate (~90s+) dominates total turn, so 15s is mostly about pickup latency.
-OnBootSec=15s
-OnUnitActiveSec=15s
-AccuracySec=1s
+# Poll for `live-validate` PRs (host is NAT/tailnet-only — no inbound webhook is possible). The
+# build+gate (~90s+) dominates the turn, and the watcher self-serializes (flock) + dedups by `.done`,
+# so cadence is purely a PICKUP-LATENCY knob: a plain 60s poll is imperceptible in a human-in-the-loop
+# review and lets systemd batch the timer normally (no forced sub-minute AccuracySec).
+OnBootSec=60s
+OnUnitActiveSec=60s
 Persistent=true
 
 [Install]

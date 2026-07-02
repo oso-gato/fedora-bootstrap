@@ -26,9 +26,6 @@
 #
 # INVOCATION:
 #   - opportunistic: called at live-gate-watch.sh start (the default wiring) — self-throttled.
-#   - periodic (recommended for a host that gates infrequently): a systemd --user timer or cron line
-#     calling this hourly keeps caches bounded even when no PR is gated. See the README "Upgrading"
-#     note for the timer/cron snippet.
 #   - manual: `FD_SWEEP_FORCE=1 throwaway-sweep.sh` runs immediately; `FD_SWEEP_DRYRUN=1` reports only.
 #
 # OVERRIDABLE KNOBS (env) — sane defaults:
@@ -37,19 +34,15 @@
 #   FD_SWEEP_FORCE         1 = ignore the throttle, sweep now          (default unset)
 #   FD_SWEEP_DRYRUN        1 = report only, remove nothing             (default unset)
 #   FD_DNF_CACHE              persistent dnf RPM bind-cache dir         (default ~/.cache/fd-dnf)
-#   FD_DNF_CACHE_CAP_GB       dnf cache SIZE cap; LRU-prune RPMs over   (default 15)
-#   FD_DNF_CACHE_MAX_AGE_DAYS dnf cache AGE cap; prune RPMs older than  (default 45)
+#   FD_DNF_CACHE_CAP_GB       dnf cache SIZE cap; cleared wholesale over (default 15)
 #   FD_THROWAWAY_TMPDIR       throwaway source-tree parent dir          (default ~/.cache/fd-throwaway)
-#   FD_BUILDCACHE_AGE      podman image-prune age for dangling layers  (default 168h)
 set -uo pipefail
 
 AGE_MIN="${FD_SWEEP_AGE_MIN:-120}"
 INTERVAL_MIN="${FD_SWEEP_INTERVAL_MIN:-30}"
 DNF_CACHE="${FD_DNF_CACHE:-$HOME/.cache/fd-dnf}"
 DNF_CAP_GB="${FD_DNF_CACHE_CAP_GB:-15}"
-DNF_MAX_AGE_DAYS="${FD_DNF_CACHE_MAX_AGE_DAYS:-45}"
 TT="${FD_THROWAWAY_TMPDIR:-$HOME/.cache/fd-throwaway}"
-BUILDCACHE_AGE="${FD_BUILDCACHE_AGE:-168h}"
 DRY="${FD_SWEEP_DRYRUN:-}"
 FORCE="${FD_SWEEP_FORCE:-}"
 
@@ -69,7 +62,7 @@ fi
 
 now="$(date +%s)"
 cutoff=$(( now - AGE_MIN * 60 ))
-echo "[sweep] start: age>${AGE_MIN}m orphans + cache GC (dnf cap ${DNF_CAP_GB}G/${DNF_MAX_AGE_DAYS}d, build-cache until=${BUILDCACHE_AGE})${DRY:+ [DRYRUN]}"
+echo "[sweep] start: age>${AGE_MIN}m orphans + cache GC (dnf size cap ${DNF_CAP_GB}G, dangling build layers)${DRY:+ [DRYRUN]}"
 
 # ---- (1) stale vcand-* containers (the EXIT trap missed) ----
 # `.Created.Unix` yields epoch seconds directly — the bare `{{.Created}}` renders Go's time.Time
@@ -102,40 +95,20 @@ if [ -d "$TT" ]; then
   done < <(find "$TT" -mindepth 1 -maxdepth 1 -type d -mmin +"$AGE_MIN" -print0 2>/dev/null)
 fi
 
-# ---- (4) BOUNDED dnf RPM bind-cache: AGE-prune (>MAX_AGE_DAYS) FIRST, then LRU SIZE-prune to <=cap ----
-# Order is deliberate: first drop genuinely-stale RPMs by AGE, THEN — if still over the SIZE cap —
-# LRU-evict the oldest of what remains until under cap. Age-then-size keeps the freshest churn RPMs hot.
+# ---- (4) BOUND the dnf RPM bind-cache by SIZE: if it exceeds the cap, drop it wholesale (it re-warms
+# from the vendor repos on the next build — a data-less throwaway loses nothing). Blunt on purpose: no
+# per-RPM age/LRU bookkeeping for a cache whose ENTIRE value is "skip a re-download", recovered for free.
 if [ -d "$DNF_CACHE" ]; then
-  # (4a) AGE prune: remove RPMs last modified more than FD_DNF_CACHE_MAX_AGE_DAYS days ago.
-  while IFS= read -r -d '' path; do
-    run rm -f "$path" && echo "[sweep] dnf-cache age-GC removed $(basename "$path") (>${DNF_MAX_AGE_DAYS}d)"
-  done < <(find "$DNF_CACHE" -type f -name '*.rpm' -mtime +"$DNF_MAX_AGE_DAYS" -print0 2>/dev/null)
-
-  # (4b) SIZE prune: if still over the cap, LRU-evict oldest RPMs until the total is <= cap.
-  cap_bytes=$(( DNF_CAP_GB * 1024 * 1024 * 1024 ))
   cur_kb="$(du -sk "$DNF_CACHE" 2>/dev/null | cut -f1)"; cur_kb="${cur_kb:-0}"
-  if [ $(( cur_kb * 1024 )) -gt "$cap_bytes" ]; then
-    echo "[sweep] dnf cache $(( cur_kb / 1024 ))M > cap ${DNF_CAP_GB}G — LRU-pruning oldest RPMs"
-    running=0
-    # newest first; once the running total passes the cap, every older RPM is pruned.
-    while IFS=$'\t' read -r _t sz path; do
-      running=$(( running + sz ))
-      if [ "$running" -gt "$cap_bytes" ]; then
-        run rm -f "$path" && echo "[sweep] dnf-cache size-GC removed $(basename "$path")"
-      fi
-    done < <(find "$DNF_CACHE" -type f -name '*.rpm' -printf '%T@\t%s\t%p\n' 2>/dev/null | sort -rn)
+  if [ "$cur_kb" -gt $(( DNF_CAP_GB * 1024 * 1024 )) ]; then
+    run rm -rf "$DNF_CACHE" && echo "[sweep] dnf cache $(( cur_kb / 1024 ))M > cap ${DNF_CAP_GB}G — cleared (re-warms on next build)"
   fi
 fi
 
-# ---- (5) BOUNDED podman build/layer cache: prune DANGLING images older than the cap age ----
-# Dangling-only (no -a): tagged workload images (ghcr.io/oso-gato/*) are never touched. On the host
-# the only local builds are throwaways, so dangling layers == abandoned candidate build cruft.
-if [ -n "$DRY" ]; then
-  echo "[sweep] DRYRUN would: podman image prune -f --filter until=$BUILDCACHE_AGE"
-else
-  pruned="$(podman image prune -f --filter "until=$BUILDCACHE_AGE" 2>/dev/null | grep -c '^sha256\|^[0-9a-f]\{12\}' || true)"
-  [ "${pruned:-0}" -gt 0 ] 2>/dev/null && echo "[sweep] pruned $pruned dangling build-cache image(s) older than $BUILDCACHE_AGE"
-fi
+# ---- (5) prune DANGLING build-layer images (abandoned candidate-build cruft). Dangling-only is
+# podman's default (no -a), so tagged workload images (ghcr.io/oso-gato/*) are never touched.
+if [ -n "$DRY" ]; then echo "[sweep] DRYRUN would: podman image prune -f (dangling layers)"
+else podman image prune -f >/dev/null 2>&1 || true; fi
 
 [ -z "$DRY" ] && : > "$LAST"
 echo "[sweep] done"

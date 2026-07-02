@@ -40,8 +40,7 @@ flock -n 9 || { echo "[live-gate-watch] another run holds the lock; skipping"; e
 # ---- ORPHAN SWEEP + CACHE GC (opportunistic, self-throttled, flock-guarded) ----
 # Reap throwaway images/containers/trees a `kill -9`/crash left behind (the per-run EXIT traps only
 # fire on a clean exit) and bound the persistent build caches so churn can't exhaust the VPS quota.
-# Self-throttled (FD_SWEEP_INTERVAL_MIN, default 30m) so calling it every poll is ~free. For an idle
-# host that gates infrequently, ALSO wire a periodic timer/cron (see the README "Upgrading" note).
+# Self-throttled (FD_SWEEP_INTERVAL_MIN, default 30m) so calling it every poll is ~free.
 SWEEP="$HOME/.local/bin/throwaway-sweep.sh"; [ -x "$SWEEP" ] || SWEEP="$HERE/throwaway-sweep.sh"
 [ -x "$SWEEP" ] && "$SWEEP" || true
 
