@@ -459,9 +459,6 @@ EOS
 #   client-attached/-resized -> refresh-client: full server-driven repaint on
 #     every attach/resize so a client that won't self-redraw (xterm.js / WebSSH /
 #     mosh) gets a clean frame after each rescale.
-#   prefix+g cycles latest -> smallest (every device sees the WHOLE session, sized
-#     to the smallest, big screens blank-letterbox) -> largest (biggest wins,
-#     smaller devices crop) -> latest.
 tee /etc/tmux.conf >/dev/null <<'EOS'
 set -g default-terminal "tmux-256color"
 set -g window-size latest
@@ -469,27 +466,6 @@ setw -g aggressive-resize on
 setw -g fill-character ' '
 set-hook -g client-attached 'refresh-client'
 set-hook -g client-resized  'refresh-client'
-set -g @coview latest
-
-# prefix+g: cycle the multi-device geometry policy (see comment above install).
-bind-key g {
-  if-shell -F '#{==:#{@coview},latest}' {
-    set -g window-size smallest
-    set -g @coview smallest
-    display-message 'co-view: SMALLEST - every device sees the whole session; big screens blank-letterbox'
-  } {
-    if-shell -F '#{==:#{@coview},smallest}' {
-      set -g window-size largest
-      set -g @coview largest
-      display-message 'co-view: LARGEST - biggest connected screen wins; smaller devices show a cropped view'
-    } {
-      set -g window-size latest
-      set -g @coview latest
-      display-message 'co-view: LATEST - the device you last typed on wins; whole session rescales to it'
-    }
-  }
-  refresh-client -S
-}
 EOS
 # Stand up the user's systemd manager + D-Bus user bus NOW, as root, so the rootless
 # phase (setup-user.sh, run via `su - $U`) finds the bus already up — no session-less
