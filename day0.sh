@@ -38,7 +38,8 @@ fi
 echo "setup: all layers PASS."
 
 # --- the one unavoidable manual step: core's password ------------------------
-# On success it reboots into the SELinux convergence (relabel -> soak -> enforcing).
+# On success it reboots into the no-wait SELinux convergence (relabel in permissive -> auto-reboot
+# -> flips to enforcing live; 2 reboots, no wait).
 # Staying permissive (SELINUX_TARGET=permissive) needs no reboot. A cancelled or
 # mismatched passwd does NOT reboot — just re-run this script.
 echo ">> Set core's admin/sudo + Cockpit/console password (never stored in the repo):"
