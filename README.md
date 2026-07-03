@@ -171,106 +171,7 @@ The convergence above is also when the fleet first comes up — hands-off, with 
 
 ### Upgrading an existing host to a new release
 
-Each release has one self-contained code block to paste into the VPS root terminal — find your target version and paste its block. Paths from `v1.1.1` through `v1.2.42` are archived in [UPGRADING.md](UPGRADING.md); the most recent releases follow.
-
-> Release-doc rules live in [CLAUDE.md](CLAUDE.md) (agent-facing).
-
-#### Upgrading to v1.2.43 (from v1.0.0)
-
-Fix for a **transient post-rebuild entry race**: right after a box rebuild, running `claude` can fail **once** with `Error: OCI runtime error: crun: ptsname: Inappropriate ioctl for device` and then work seconds later on a manual re-run. It is not a broken box — the freshly (re)started claudebox's `/dev/pts` needs a moment before an interactive `podman exec` can allocate a pseudo-terminal, so the wrapper's **first** `distrobox enter` loses the race. The `claude` wrapper now **retries automatically**: `distrobox-enter` ends in `exec "$@"`, so `podman`'s exit code reaches the wrapper verbatim, and `podman`/OCI exec-setup failures (exit **125/126** — codes a session that actually started never returns) are retried (bounded to **6**, escalating backoff capped at 4 s, ~18 s total — comfortably past the observed ~15 s warmup window) while any other outcome — success, `Ctrl-C` (130), a genuine non-zero (including the start-phase exit-1 path when the box is not already running) — is surfaced unchanged. This is **distinct from and complementary to** the v1.2.38 fix (concurrent enters *during* a rebuild); it addresses your **own** `claude` entry *after* the rebuild completes. **Applying is safe** — a plain `setup.sh` re-run does **not** remove the box; it only re-stamps the `claude` wrapper. **As root on the VPS:**
-
-```sh
-cd /opt/fedora-bootstrap
-git pull --ff-only origin main
-./setup.sh < /dev/null    # re-stamps the `claude` wrapper with the post-rebuild entry-retry loop
-```
-
-**Verify** the installed wrapper carries the retry loop (`~/.local/bin/claude` is owned by `core`):
-
-```sh
-grep -q 'still warming up after the rebuild' /home/core/.local/bin/claude && echo "retry present" || echo "MISSING"
-```
-
-Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.43`; the grep prints `retry present`. The real end-to-end proof is behavioural — after a `claudebox-rebuild`, `claude` reconnects on the first try (it prints `>> claudebox is still warming up after the rebuild — retrying entry (N/6)…` and proceeds, instead of erroring out and requiring a manual re-run). **Rollback** — `git checkout` the prior commit + re-run `setup.sh`; the wrapper reverts to entering once (so a post-rebuild `claude` may again need a manual re-run, as before).
-
-#### Upgrading to v1.2.44 (from v1.0.0)
-
-Host-only **security fix** — the SELinux enforce-gate no longer requires the removed `fail2ban.service`. In v1.2.41 fail2ban was dropped (key-only door), but `selinux-autoenforce.sh`'s critical-services health gate still listed `fail2ban.service`, so the gate could never PASS: a fresh host stayed **permissive** and an already-enforcing host **auto-reverted** to permissive. This drops `fail2ban.service` from that list so the convergence to **enforcing** can complete. A host pinned permissive by this bug carries a `selinux-chain.rolled-back` or `selinux-chain.aborted` marker — the standard flow re-stamps the fixed script; clear the marker to re-arm the now-fixed convergence.
-
-**As root on the VPS:**
-
-```sh
-# Standard upgrade flow — re-stamps the corrected selinux-autoenforce.sh + units.
-cd /opt/fedora-bootstrap
-git pull --ff-only origin main
-./setup.sh < /dev/null
-
-# ONLY if this bug pinned the host permissive (a marker exists): clear it + re-arm.
-ls /var/lib/fedora-bootstrap/selinux-chain.rolled-back \
-   /var/lib/fedora-bootstrap/selinux-chain.aborted 2>/dev/null \
-  && rm -f /var/lib/fedora-bootstrap/selinux-chain.rolled-back \
-           /var/lib/fedora-bootstrap/selinux-chain.aborted \
-  && ./setup.sh < /dev/null   # re-arms the convergence (reboots into the soak → enforce)
-```
-
-Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.44`; once a healthy enforcing boot is confirmed, `getenforce` → `Enforcing` and `/var/lib/fedora-bootstrap/selinux-chain.enforced` exists. A host already healthily enforcing is unaffected (no-op). **Rollback** — `git checkout <prior-commit> && ./setup.sh < /dev/null`; to stay permissive deliberately, `SELINUX_TARGET=permissive ./setup.sh`.
-
-
-#### Upgrading to v1.2.45 (from v1.0.0)
-
-Documentation-only patch — the README is restructured for human readability. The per-version upgrade log (`v1.1.15`–`v1.2.42`, 811 lines) is relocated verbatim to [UPGRADING.md](UPGRADING.md); the front-matter `Version:` line is replaced with a short summary. The `v1.2.43` and `v1.2.44` upgrade subsections remain in this file. No host code or behaviour changes.
-
-**As root on the VPS:**
-
-```sh
-cd /opt/fedora-bootstrap
-git pull --ff-only origin main
-./setup.sh < /dev/null
-```
-
-Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.45`; no host behaviour change. **Rollback** — `git checkout <prior-commit>` (docs only, no functional effect either way).
-
-#### Upgrading to v1.2.46 through v1.2.47 (from v1.0.0)
-
-Two trivial patches, no host behaviour change. **v1.2.46** restored `setup.sh`'s executable bit — it had regressed to mode `0644`, so a fresh `git clone`'s Day-0 wizard died with `setup.sh: Permission denied`. **v1.2.47** is a less-is-more documentation/comment reduction: duplicated dev↔host-loop / post-merge-deploy / merge-gate prose across `CLAUDE.md` + `FLEET.md` is DRY'd to single-source pointers (canonical homes: the parity-guarded fleet-core blocks + this repo's `policy/CLAUDE.md`), the dangling "SELF-SUSTAINING APPARATUS" pointers gain a fleet-core breadcrumb, a self-contradicting post-merge-tag clause is removed from the stamped law, stale `user 3/4` + `tagged per device` comments are corrected, and `setup.sh`'s recursive header changelog + the completed `LIVE-GATE-HANDOFF.md` narrative are trimmed.
-
-**As root on the VPS:**
-
-```sh
-cd /opt/fedora-bootstrap
-git pull --ff-only origin main
-./setup.sh < /dev/null
-```
-
-Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.47`; no host behaviour change. **Rollback** — `git checkout <prior-commit>` (docs only, no functional effect either way).
-
-#### Upgrading to v1.2.48 (from v1.0.0)
-
-**Live-gate fence — remove security theater.** The pre-merge gate (`validate-candidate.sh`) drops an inert `--cap-add=…` reject arm: it matched only the `=` form, so a space-form `--cap-add X` word-split past it, and the only real candidate (`fedora-dev`) already uses exactly those caps — so it blocked nothing while implying it did. Granular capability/device/`security-opt` opt-ins a candidate declares in its **first-party** `.live-gate` are now allowed; **blanket `--privileged`, publish flags, and non-loopback `--network` stay rejected**, and the real containment is unchanged — the hard defaults `--network=none --cap-drop=ALL --rm --memory --pids-limit` + rootless podman. No change to any real candidate's validation run.
-
-**As root on the VPS:**
-
-```sh
-cd /opt/fedora-bootstrap
-git pull --ff-only origin main
-./setup.sh < /dev/null
-```
-
-Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.48`; normal candidate validation is unchanged (the `fedora-dev` preset still gates GREEN). **Rollback** — `git checkout <prior-commit>` + re-run `setup.sh`.
-
-#### Upgrading to v1.2.49 (from v1.0.0)
-
-**SELinux convergence — no-wait.** The multi-reboot enforce chain (a 15-min soak, an AVC acceptance gate, a post-enforce health check, an auto-revert, four `selinux-*` units + the 176-line `selinux-autoenforce.sh` driver + `selinux-chain.*` markers) is replaced by a **fire-once** flip: from a disabled host, `setup-host.sh` sets `SELINUX=permissive` + `/.autorelabel`; the Day-0 `passwd core && reboot` relabels **in permissive** (brick-safe), auto-reboots, and `selinux-enforce-once.service` then flips to enforcing **live** on the now-labeled boot and self-disarms — **2 reboots, no waiting**, enforcing without a 3rd reboot. Enforcing stays the target; the soak/health-check/auto-revert insurance is dropped by design (a data-less VPS just re-provisions if enforcing ever wedges). `SELINUX_TARGET=permissive` opt-out unchanged. **Converges an existing host:** re-running `setup.sh` tears down the old chain (disables + removes the four units, the driver, and the `selinux-chain.*` markers) and re-arms the fire-once flip.
-
-**As root on the VPS:**
-
-```sh
-cd /opt/fedora-bootstrap
-git pull --ff-only origin main
-./setup.sh < /dev/null
-```
-
-Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.49`. On a fresh disabled host, the Day-0 reboot converges to enforcing in **2 reboots**; confirm with `getenforce` → `Enforcing` once the second boot settles. An already-enforcing host is a no-op; an already-permissive-labeled host flips to enforcing live with no reboot. **Rollback** — `git checkout <prior-commit> && ./setup.sh < /dev/null` (restores the multi-reboot chain); to stay permissive, `SELINUX_TARGET=permissive ./setup.sh`.
+The standard flow (`git pull --ff-only` + `./setup.sh < /dev/null`, as root) upgrades ANY host — `setup.sh` is idempotent across the whole version history. The full changelog + the standard flow + retained procedures live in [UPGRADING.md](UPGRADING.md); the latest releases follow. Release-doc rules: [CLAUDE.md](CLAUDE.md).
 
 #### Upgrading to v1.2.50 (from v1.0.0)
 
@@ -299,6 +200,11 @@ git pull --ff-only origin main
 ```
 
 Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.51`; `command -v fastfetch` resolves on the host, and the banner shows on your next ssh/mosh login. **Rollback** — `git checkout <prior-commit> && ./setup.sh < /dev/null` (removes the drop-in; the `fastfetch` package stays installed but unused).
+
+#### v1.2.52
+
+Release-doc de-ceremony (docs only, no host change): the release convention is rebased on a changelog table — a full upgrade subsection now ships only when a release has genuine version-specific operator steps. `UPGRADING.md` collapses from 51 archived subsections to the changelog + retained procedures; the v1.0.0 baseline guarantee and version-lockstep rules are condensed; Build Principle 10 is trimmed to its invariants (also fixing its stale pre-v1.2.50 cache-GC description). Standard flow only.
+
 
 ---
 
