@@ -62,12 +62,10 @@ Every change that ships ANY visible delta (code or doc) gets a version bump.
 Sequence:
 
 1. Apply the change (scripts, units, policy, distrobox.ini, README, etc.).
-2. Bump version markers IN LOCKSTEP — they must agree:
-   - `VERSION` file at repo top
-   - `setup.sh` header comment (line near top: `# Version: X.Y.Z (one-line summary)`)
-   - README front-matter `Version: **X.Y.Z** — ...` line
-3. Add a README "Upgrading to vX.Y.Z" subsection per the RELEASE-DOC
-   CONVENTION below.
+2. Bump the version: `VERSION` (the single source of truth) + mirror it in the
+   `setup.sh` header (`# Version: X.Y.Z (one-line summary)` — ONE line, no
+   embedded changelog; the changelog lives in the release docs below).
+3. Add the release doc per the RELEASE-DOC CONVENTION below.
 4. Commit (single commit per release; do not batch multiple releases).
 5. Open a PR; `fedora-dev` merges to `main` on Arthur's clickable APPROVE (THE
    FLEET) — the box never direct-pushes `main`. The host applies the merged
@@ -78,139 +76,40 @@ additive features that don't break existing usage; major for breaking
 changes. Doc-only fixes still patch-bump.
 
 **No per-release git tag.** The version-of-record is the in-tree `VERSION` +
-`setup.sh` header + README front-matter + the README "Upgrading to vX.Y.Z"
-subsection (the changelog). The host deploys `main` (not tags), rollback is
-`git checkout <commit>` + re-run `setup.sh`, and nothing external pins to a
-release — so a per-release tag was redundant friction (the `v1.0.0`–`v1.2.19`
-tags remain as history; releases since are untagged with no ill effect).
-Tagging stays OPTIONAL — for a genuine milestone you deliberately choose to
-name, never a per-release obligation.
-
-A mistake in a released version ships as a new patch release with a subsection
-pointing back to the issue (and, where it documented something unsafe, a dated
-`> **⚠️ Corrected in vX.Y.Z:**` callout on the original — see RELEASE-DOC).
+`setup.sh` header + the release docs (the changelog). The host deploys `main`
+(not tags), rollback is `git checkout <commit>` + re-run `setup.sh`, and
+nothing external pins to a release — so a per-release tag was redundant
+friction (the `v1.0.0`–`v1.2.19` tags remain as history). Tagging stays
+OPTIONAL — for a genuine milestone you deliberately choose to name, never a
+per-release obligation.
 
 ## RELEASE-DOC CONVENTION (binding)
 
-README has a top-level section "Upgrading an existing host to a new release".
-EVERY release adds a subsection inside it. Prior versions' subsections are
-historical record — never modify them after the release is merged. TWO additive (never-rewriting) exceptions: (1) **RELOCATION** — older subsections may be moved verbatim to `UPGRADING.md` to keep README scannable; leave the latest 1–2 subsections + a pointer in README, content unchanged. (2) **dated SAFETY-CORRECTION / SUPERSESSION note** — a `> **⚠️ Corrected in vX.Y.Z:**` callout (beside a subsection documenting something factually wrong or unsafe) OR a `> **⚠️ Superseded in vX.Y.Z:**` callout (beside a still-valid procedure that a later release replaced with a better one) may be appended, pointing to the procedure in the current release's subsection. Never silently rewrite the original steps.
+The standard upgrade flow is ALWAYS the same (`cd /opt/fedora-bootstrap && git
+pull --ff-only origin main && ./setup.sh < /dev/null`) and `setup.sh` is
+idempotent across the entire version history — a v1.0.0 host jumps straight to
+latest in one run. So the release doc is sized to what the release actually
+demands of the operator:
 
-Subsection title:
-- `"Upgrading to vX.Y.Z (from v1.0.0)"` — default. v1.0.0 is the binding
-  baseline; every code-bearing release MUST support starting from there.
-- `"Upgrading to vX.Y.Z (from vA.B.C and later)"` — ONLY when the release
-  genuinely cannot support v1.0.0 as a starting point (destructive
-  migration, removed-then-restored capability, etc.). REQUIRES surfacing
-  the constraint to the user BEFORE writing the subsection.
-- `"Upgrading to vX.Y.Z through vX.Y.W (from v<last code-bearing>)"` —
-  consolidated doc-only patch runs; presumes the user already followed
-  the prior code-bearing release's subsection.
-
-## v1.0.0 BASELINE GUARANTEE (binding)
-
-By default, every per-version subsection for a code-bearing release MUST
-support v1.0.0 as a valid starting point. `setup.sh` is designed to be
-idempotent across the entire version history — re-running on a v1.0.0
-host installs all intermediate deltas (every `setup-host.sh` + every
-`setup-user.sh` phase) in a single pass, and the per-release operator
-steps (env file population, container migration, etc.) compose with the
-same standard upgrade flow.
-
-This is a HARD default, not a soft suggestion. When drafting a new
-release's upgrade subsection:
-
-1. Default the heading to `(from v1.0.0)`.
-2. Verify mentally (or by walking the diff against v1.0.0) that the
-   `setup.sh` re-run + the version-specific operator steps cleanly take
-   a v1.0.0 host to the new version. If yes, ship it.
-3. If you discover the upgrade GENUINELY cannot start from v1.0.0
-   (because some intermediate release performed a destructive migration
-   the new setup.sh can no longer redo, or because of an OS-level
-   constraint that broke a prior assumption): **STOP. Do not write the
-   subsection.** Surface the constraint to the user with:
-   - what the specific blocking factor is
-   - the minimum starting point that works
-   - whether a multi-step upgrade path (v1.0.0 → vA.B.C → new) can be
-     documented as a workaround
-   Let the user decide whether to relax `from v1.0.0`, document a
-   multi-step path, or refactor setup.sh to restore v1.0.0 starting
-   compatibility.
-
-If the heading reads `(from vA.B.C and later)` for any reason other than
-"the user explicitly accepted that this release cannot support v1.0.0",
-that is a violation of this rule.
-
-Examples named explicitly:
-- `"Upgrading to v1.1.1 (from v1.0.0)"` — code-bearing release; v1.0.0
-  fully supported per the analysis in the prose intro.
-- `"Upgrading to v1.1.2 through v1.1.7 (from v1.1.1)"` — consolidated
-  doc-only patch run, presumes v1.1.1.
-- `"Upgrading to v2.0.0 (from v1.5.0 and later)"` — hypothetical breaking
-  release where v1.0.0 cannot be a starting point because v1.5.0
-  permanently migrated something that v2.0.0 needs to be already migrated.
-  This kind of heading REQUIRES the prior user-discussion step.
-
-Subsection structure, in this order:
-
-1. **Prose intro** — what this release adds at the operator-visible level
-   and what assumptions the upgrade block makes (e.g., "this assumes
-   fedora-dev was previously deployed via run.sh; if not, step 3 is a
-   fresh-install path").
-2. **One self-contained `sh` code block** the operator pastes ONCE into the
-   VPS root terminal. The block always contains, in order:
-   - **Standard upgrade flow**: `cd /opt/fedora-bootstrap`, `git pull
-     --ff-only origin main`, `./setup.sh < /dev/null`. `setup.sh` is
-     idempotent — re-running on an existing host picks up new phases,
-     files, units, policies without disturbing existing state. Volumes
-     persist by name; existing systemd units are re-stamped.
-   - **Version-specific operator steps** — anything `setup.sh` can't or
-     shouldn't do (env-file population, pre-Quadlet container migration,
-     retiring deprecated units, etc.). OMIT this part if the release has
-     none.
-   - **Verification commands** with expected output. State the expected
-     output (active/running, healthy, timer next-firing, etc.) in prose
-     adjacent to or after the block.
-   - **Rollback recipe** — how to revert to the prior running state if the
-     upgrade fails midway. Must work even after a partial run.
-
-NEVER:
-- Break the standard upgrade flow into a separate code snippet in the
-  README "Upgrading" section's intro or anywhere else. The per-version
-  block is the SINGLE paste target on the page. Duplicating it as a
-  standalone snippet creates an incomplete-paste foot-gun.
-- Put release-doc-writing rules in README. They live HERE (this file).
-  README's Upgrading-section intro is a short human-facing pointer with no
-  rules, no convention text, no structural description.
-- Modify a prior version's subsection after the release is merged. If a doc
-  fix is genuinely needed, ship a new patch release that adds a NOTE under
-  the prior subsection AND links to that note from the new release's
-  subsection.
-
-CONSOLIDATION ALLOWED for runs of doc-only patches:
-- When a series of consecutive patch releases (e.g. v1.1.2 through v1.1.7)
-  contains NO code changes — only README/CLAUDE.md/docs refinements — a
-  SINGLE combined subsection titled "Upgrading to v1.1.X through v1.1.Y
-  (from v1.1.<lower>)" is acceptable in place of one subsection per
-  patch. The combined subsection still follows the standard shape (prose
-  intro stating "documentation-only patches", one code block with the
-  standard upgrade flow, no version-specific steps section since there
-  are none). When the next code-bearing release ships (e.g. v1.2.0 or
-  v1.1.8 with actual code), the consolidated subsection is CLOSED — the
-  new release gets its own full subsection.
-
-## README "UPGRADING" INTRO SHAPE
-
-The intro under the top-level "Upgrading an existing host to a new release"
-heading is two-or-three lines max, human-facing, structurally:
-
-- Tells the reader each release has a subsection below
-- Tells the reader to find their target version and paste its single code
-  block
-- Cross-references THIS FILE for the rules
-
-Nothing else goes between the top-level heading and the first per-version
-subsection.
+- **Default (most releases): ONE changelog-table row** in `UPGRADING.md` —
+  `| version | what changed | beyond the standard flow |` (last column `—`
+  when the standard flow suffices, which is the norm).
+- **A FULL subsection** (prose intro; one self-contained paste block =
+  standard flow + the version-specific steps; verification with expected
+  output; rollback recipe) ONLY when the release ships genuine
+  version-specific operator steps — a migration, a repair `setup.sh` cannot
+  perform, a reboot-bearing transition, or a safety correction. It lives in
+  README's "Upgrading an existing host" section while current; relocate it
+  verbatim to `UPGRADING.md`'s "Retained full procedures" once superseded.
+- **v1.0.0 baseline:** every code-bearing release supports upgrading straight
+  from v1.0.0 (that is what setup.sh idempotence means). If a release
+  genuinely cannot, SAY SO in its row/subsection with the minimum starting
+  point — and surface the constraint to the user before shipping it.
+- **History is append-only:** never rewrite a shipped row or retained
+  procedure; corrections are a dated `> **⚠️ Corrected/Superseded in
+  vX.Y.Z:**` note beside the original.
+- Release-doc rules live HERE, not in README (its intro is a two-line
+  human-facing pointer).
 
 ## HEADLESS (binding prerequisite)
 
@@ -250,7 +149,7 @@ One authoritative home per concept; every other mention is a one-line pointer or
 | 7 | EXPOSURE | Public IP carries key-only ssh and mosh ONLY. Cockpit and every sensitive port are tailnet-only. etserver is never installed (replaced fleet-wide by mosh). |
 | 8 | VALIDATE | setup.sh ends with verify.sh; a bootstrap is done when every check PASSes. **Prove runtime/terminal behaviour empirically, not by reasoning:** for tmux multi-client geometry, TUI redraw, and the like, drive multiple sized PTY clients with a real harness and assert the actual bytes each client renders (a naive byte VT model mis-reads UTF-8 fills like `·` as garbage) — not just a reported window size. |
 | 9 | LEAST PRIVILEGE / LAYERS | Provisioning splits by identity: the SYSTEM layer (packages, /etc, system services) runs as root once via setup-host.sh; the ROOTLESS layer (podman, distrobox, Claude Code) runs as the operating user via setup-user.sh. The user is a password-gated `wheel` admin with NO blanket NOPASSWD; the in-box agent gets only a scoped passwordless allowlist (policy/sudoers.claudebox), grown solely by committing to the repo, and is OS-blocked from everything else (host installs stay hard-denied). Privileged files are written in place by root, never staged via a user-owned /tmp file. |
-| 10 | THROWAWAY TREE & CHURN | Validate every build as a DISPOSABLE throwaway, never against the live tree. Use the LIVE tree where possible; for anything that must DIFFER, bolt on a SEPARATE, TEMPORARY throwaway tree that (a) **NEVER mutates the IMMUTABLE live tree** — host + dev-container base are immutable, so the throwaway tree + all build caches live on the **WRITABLE home volume**; (b) **STILL obeys Principle 2 PROVENANCE** — class a/b/c, GPG/signature/checksum verified, NO loosening because it's a throwaway; (c) is **THROWN AWAY** after the build (`localhost/disposable/<name>:val-<sha>`, never pushed, `--rm` + `rmi`'d; temp tree removed on teardown). **CHURN BALANCE:** persist the ONE durable input — the dnf PACKAGE CACHE (a plain BIND dir on the home volume, **NOT an image layer**, so it survives `rmi` and EVERY disposal) — and let everything else (candidate image, its layers, temp tree, run container) be EPHEMERAL by design. Still structure Containerfiles **HEAVY/STABLE-EARLY** (base, dnf install, class-(c) artifact fetch+verify) and **CHURN-LATE** (COPY'd scripts/config), and **NEVER `--no-cache` / prune during churn** (reserved for the monthly clean `--no-cache` rebuild). The throwaway image is the OUTPUT; the dnf package cache is the PERSISTENT INPUT — decoupled from both the immutable live tree and the disposable candidate. **CHURN MECHANISM (proven, no re-download across N PRs):** per-PR/per-SHA disposal removes the candidate image + temp tree — and, when it was the sole referrer, its intermediate layers too — **but NEVER the dnf package cache** (not keyed to PR/SHA; SHARED across all iterations). The design is **ONE persistent thing, everything else ephemeral by design: (1) the persistent dnf PACKAGE CACHE — the ROBUST mechanism** (bind-mounted `-v <home>/.cache/fd-dnf:/var/cache/libdnf5:rw`; a plain dir, NOT an image layer, surviving `rmi` and every disposal): when the dnf install LINE changes (an add-on PR) the layer re-runs but RPMs are **served from cache, not re-downloaded** — PROVEN a forced dnf re-run downloaded **0 B (vs 9.4 MiB cold), 3.7× faster**; only a genuinely-new package downloads once. (buildah `--mount=type=cache` does NOT work under `--isolation=chroot`, verified — the bind `-v` package cache is the mechanism.) **(2) EPHEMERAL LAYERS — ephemeral BY DESIGN, an ADVANTAGE:** a throwaway's layers are pruned with its sole candidate's `rmi`, so (a) layer storage **self-bounds** (no accumulation / no layer-cache to GC), (b) each throwaway **rebuilds FRESH** from the package cache → CURRENT package versions, no stale-frozen-layer risk (freshness for free), (c) the only cost is a few local **CPU-seconds (~3.6 s warm), never bandwidth**. While a candidate image lives (churn-late edits, or a kept image), its layer cache also lets the rebuild skip the dnf `RUN` — a free accelerator — but nothing relies on layers surviving disposal. **ISOLATION:** each build has its OWN throwaway tree + unique `val-<sha>` tag + unique `vcand-$$` run container (no cross-build contamination), and the dnf package cache (and any live layer cache) is content-addressed so it cannot serve a wrong version. **STORAGE SAFETY (limited VPS):** (a) candidate image+tree self-destruct via `trap … EXIT` (GREEN/RED/error); (b) an ORPHAN SWEEPER reaps `kill -9`/crash leaks (stale `localhost/disposable/*`, `vcand-*`, orphan temp dirs) at watcher start + periodically; (c) a BOUNDED cache-GC caps the persistent dnf package cache age-then-size (RPMs >45 days pruned first, then LRU size-prune to ≤15 GB; both overridable env) so it never exhausts the quota — layers self-bound via `rmi`, dangling ones swept opportunistically. |
+| 10 | THROWAWAY TREE & CHURN | Validate every build as a DISPOSABLE throwaway, never against the live tree: (a) the throwaway tree + all build caches live on the **WRITABLE home volume** — the immutable live tree is **never mutated**; (b) provenance still obeys Principle 2 in full — **no loosening because it's a throwaway**; (c) everything is **thrown away** after the build (`localhost/disposable/<name>:val-<sha>`, never pushed, `--rm` + `rmi`'d, temp tree removed). **ONE thing persists** — the dnf PACKAGE CACHE (a plain bind dir `-v <home>/.cache/fd-dnf:/var/cache/libdnf5:rw`, NOT an image layer, so it survives `rmi` and every disposal; churn RPMs are served from cache, not re-downloaded — buildah `--mount=type=cache` does NOT work under `--isolation=chroot`, verified); everything else (candidate image, layers, temp tree, run container) is **ephemeral by design** — layers self-bound via `rmi` and each throwaway rebuilds fresh from the cache (current package versions, no stale-frozen-layer risk). Structure Containerfiles **heavy/stable-early, churn-late**, and **never `--no-cache`/prune during churn** (reserved for the monthly clean rebuild). **Isolation:** per-build tree + unique `val-<sha>` tag + unique `vcand-$$` container; the cache is content-addressed so it cannot serve a wrong version. **Storage safety:** EXIT-trap self-destruct + the orphan sweeper (`throwaway-sweep.sh`) reaping crash leaks and bounding the caches — mechanics + knobs live in the scripts' own headers (`build-candidate.sh`, `throwaway-sweep.sh`). |
 
 ### Class-(c) sources — the bounded last-resort exception (fleet-wide; identical in fedora-desktop + fedora-dev + fedora-bootstrap)
 
@@ -291,7 +190,7 @@ rule is carried for fleet parity so any future need inherits the identical bound
 |---|---|
 | CLAUDE.md | this file — agent rules for editing this repo |
 | README.md | human-facing project doc (purpose, install, upgrade, use, reference) |
-| UPGRADING.md | archived per-version upgrade subsections — older releases relocated from README per the RELEASE-DOC CONVENTION; README keeps the latest 1–2 + a pointer |
+| UPGRADING.md | the changelog (one table row per release) + the canonical standard upgrade flow + retained full procedures for releases with genuine operator steps; README keeps the latest releases + a pointer |
 | VERSION | repo's release version (single line, semver) |
 | day0.sh | interactive Day-0 wizard (run as root, the LAST line of the Day-0 paste): ASKS for the Tailscale auth key (reads `/dev/tty`; blank = browser web-login), runs `setup.sh < /dev/null` with it in the env, then prompts for core's password + reboots into the SELinux convergence (`SELINUX_TARGET=permissive` ⇒ no reboot). Mirrors the workload `spin-up.sh`; `setup.sh` stays the non-interactive contract it wraps |
 | setup.sh | orchestrator (run as root): runs the system layer then the rootless layer in their correct identities |
