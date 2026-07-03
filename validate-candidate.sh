@@ -24,58 +24,103 @@
 #   --memory / --pids-limit hard caps so a runaway candidate can't starve the host
 set -uo pipefail
 
-IMG="${1:?usage: validate-candidate.sh <candidate-image-ref> [health-cmd]}"
+# FENCE_CHECK_ONLY=1 runs ONLY the fence validator (below) against $CAND_FENCE and exits — no image
+# needed, no podman touched. This is what validation/fence-guard.test.sh drives to prove the
+# allowlist without a live engine, so IMG is optional in that mode.
+IMG="${1:-}"; [ -n "${FENCE_CHECK_ONLY:-}" ] || IMG="${1:?usage: validate-candidate.sh <candidate-image-ref> [health-cmd]}"
 HEALTH="${2:-${HEALTH:-}}"      # arg overrides; else $HEALTH from env; else the image's own HEALTHCHECK
 NAME="vcand-$$"
 OUT="$(mktemp -d)"; pass=1
 g(){ printf '  %-26s %s\n' "$1" "$2"; [ "$2" = PASS ] || pass=0; }
 trap 'podman rm -f -t 0 "$NAME" >/dev/null 2>&1; rm -rf "$OUT"' EXIT
+# Also tear down on INT/TERM/HUP (systemd stopping the timer sends SIGTERM): bash runs the EXIT trap
+# on `exit`, so a plain `exit N` here fires the cleanup above instead of leaking the vcand container
+# + $OUT until the age-gated sweeper. Matches build-throwaway.sh's INT/TERM/HUP handling.
+trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
 
 echo "== launch candidate DISPOSABLY + FENCED =="
 # CAND_FENCE = this target's run-contract fence, MINUS the public publish (-p) and MINUS real
 # secrets. DEFAULT = the HARDEST fence: --network=none --cap-drop=ALL. The probe runs on the
 # candidate's OWN loopback via `podman exec`, so a loopback-only workload needs NO egress — keep it
-# networkless by default. A target that genuinely needs egress/devices/systemd OPTS IN explicitly
+# networkless by default. A target that genuinely needs devices/systemd OPTS IN explicitly
 # via its `.live-gate` fence (FENCE_<target>), never silently.
 CAND_FENCE="${CAND_FENCE:---network=none --cap-drop=ALL}"
 
-# LOOPBACK-ONLY ENFORCEMENT (hardening): the gate probes the candidate on its OWN loopback via
-# `podman exec`; NOTHING is ever published to a host port. A fence that publishes a port would punch
-# a hole in that and expose UN-MERGED candidate code on a real host port. Fail CLOSED if the resolved
-# per-target fence carries any publish flag (-p / --publish / -P / --publish-all, incl. =forms and
-# the no-space -p8443:8443 form). The gate adds its own --rm/--name/--memory/--pids-limit; a fence
-# must never carry a public publish. (Word-splitting $CAND_FENCE here matches the launch below.)
-for _tok in $CAND_FENCE; do
-  case "$_tok" in
+# ==== FENCE VALIDATION — BOUNDED ALLOWLIST (the containment boundary for un-merged PR code) ========
+# The resolved fence is derived (indirectly) from an UNTRUSTED, un-merged PR's `.live-gate`. A
+# NON-EMPTY fence REPLACES the hard default entirely, so containment must be re-proven on EVERY
+# resolved fence — not just the empty-default path (the pre-v1.2.53 bug: a hostile
+# `FENCE_default='-v /:/host:rw --cap-add ALL ...'` dropped the `--network=none --cap-drop=ALL`
+# default AND passed the old loop, bind-mounting the host root rw into un-merged code => host RCE).
+#
+# We do NOT blanket-reject the primitives first-party candidates legitimately need — fedora-dev and
+# both fedora-desktop lineages use `--cap-add NET_ADMIN/SYS_ADMIN`, `--device /dev/net/tun|/dev/fuse`,
+# `--security-opt label=disable`, and grd additionally `--cgroupns=host -v /sys/fs/cgroup:...:rw`
+# `--systemd=always` `--shm-size=1g`. Instead each DANGEROUS flag is validated against a bounded
+# allowlist; anything outside it is RED. Two floors are ALWAYS imposed at launch regardless of fence:
+# `--cap-drop=ALL` (so a `--cap-add X` can only add back NAMED caps, never start from a full set) and
+# `--network=none` when the fence declares no network (closes egress for un-merged code; `none` keeps
+# `lo` up so the loopback probes still work). See validation/fence-guard.test.sh for the full matrix.
+fence_reject(){ echo "  fence REJECTED: $1"; echo "VERDICT: RED (fence: $2)"; exit 1; }
+# device sources a validation fence may pass (rootless podman already restricts to the caller's own
+# device perms; this bounds it further to the known-needed virtual devices — never a host block dev).
+_dev_ok(){ case "$1" in /dev/net/tun|/dev/fuse|/dev/kvm|/dev/dri|/dev/dri/*) return 0;; *) return 1;; esac; }
+# bind-mount SOURCES a validation fence may expose: ONLY the cgroup pseudo-fs (systemd-PID-1 lineages
+# need it), NEVER a real-data path. This arm is what blocks `-v /:/host:rw`, `-v /etc:...`, etc.
+_vol_src_ok(){ case "$1" in /sys/fs/cgroup|/sys/fs/cgroup/*) return 0;; *) return 1;; esac; }
+
+read -r -a _ftok <<< "$CAND_FENCE"
+_seen_net=0; _i=0; _n=${#_ftok[@]}
+while [ "$_i" -lt "$_n" ]; do
+  _t="${_ftok[$_i]}"; _next="${_ftok[$((_i+1))]:-}"
+  _inlineval="${_t#*=}"; [ "$_inlineval" = "$_t" ] && _inlineval=""   # =-suffix value, if the token carried one
+  case "$_t" in
     -p*|--publish|--publish=*|--publish-all|--publish-all=*|-P)
-      echo "  fence REJECTED: publish flag '$_tok' present (the gate is loopback-only by construction; no port may be published)"
-      echo "VERDICT: RED (fence publishes a port)"; exit 1;;
+      fence_reject "publish flag '$_t' (gate is loopback-only by construction; no port may be published)" "publishes a port";;
     --privileged|--privileged=true)
-      echo "  fence REJECTED: '$_tok' grants blanket privilege — not permitted in a validation fence"
-      echo "VERDICT: RED (fence requests privileged)"; exit 1;;
-    # NO --cap-add denylist arm (v1.2.48): granular capability/device/security-opt opt-ins a candidate
-    # declares in its FIRST-PARTY .live-gate (e.g. fedora-dev's `--cap-add NET_ADMIN --cap-add SYS_ADMIN
-    # --device /dev/net/tun --device /dev/fuse --security-opt label=disable`, required for its nested
-    # rootless podman) are ALLOWED. The former `--cap-add=…` reject was theater — it matched only the
-    # `=` form, so the space form `--cap-add X` word-split past it, and the sole real candidate uses
-    # exactly those caps — so it blocked nothing while implying it did. Blanket --privileged stays
-    # rejected above; the real containment is the hard defaults (--network=none --cap-drop=ALL --rm
-    # --memory --pids-limit) + rootless podman + the publish / non-loopback-network rejects here.
+      fence_reject "'$_t' grants blanket privilege" "privileged";;
+    --pid=host|--ipc=host|--uts=host|--userns=host)
+      fence_reject "'$_t' shares a host namespace" "host namespace";;
+    --pid|--ipc|--uts|--userns)
+      [ "$_next" = host ] && fence_reject "'$_t $_next' shares a host namespace" "host namespace"
+      _i=$((_i+2)); continue;;
+    --cap-add=ALL|--cap-add=all)
+      fence_reject "'$_t' adds ALL capabilities (≈ privileged)" "cap-add ALL";;
+    --cap-add)
+      case "$_next" in ALL|all) fence_reject "'--cap-add $_next' adds ALL capabilities" "cap-add ALL";; esac
+      _i=$((_i+2)); continue;;
+    --security-opt=*|--security-opt)
+      _so="$_inlineval"; [ -z "$_so" ] && { _so="$_next"; _i=$((_i+1)); }
+      case "$_so" in label=disable) : ;; *) fence_reject "security-opt '$_so' (only label=disable permitted)" "security-opt";; esac;;
+    --device=*|--device)
+      _d="$_inlineval"; [ -z "$_d" ] && { _d="$_next"; _i=$((_i+1)); }
+      _dev_ok "${_d%%:*}" || fence_reject "device '${_d%%:*}' not in the permitted set (/dev/net/tun,/dev/fuse,/dev/kvm,/dev/dri)" "device";;
+    -v=*|--volume=*|-v|--volume)
+      _m="$_inlineval"; [ -z "$_m" ] && { _m="$_next"; _i=$((_i+1)); }
+      _vol_src_ok "${_m%%:*}" || fence_reject "bind mount source '${_m%%:*}' not permitted (only /sys/fs/cgroup)" "bind mount";;
+    --mount=*|--mount)
+      _m="$_inlineval"; [ -z "$_m" ] && { _m="$_next"; _i=$((_i+1)); }
+      _src=""; _oldifs="$IFS"; IFS=','; for _kv in $_m; do case "$_kv" in source=*|src=*) _src="${_kv#*=}";; esac; done; IFS="$_oldifs"
+      _vol_src_ok "$_src" || fence_reject "--mount source '$_src' not permitted (only /sys/fs/cgroup)" "bind mount";;
     --network=host|--network=slirp4netns|--network=pasta)
-      # Only --network=none or --network=lo are permitted. host/slirp/pasta give the candidate
-      # real or near-real network access (including the tailnet on the host), defeating containment.
-      echo "  fence REJECTED: '$_tok' grants network access beyond loopback — not permitted in a validation fence"
-      echo "VERDICT: RED (fence opens network)"; exit 1;;
+      fence_reject "'$_t' grants network access beyond loopback" "opens network";;
     --network=*)
-      # Reject any --network= value that is not none or the loopback interface name.
-      _net="${_tok#--network=}"
-      case "$_net" in
-        none|lo) ;;  # permitted
-        *) echo "  fence REJECTED: '--network=$_net' is not a permitted fence value (only none or lo)"
-           echo "VERDICT: RED (fence opens network)"; exit 1;;
-      esac;;
+      _seen_net=1; case "${_t#--network=}" in none|lo) ;; *) fence_reject "'--network=${_t#--network=}' is not permitted (only none or lo)" "opens network";; esac;;
+    --network)
+      _seen_net=1; case "$_next" in none|lo) ;; *) fence_reject "'--network $_next' is not permitted (only none or lo)" "opens network";; esac
+      _i=$((_i+2)); continue;;
   esac
+  _i=$((_i+1))
 done
+
+# The imposed floors (always applied at launch, prepended before $CAND_FENCE so a fence can only
+# NARROW, never widen): drop-all caps, and networkless unless the fence explicitly opted into lo/none.
+FENCE_FLOOR=( --cap-drop=ALL )
+[ "$_seen_net" = 1 ] || FENCE_FLOOR+=( --network=none )
+
+# FENCE_CHECK_ONLY: the validator above is the whole point of this mode — reaching here means the
+# fence PASSED. Report + exit before touching podman (used by validation/fence-guard.test.sh).
+[ -n "${FENCE_CHECK_ONLY:-}" ] && { echo "VERDICT: GREEN (fence check only) — floor: ${FENCE_FLOOR[*]}"; exit 0; }
 
 # Scratch secrets: the fenced run gets DISPOSABLE test values, NEVER the real ones and NEVER baked
 # into a layer or logged. A workload whose entrypoint reads a secrets file supplies CAND_SECRET_ENV
@@ -90,8 +135,10 @@ fi
 
 # Resource caps are GATE-imposed (not run.sh contract) — overridable so a heavy target (a full
 # desktop + JVM/Tomcat + MariaDB) gets the headroom a bare sshd box doesn't need.
-# word-splitting CAND_FENCE into podman args is intentional
-launch=( podman run -d --rm --name "$NAME" $CAND_FENCE
+# word-splitting CAND_FENCE into podman args is intentional; FENCE_FLOOR is prepended so the imposed
+# floor (--cap-drop=ALL [+ --network=none if the fence named no network]) always precedes — and a
+# fence-declared --cap-add X only adds X back on top of the drop-all floor.
+launch=( podman run -d --rm --name "$NAME" "${FENCE_FLOOR[@]}" $CAND_FENCE
          "${SECRET_MOUNT[@]}"
          --memory="${CAND_MEMORY:-2g}" --pids-limit="${CAND_PIDS:-512}"
          -e DUMMY_SECRETS=1 )
