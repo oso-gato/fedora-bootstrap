@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.51 (fastfetch-login: install fastfetch on the HOST (it was box-only) + an /etc/profile.d/zz-fastfetch.sh drop-in that shows a fastfetch system-info banner at every interactive login for every user — root, core, any user day0 creates. Named to sort before zz-tmux-attach.sh so it prints once per ssh/mosh login before the shell exec's into tmux, and is suppressed inside tmux panes via a $TMUX guard. PACKAGES gains a Host fastfetch waiver row (Build Principle 4). Prior: v1.2.50 cache/UI knobs; v1.2.49 SELinux no-wait; v1.2.48 fence de-theater. Prior releases: see the README "Upgrading an existing host" section + UPGRADING.md.)
+# Version: 1.2.52 (release-doc de-ceremony: changelog-table convention; UPGRADING.md collapsed; docs only)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
