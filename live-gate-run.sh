@@ -14,7 +14,11 @@
 # Usage: live-gate-run.sh <repo> <pr-number>
 #   <repo>       the bare repo name under github.com/oso-gato (e.g. fedora-desktop)
 #   <pr-number>  the open PR to gate
-# Exit: 0 GREEN | 1 RED | 3 SKIPPED (not gateable / PR-head fetch failed-soft)
+# Exit: 0 GREEN | 1 RED | 2 FATAL (bad args / missing builder — infra, NOT a verdict) |
+#       3 SKIPPED (not gateable / PR-head fetch failed-soft) |
+#       4 UNDELIVERED (verdict computed but the PR comment could not be posted — caller must re-gate)
+# Codes 2 and 4 are NON-VERDICTS: the watcher must NOT write the per-SHA dedup marker for them, or
+# the commit is buried with no comment ever reaching the PR.
 #
 # Contract (CFILE / FENCE / PROBE / HEALTH / secret + resource knobs) resolution order:
 #   1. the candidate's OWN top-level `.live-gate` file (in-tree — preferred; auto-tracks the repo)
@@ -57,10 +61,14 @@ SHA="$(git -C "$SRC" rev-parse --short HEAD)"
 # failed, so Arthur maintains no allow/deny list of "which repos are buildable".
 if [ ! -f "$SRC/.live-gate" ] && ! ls "$SRC"/Containerfile* >/dev/null 2>&1; then
   echo "[live-gate] $SLUG#$PR @ $SHA: no Containerfile*/.live-gate at the repo top — not gateable"
-  gh pr comment "$PR" --repo "$SLUG" --body \
+  if gh pr comment "$PR" --repo "$SLUG" --body \
 "**Host live-gate (Gate B): SKIPPED** — \`$REPO_NAME\` @ \`$SHA\` carries no top-level \`Containerfile*\` or \`.live-gate\`, so there is nothing to build/gate. Neutral skip, **not** a failure." \
-    >/dev/null 2>&1 || echo "[live-gate] WARN: skip-comment failed"
-  exit 3
+    >/dev/null 2>&1; then
+    exit 3
+  else
+    echo "[live-gate] WARN: skip-comment failed — exit 4 (UNDELIVERED; caller must re-gate, not dedup)"
+    exit 4
+  fi
 fi
 
 # ---- SAFE CONTRACT CONSUMER (hardening: NEVER execute a labelled PR's `.live-gate` as host shell) -
@@ -166,10 +174,14 @@ fi
 # malformed — fail it RED + loud (it must NOT be allowed to silently SKIP the gate) and never run it.
 if ! lg_load "$PRESET"; then
   echo "[live-gate] contract REJECTED (unsafe/malformed; NOT executed on host): $lg_reason"
-  gh pr comment "$PR" --repo "$SLUG" --body \
+  if gh pr comment "$PR" --repo "$SLUG" --body \
 "**Host live-gate (Gate B): RED** — \`$REPO_NAME\` @ \`$SHA\` ships a \`.live-gate\` that was **REJECTED as unsafe/malformed and NOT executed** on the host: $lg_reason. The contract is *parsed*, never sourced — declare inert \`KEY=VALUE\` pairs only (single-quote any HEALTH/PROBE command; no command substitution or chaining outside single quotes; one assignment per line). See validation/live-gate.sample." \
-    >/dev/null 2>&1 || echo "[live-gate] WARN: reject-comment failed"
-  exit 1
+    >/dev/null 2>&1; then
+    exit 1
+  else
+    echo "[live-gate] WARN: reject-comment failed — exit 4 (UNDELIVERED; caller must re-gate, not dedup)"
+    exit 4
+  fi
 fi
 
 # ---- TARGET list: new multi-target schema (LIVE_GATE_TARGETS) OR a single implicit target that
@@ -223,9 +235,15 @@ BODY="$(printf '**Host live-gate (Gate B): VERDICT %s** — %s @ %s (targets: %s
 if gh pr comment "$PR" --repo "$SLUG" --body "$BODY"; then
   echo "[live-gate] verdict $overall posted to $SLUG#$PR"
 else
-  echo "[live-gate] WARN: failed to post verdict comment (verdict was $overall)"
+  # The verdict was COMPUTED but NOT DELIVERED. If we returned the plain verdict code the caller
+  # would write the per-SHA .done marker and this commit would NEVER be re-gated — the verdict is
+  # lost forever with no comment on the PR. Exit 4 instead: the caller must NOT dedup, so the next
+  # poll re-gates and re-attempts delivery.
+  echo "[live-gate] WARN: failed to post verdict comment (verdict was $overall) — exit 4 (UNDELIVERED; caller must re-gate, not dedup)"
+  exit 4
 fi
 
 # Dedup (the per-commit .done marker) is owned by live-gate-watch.sh, the caller. Standalone runs
-# are explicit + re-runnable. Exit code carries the verdict (3 = skipped, handled above).
+# are explicit + re-runnable. Exit code carries the DELIVERED verdict (3 = skipped, 4 = undelivered,
+# both handled above; 0 = GREEN, 1 = RED).
 [ "$overall" = GREEN ]

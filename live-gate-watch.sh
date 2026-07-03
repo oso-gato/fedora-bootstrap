@@ -80,11 +80,22 @@ for row in "${PRS[@]}"; do
   fi
   echo "[live-gate-watch] gating $repo#$num @ ${sha:0:7}"
   "$RUNNER" "$repo" "$num"; rc=$?
+  # DEDUP DISCIPLINE: write the per-SHA .done marker ONLY for a DELIVERED outcome (a verdict/skip that
+  # actually reached the PR as a comment). rc 2 (FATAL infra) and rc 4 (verdict computed but the
+  # comment post FAILED) are NON-verdicts — dedup'ing them buries the commit forever with nothing on
+  # the PR, so leave NO marker and let the next poll re-gate + re-attempt delivery.
   case "$rc" in
-    0) v=GREEN;;
-    3) v=SKIP;;
-    *) v=RED;;
+    0) v=GREEN;       dedup=1;;
+    1) v=RED;         dedup=1;;
+    3) v=SKIP;        dedup=1;;
+    4) v=UNDELIVERED; dedup=0;;
+    2) v=FATAL;       dedup=0;;
+    *) v="ERR($rc)";  dedup=0;;
   esac
-  printf '%s %s\n' "$v" "$(date -Iseconds 2>/dev/null || echo now)" > "$marker"
-  echo "[live-gate-watch] $repo#$num @ ${sha:0:7} -> $v"
+  if [ "$dedup" = 1 ]; then
+    printf '%s %s\n' "$v" "$(date -Iseconds 2>/dev/null || echo now)" > "$marker"
+    echo "[live-gate-watch] $repo#$num @ ${sha:0:7} -> $v (deduped)"
+  else
+    echo "[live-gate-watch] $repo#$num @ ${sha:0:7} -> $v (NOT deduped — will re-gate next poll)"
+  fi
 done
