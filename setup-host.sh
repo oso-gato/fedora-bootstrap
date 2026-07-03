@@ -67,7 +67,7 @@ dnf -y -q --repo=tailscale-stable makecache >/dev/null 2>&1 || true
 #
 dnf -y --setopt=install_weak_deps=False install \
     distrobox flatpak-session-helper podman tmux mosh openssh-server tailscale \
-    dnf5-plugin-automatic \
+    dnf5-plugin-automatic fastfetch \
     cockpit cockpit-podman cockpit-files \
     cockpit-networkmanager cockpit-selinux
 
@@ -432,6 +432,17 @@ PHASE "host 7/7 tmux drop-in + config + bring up '$U' rootless user manager"
 # across access methods. One "main" group = one continuous workspace over tailnet
 # ssh, public ssh, and mosh. The per-connection "c<pid>" session self-destroys on
 # disconnect; work persists in the detached "main" base.
+# fastfetch system-info banner at interactive login (operator-requested; all users incl. `core`).
+# Named to sort BEFORE zz-tmux-attach.sh (`f` < `t`) so it prints ONCE per ssh/mosh login, before the
+# shell exec's into tmux. (Inside a tmux window it is suppressed via the $TMUX guard so it does not
+# repeat on every pane; the box already ships fastfetch too.)
+tee /etc/profile.d/zz-fastfetch.sh >/dev/null <<'EOS'
+# System-info banner for every interactive login (root, core, any user).
+case $- in *i*) ;; *) return ;; esac
+if [ -z "${TMUX:-}" ] && command -v fastfetch >/dev/null 2>&1 && { [ -n "${SSH_TTY:-}" ] || [ -t 1 ]; }; then
+    fastfetch
+fi
+EOS
 tee /etc/profile.d/zz-tmux-attach.sh >/dev/null <<'EOS'
 # ssh/mosh logins each get their own session in the shared "main" group.
 case $- in *i*) ;; *) return ;; esac

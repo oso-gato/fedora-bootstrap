@@ -286,6 +286,20 @@ git pull --ff-only origin main
 
 Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.50`; no host behaviour change (the caches just GC more bluntly, the live-gate polls at 60s, and `prefix+g` is unbound in tmux). **Rollback** — `git checkout <prior-commit> && ./setup.sh < /dev/null`.
 
+#### Upgrading to v1.2.51 (from v1.0.0)
+
+**fastfetch login banner.** `fastfetch` is now installed on the **host** (it was previously a claudebox-only tool), and a `/etc/profile.d/zz-fastfetch.sh` drop-in shows a system-info banner at **every interactive login for every user** — `root`, `core`, and any user Day-0 creates. It's named to sort before `zz-tmux-attach.sh`, so it prints once per ssh/mosh login before the shell attaches tmux, and is suppressed inside tmux panes (a `$TMUX` guard) so it doesn't repeat on every window.
+
+**As root on the VPS:**
+
+```sh
+cd /opt/fedora-bootstrap
+git pull --ff-only origin main
+./setup.sh < /dev/null
+```
+
+Expected: `cat /opt/fedora-bootstrap/VERSION` → `1.2.51`; `command -v fastfetch` resolves on the host, and the banner shows on your next ssh/mosh login. **Rollback** — `git checkout <prior-commit> && ./setup.sh < /dev/null` (removes the drop-in; the `fastfetch` package stays installed but unused).
+
 ---
 
 ## Operating the host (as the maintainer)
