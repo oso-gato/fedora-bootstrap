@@ -85,6 +85,10 @@ fi
 TAG="localhost/disposable/${NAME}:${CAND_TAG:-val-${SHA}}"   # carve-out namespace — never pushed, never a deploy ref
 # shellcheck disable=SC2064
 trap "[ -n \"$CLEAN_SRC\" ] && rm -rf \"$CLEAN_SRC\"; podman rmi -f \"$TAG\" >/dev/null 2>&1 || true" EXIT
+# Tear down on INT/TERM/HUP too (systemd stopping the live-gate timer sends SIGTERM): a plain `exit N`
+# fires the EXIT trap above, so the disposable image + temp tree are reaped now instead of leaking
+# until the age-gated throwaway-sweep. Matches build-throwaway.sh / validate-candidate.sh.
+trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
 
 [ -f "$SRC/$CFILE" ] || { echo "FATAL: $CFILE not found in candidate tree"; echo "VERDICT: RED (missing $CFILE)"; exit 1; }
 
