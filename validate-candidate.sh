@@ -77,7 +77,8 @@ _vol_src_ok(){ case "$1" in *..*|'') return 1;; /sys/fs/cgroup|/sys/fs/cgroup/*)
 # _capall: true if a --cap-add value grants the FULL set. podman matches the ALL sentinel case-
 # insensitively AND (historically) comma-splits the value, so uppercase then test bare-ALL or any
 # comma element == ALL. Returns 0 (true => reject) if ALL is present in any spelling/position.
-_capall(){ local u; u="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; case ",$u," in *,ALL,*) return 0;; esac; return 1; }
+_capall(){ local u e; u="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+  local IFS=,; for e in $u; do e="${e#[-+]}"; e="${e#CAP_}"; [ "$e" = ALL ] && return 0; done; return 1; }
 
 # A newline in the fence would let a validator that reads line-by-line disagree with podman's launch
 # split — reject outright (a fence is one line of flags). Closes the newline-divergence bypass.
@@ -138,6 +139,19 @@ FENCE_FLOOR=( --cap-drop=ALL )
 # FENCE_CHECK_ONLY: the validator above is the whole point of this mode — reaching here means the
 # fence PASSED. Report + exit before touching podman (used by validation/fence-guard.test.sh).
 [ -n "${FENCE_CHECK_ONLY:-}" ] && { echo "VERDICT: GREEN (fence check only) — floor: ${FENCE_FLOOR[*]}"; exit 0; }
+
+# SECURITY INVARIANT — ASSERT ROOTLESS. The whole fence threat model assumes ROOTLESS podman: container
+# root maps to an unprivileged host uid via a userns, so an allowed --cap-add SYS_ADMIN / --device /
+# label=disable / cgroup mount is NAMESPACED, not host-real (and --userns=host is default-denied above).
+# Under ROOTFUL podman that same first-party fence is privileged-equivalent = a real host escape. Don't
+# silently depend on how the host invokes us — assert it, and refuse to run un-merged code if rootful.
+_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null)"
+if [ "$_rootless" != "true" ]; then
+  echo "  REFUSING: ambient podman is not rootless (Host.Security.Rootless='$_rootless'). The validation"
+  echo "  fence's containment (namespaced caps, non-identity userns) REQUIRES rootless; running un-merged"
+  echo "  PR code under rootful podman would make the first-party fence privileged-equivalent on the host."
+  echo "VERDICT: RED (podman not rootless — fence containment invariant violated)"; exit 1
+fi
 
 # Scratch secrets: the fenced run gets DISPOSABLE test values, NEVER the real ones and NEVER baked
 # into a layer or logged. A workload whose entrypoint reads a secrets file supplies CAND_SECRET_ENV

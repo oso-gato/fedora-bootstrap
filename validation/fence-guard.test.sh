@@ -61,6 +61,9 @@ check reject '--cap-add All'                         'R2 — cap-add ALL mixed c
 check reject '--cap-add=aLL'                         'R2 — cap-add ALL, other case'
 check reject '--cap-add all,SYS_ADMIN'               'R2 — cap-add comma-list containing all'
 check reject '--cap-add=SYS_ADMIN,ALL'               'R2 — cap-add comma-list, ALL trailing'
+check reject '--cap-add=CAP_ALL'                     'R3 — cap-add CAP_ALL prefix form'
+check reject '--cap-add=+all'                        'R3 — cap-add +all prefix form'
+check reject '--cap-add cap_all'                     'R3 — cap-add cap_all lowercase prefix'
 
 echo "== REJECT: extra default-deny primitives (must all fail closed) =="
 check reject '--userns=keep-id:uid=0' 'userns remap to host uid 0'
