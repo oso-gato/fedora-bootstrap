@@ -48,6 +48,33 @@ check reject '--network=host' 'host network'
 check reject '--network pasta' 'pasta egress (space form)'
 check reject '-p 8443:8443' 'publish a port'
 
+echo "== REJECT: the FOUR bypasses the independent review found in the first (broken) attempt =="
+check reject '-v/:/host:rw'                          'C1 — -v shorthand concat (no space) host root'
+check reject '-v/sys/fs/cgroup/../../../:/host:rw'   'C1+C2 — shorthand + traversal'
+check reject '-v /sys/fs/cgroup/../../../:/host:rw'  'C2 — traversal through the allowed cgroup prefix'
+check reject '--device /dev/dri/../../dev/sda'       'C2 — device traversal to a block dev'
+check reject '--net host'                            'H1 — --net alias, space form'
+check reject '--net=host'                            'H1 — --net alias, =form'
+check reject $'--network=none\n-v /:/host:rw'        'H2 — newline-split parser divergence'
+
+echo "== REJECT: extra default-deny primitives (must all fail closed) =="
+check reject '--userns=keep-id:uid=0' 'userns remap to host uid 0'
+check reject '--uidmap 0:0:1'          'uid map'
+check reject '--dns 8.8.8.8'           'custom dns (egress hint)'
+check reject '--add-host evil:1.2.3.4' 'add-host'
+check reject '-e SECRET=x'             'env injection'
+check reject '--env-file /etc/shadow'  'env-file read of host secret'
+check reject '--hooks-dir /tmp/h'      'oci hooks dir (arbitrary exec)'
+check reject '--rootfs /host'          'rootfs override'
+check reject '--runtime /tmp/evil'     'custom runtime binary'
+check reject '--pid container:vcand-1' 'join another container pidns'
+
+echo "== ALLOW: extra legit run-contract knobs the desktop lineages may carry =="
+check allow '--cgroupns=private'       'private cgroup namespace'
+check allow '--systemd always'         'systemd space form'
+check allow '--shm-size 1g'            'shm-size space form'
+check allow '--cap-drop ALL'           'cap-drop ALL space form (dropping is safe)'
+
 echo
 echo "fence-guard: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
