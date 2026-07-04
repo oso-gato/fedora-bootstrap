@@ -46,81 +46,112 @@ echo "== launch candidate DISPOSABLY + FENCED =="
 # via its `.live-gate` fence (FENCE_<target>), never silently.
 CAND_FENCE="${CAND_FENCE:---network=none --cap-drop=ALL}"
 
-# ==== FENCE VALIDATION — BOUNDED ALLOWLIST (the containment boundary for un-merged PR code) ========
+# ==== FENCE VALIDATION — DEFAULT-DENY ALLOWLIST (the containment boundary for un-merged PR code) ====
 # The resolved fence is derived (indirectly) from an UNTRUSTED, un-merged PR's `.live-gate`. A
 # NON-EMPTY fence REPLACES the hard default entirely, so containment must be re-proven on EVERY
-# resolved fence — not just the empty-default path (the pre-v1.2.53 bug: a hostile
-# `FENCE_default='-v /:/host:rw --cap-add ALL ...'` dropped the `--network=none --cap-drop=ALL`
-# default AND passed the old loop, bind-mounting the host root rw into un-merged code => host RCE).
+# resolved fence — not just the empty-default path.
 #
-# We do NOT blanket-reject the primitives first-party candidates legitimately need — fedora-dev and
-# both fedora-desktop lineages use `--cap-add NET_ADMIN/SYS_ADMIN`, `--device /dev/net/tun|/dev/fuse`,
-# `--security-opt label=disable`, and grd additionally `--cgroupns=host -v /sys/fs/cgroup:...:rw`
-# `--systemd=always` `--shm-size=1g`. Instead each DANGEROUS flag is validated against a bounded
-# allowlist; anything outside it is RED. Two floors are ALWAYS imposed at launch regardless of fence:
-# `--cap-drop=ALL` (so a `--cap-add X` can only add back NAMED caps, never start from a full set) and
-# `--network=none` when the fence declares no network (closes egress for un-merged code; `none` keeps
-# `lo` up so the loopback probes still work). See validation/fence-guard.test.sh for the full matrix.
+# DESIGN = DEFAULT-DENY, not deny-listing. Every token MUST match an explicit ALLOW arm below (the
+# small set of run-contract flags the real first-party fences use); ANY unrecognized token is RED.
+# This is the only posture that is safe against an attacker's creativity — a deny-list of "bad flags"
+# always loses to the flag/spelling you forgot (an earlier bounded-allowlist attempt was bypassed
+# FOUR ways: `-v/:/host` shorthand concat, `/sys/fs/cgroup/../../` traversal, the `--net` alias, and
+# a newline-split parser divergence — all now closed here). The allowed set is exactly:
+#   --network/--net = none|lo · --cap-drop=* · --cap-add <named, never ALL> · --security-opt label=disable
+#   --device <in /dev/{net/tun,fuse,kvm,dri}, no `..`> · -v/--volume/--mount <source under /sys/fs/cgroup,
+#   no `..`> · --cgroupns host|private · --systemd[=always|true|false] · --shm-size <size>
+# covering fedora-dev + both fedora-desktop lineages (incl. grd's systemd-PID-1 cgroup mount). Anything
+# a future first-party fence needs is a DELIBERATE allowlist addition here (a control-plane change),
+# never a silent pass. Two floors are always imposed at launch: --cap-drop=ALL (a --cap-add only adds
+# back NAMED caps) and --network=none when the fence named no network (closes egress; `none` keeps `lo`
+# up so loopback probes pass). CRUCIAL: the SAME validated token array is handed to podman at launch
+# (`"${_ftok[@]}"`), never a re-split of the raw string — so the validator and podman can never disagree
+# on tokenization. See validation/fence-guard.test.sh for the full ALLOW/REJECT matrix.
 fence_reject(){ echo "  fence REJECTED: $1"; echo "VERDICT: RED (fence: $2)"; exit 1; }
-# device sources a validation fence may pass (rootless podman already restricts to the caller's own
-# device perms; this bounds it further to the known-needed virtual devices — never a host block dev).
-_dev_ok(){ case "$1" in /dev/net/tun|/dev/fuse|/dev/kvm|/dev/dri|/dev/dri/*) return 0;; *) return 1;; esac; }
-# bind-mount SOURCES a validation fence may expose: ONLY the cgroup pseudo-fs (systemd-PID-1 lineages
-# need it), NEVER a real-data path. This arm is what blocks `-v /:/host:rw`, `-v /etc:...`, etc.
-_vol_src_ok(){ case "$1" in /sys/fs/cgroup|/sys/fs/cgroup/*) return 0;; *) return 1;; esac; }
+# device sources a validation fence may pass — known-needed virtual devices only, and NO `..` (podman
+# canonicalizes `..`, so `/dev/dri/../../dev/sda` must be rejected as a string BEFORE it reaches podman).
+_dev_ok(){ case "$1" in *..*|'') return 1;; /dev/net/tun|/dev/fuse|/dev/kvm|/dev/dri|/dev/dri/*) return 0;; *) return 1;; esac; }
+# bind-mount SOURCES a fence may expose: ONLY the cgroup pseudo-fs (systemd-PID-1 lineages need it),
+# NEVER a real-data path and NEVER with `..` (blocks `-v /:/host`, `-v /etc:…`, `/sys/fs/cgroup/../../`).
+_vol_src_ok(){ case "$1" in *..*|'') return 1;; /sys/fs/cgroup|/sys/fs/cgroup/*) return 0;; *) return 1;; esac; }
+# _capall: true if a --cap-add value grants the FULL set. podman matches the ALL sentinel case-
+# insensitively AND (historically) comma-splits the value, so uppercase then test bare-ALL or any
+# comma element == ALL. Returns 0 (true => reject) if ALL is present in any spelling/position.
+_capall(){ local u e; u="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+  local IFS=,; for e in $u; do e="${e#[-+]}"; e="${e#CAP_}"; [ "$e" = ALL ] && return 0; done; return 1; }
+
+# A newline in the fence would let a validator that reads line-by-line disagree with podman's launch
+# split — reject outright (a fence is one line of flags). Closes the newline-divergence bypass.
+case "$CAND_FENCE" in *$'\n'*|*$'\r'*) fence_reject "fence contains a newline/CR (one line of flags only)" "newline";; esac
 
 read -r -a _ftok <<< "$CAND_FENCE"
 _seen_net=0; _i=0; _n=${#_ftok[@]}
 while [ "$_i" -lt "$_n" ]; do
-  _t="${_ftok[$_i]}"; _next="${_ftok[$((_i+1))]:-}"
-  _inlineval="${_t#*=}"; [ "$_inlineval" = "$_t" ] && _inlineval=""   # =-suffix value, if the token carried one
+  _t="${_ftok[$_i]}"; _next="${_ftok[$((_i+1))]:-}"; _adv=1
   case "$_t" in
-    -p*|--publish|--publish=*|--publish-all|--publish-all=*|-P)
-      fence_reject "publish flag '$_t' (gate is loopback-only by construction; no port may be published)" "publishes a port";;
-    --privileged|--privileged=true)
-      fence_reject "'$_t' grants blanket privilege" "privileged";;
-    --pid=host|--ipc=host|--uts=host|--userns=host)
-      fence_reject "'$_t' shares a host namespace" "host namespace";;
-    --pid|--ipc|--uts|--userns)
-      [ "$_next" = host ] && fence_reject "'$_t $_next' shares a host namespace" "host namespace"
-      _i=$((_i+2)); continue;;
-    --cap-add=ALL|--cap-add=all)
-      fence_reject "'$_t' adds ALL capabilities (≈ privileged)" "cap-add ALL";;
-    --cap-add)
-      case "$_next" in ALL|all) fence_reject "'--cap-add $_next' adds ALL capabilities" "cap-add ALL";; esac
-      _i=$((_i+2)); continue;;
-    --security-opt=*|--security-opt)
-      _so="$_inlineval"; [ -z "$_so" ] && { _so="$_next"; _i=$((_i+1)); }
-      case "$_so" in label=disable) : ;; *) fence_reject "security-opt '$_so' (only label=disable permitted)" "security-opt";; esac;;
-    --device=*|--device)
-      _d="$_inlineval"; [ -z "$_d" ] && { _d="$_next"; _i=$((_i+1)); }
-      _dev_ok "${_d%%:*}" || fence_reject "device '${_d%%:*}' not in the permitted set (/dev/net/tun,/dev/fuse,/dev/kvm,/dev/dri)" "device";;
-    -v=*|--volume=*|-v|--volume)
-      _m="$_inlineval"; [ -z "$_m" ] && { _m="$_next"; _i=$((_i+1)); }
-      _vol_src_ok "${_m%%:*}" || fence_reject "bind mount source '${_m%%:*}' not permitted (only /sys/fs/cgroup)" "bind mount";;
+    # ---- network: only none|lo (both =form and space form; --net is podman's alias for --network) ----
+    --network=*|--net=*)
+      _seen_net=1; case "${_t#*=}" in none|lo) ;; *) fence_reject "'$_t' opens network (only none/lo)" "opens network";; esac;;
+    --network|--net)
+      _seen_net=1; case "$_next" in none|lo) _adv=2;; *) fence_reject "'$_t $_next' opens network (only none/lo)" "opens network";; esac;;
+    # ---- cap-drop: dropping capabilities is always safe ----
+    --cap-drop=*) : ;;
+    --cap-drop) case "$_next" in -*|'') fence_reject "malformed --cap-drop" "cap-drop";; *) _adv=2;; esac;;
+    # ---- cap-add: a NAMED capability only, NEVER ALL. podman compares the ALL sentinel CASE-
+    # INSENSITIVELY (containers/common EqualFold) and may comma-split the value, so we must too:
+    # uppercase, then reject bare ALL or any comma-list element that is ALL. _capall() does both. ----
+    --cap-add=*) _capall "${_t#*=}" && fence_reject "'$_t' adds ALL capabilities (case/comma-normalized)" "cap-add"; [ -n "${_t#--cap-add=}" ] || fence_reject "empty --cap-add" "cap-add";;
+    --cap-add) case "$_next" in -*|'') fence_reject "malformed --cap-add" "cap-add";; *) _capall "$_next" && fence_reject "--cap-add ALL (≈ privileged; case/comma-normalized)" "cap-add"; _adv=2;; esac;;
+    # ---- security-opt: exactly label=disable (blocks seccomp=unconfined, apparmor=unconfined, …) ----
+    --security-opt=*) case "${_t#*=}" in label=disable) ;; *) fence_reject "security-opt '${_t#*=}' (only label=disable)" "security-opt";; esac;;
+    --security-opt) case "$_next" in label=disable) _adv=2;; *) fence_reject "security-opt '$_next' (only label=disable)" "security-opt";; esac;;
+    # ---- device: allowlisted virtual device source, no `..` ----
+    --device=*) _d="${_t#*=}"; _dev_ok "${_d%%:*}" || fence_reject "device '${_d%%:*}' not permitted (/dev/net/tun,/dev/fuse,/dev/kvm,/dev/dri)" "device";;
+    --device) case "$_next" in -*|'') fence_reject "malformed --device" "device";; *) _dev_ok "${_next%%:*}" || fence_reject "device '${_next%%:*}' not permitted" "device"; _adv=2;; esac;;
+    # ---- bind mounts: source under /sys/fs/cgroup only. THREE spellings incl. -vSRC shorthand concat ----
+    -v=*|--volume=*) _m="${_t#*=}"; _vol_src_ok "${_m%%:*}" || fence_reject "bind source '${_m%%:*}' not permitted (only /sys/fs/cgroup)" "bind mount";;
+    -v|--volume) case "$_next" in -*|'') fence_reject "malformed volume" "bind mount";; *) _vol_src_ok "${_next%%:*}" || fence_reject "bind source '${_next%%:*}' not permitted (only /sys/fs/cgroup)" "bind mount"; _adv=2;; esac;;
+    -v?*) _m="${_t#-v}"; _vol_src_ok "${_m%%:*}" || fence_reject "bind source '${_m%%:*}' not permitted (only /sys/fs/cgroup) [shorthand]" "bind mount";;
     --mount=*|--mount)
-      _m="$_inlineval"; [ -z "$_m" ] && { _m="$_next"; _i=$((_i+1)); }
+      _m="${_t#*=}"; [ "$_m" = "$_t" ] && { case "$_next" in -*|'') fence_reject "malformed --mount" "bind mount";; esac; _m="$_next"; _adv=2; }
       _src=""; _oldifs="$IFS"; IFS=','; for _kv in $_m; do case "$_kv" in source=*|src=*) _src="${_kv#*=}";; esac; done; IFS="$_oldifs"
       _vol_src_ok "$_src" || fence_reject "--mount source '$_src' not permitted (only /sys/fs/cgroup)" "bind mount";;
-    --network=host|--network=slirp4netns|--network=pasta)
-      fence_reject "'$_t' grants network access beyond loopback" "opens network";;
-    --network=*)
-      _seen_net=1; case "${_t#--network=}" in none|lo) ;; *) fence_reject "'--network=${_t#--network=}' is not permitted (only none or lo)" "opens network";; esac;;
-    --network)
-      _seen_net=1; case "$_next" in none|lo) ;; *) fence_reject "'--network $_next' is not permitted (only none or lo)" "opens network";; esac
-      _i=$((_i+2)); continue;;
+    # ---- cgroup namespace: grd's systemd-PID-1 lineage needs host; private is fine ----
+    --cgroupns=*) case "${_t#*=}" in host|private) ;; *) fence_reject "cgroupns '${_t#*=}' not permitted (host|private)" "cgroupns";; esac;;
+    --cgroupns) case "$_next" in host|private) _adv=2;; *) fence_reject "cgroupns '$_next' not permitted (host|private)" "cgroupns";; esac;;
+    # ---- systemd + shm-size: harmless run-contract knobs the desktop lineages carry ----
+    --systemd=*) : ;;
+    --systemd) case "$_next" in always|true|false) _adv=2;; esac;;
+    --shm-size=*) : ;;
+    --shm-size) case "$_next" in -*|'') fence_reject "malformed --shm-size" "shm-size";; *) _adv=2;; esac;;
+    # ---- DEFAULT DENY: anything not explicitly allowed above is rejected (privileged, publish, -p,
+    #      host namespaces, --dns, --add-host, -e/--env-file, --uidmap, --hooks-dir, --rootfs, …) ----
+    *) fence_reject "unrecognized/disallowed fence token '$_t' — the fence is DEFAULT-DENY (only the explicit run-contract allowlist is permitted; a new first-party need is a deliberate allowlist addition)" "default-deny";;
   esac
-  _i=$((_i+1))
+  _i=$((_i+_adv))
 done
 
-# The imposed floors (always applied at launch, prepended before $CAND_FENCE so a fence can only
-# NARROW, never widen): drop-all caps, and networkless unless the fence explicitly opted into lo/none.
+# The imposed floors (always applied at launch, prepended before the validated tokens so a fence can
+# only NARROW, never widen): drop-all caps, and networkless unless the fence explicitly opted into lo/none.
 FENCE_FLOOR=( --cap-drop=ALL )
 [ "$_seen_net" = 1 ] || FENCE_FLOOR+=( --network=none )
 
 # FENCE_CHECK_ONLY: the validator above is the whole point of this mode — reaching here means the
 # fence PASSED. Report + exit before touching podman (used by validation/fence-guard.test.sh).
 [ -n "${FENCE_CHECK_ONLY:-}" ] && { echo "VERDICT: GREEN (fence check only) — floor: ${FENCE_FLOOR[*]}"; exit 0; }
+
+# SECURITY INVARIANT — ASSERT ROOTLESS. The whole fence threat model assumes ROOTLESS podman: container
+# root maps to an unprivileged host uid via a userns, so an allowed --cap-add SYS_ADMIN / --device /
+# label=disable / cgroup mount is NAMESPACED, not host-real (and --userns=host is default-denied above).
+# Under ROOTFUL podman that same first-party fence is privileged-equivalent = a real host escape. Don't
+# silently depend on how the host invokes us — assert it, and refuse to run un-merged code if rootful.
+_rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null)"
+if [ "$_rootless" != "true" ]; then
+  echo "  REFUSING: ambient podman is not rootless (Host.Security.Rootless='$_rootless'). The validation"
+  echo "  fence's containment (namespaced caps, non-identity userns) REQUIRES rootless; running un-merged"
+  echo "  PR code under rootful podman would make the first-party fence privileged-equivalent on the host."
+  echo "VERDICT: RED (podman not rootless — fence containment invariant violated)"; exit 1
+fi
 
 # Scratch secrets: the fenced run gets DISPOSABLE test values, NEVER the real ones and NEVER baked
 # into a layer or logged. A workload whose entrypoint reads a secrets file supplies CAND_SECRET_ENV
@@ -135,10 +166,12 @@ fi
 
 # Resource caps are GATE-imposed (not run.sh contract) — overridable so a heavy target (a full
 # desktop + JVM/Tomcat + MariaDB) gets the headroom a bare sshd box doesn't need.
-# word-splitting CAND_FENCE into podman args is intentional; FENCE_FLOOR is prepended so the imposed
-# floor (--cap-drop=ALL [+ --network=none if the fence named no network]) always precedes — and a
-# fence-declared --cap-add X only adds X back on top of the drop-all floor.
-launch=( podman run -d --rm --name "$NAME" "${FENCE_FLOOR[@]}" $CAND_FENCE
+# SECURITY-CRITICAL: pass the SAME validated token array ("${_ftok[@]}") the validator checked —
+# NOT `$CAND_FENCE` re-split — so podman receives exactly the tokens that were vetted (no second
+# word-split, no glob expansion, no newline divergence). FENCE_FLOOR is prepended so the imposed floor
+# (--cap-drop=ALL [+ --network=none if the fence named no network]) always precedes; a fence-declared
+# --cap-add X only adds X back on top of the drop-all floor.
+launch=( podman run -d --rm --name "$NAME" "${FENCE_FLOOR[@]}" "${_ftok[@]}"
          "${SECRET_MOUNT[@]}"
          --memory="${CAND_MEMORY:-2g}" --pids-limit="${CAND_PIDS:-512}"
          -e DUMMY_SECRETS=1 )
