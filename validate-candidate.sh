@@ -74,6 +74,10 @@ _dev_ok(){ case "$1" in *..*|'') return 1;; /dev/net/tun|/dev/fuse|/dev/kvm|/dev
 # bind-mount SOURCES a fence may expose: ONLY the cgroup pseudo-fs (systemd-PID-1 lineages need it),
 # NEVER a real-data path and NEVER with `..` (blocks `-v /:/host`, `-v /etc:…`, `/sys/fs/cgroup/../../`).
 _vol_src_ok(){ case "$1" in *..*|'') return 1;; /sys/fs/cgroup|/sys/fs/cgroup/*) return 0;; *) return 1;; esac; }
+# _capall: true if a --cap-add value grants the FULL set. podman matches the ALL sentinel case-
+# insensitively AND (historically) comma-splits the value, so uppercase then test bare-ALL or any
+# comma element == ALL. Returns 0 (true => reject) if ALL is present in any spelling/position.
+_capall(){ local u; u="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; case ",$u," in *,ALL,*) return 0;; esac; return 1; }
 
 # A newline in the fence would let a validator that reads line-by-line disagree with podman's launch
 # split — reject outright (a fence is one line of flags). Closes the newline-divergence bypass.
@@ -92,9 +96,11 @@ while [ "$_i" -lt "$_n" ]; do
     # ---- cap-drop: dropping capabilities is always safe ----
     --cap-drop=*) : ;;
     --cap-drop) case "$_next" in -*|'') fence_reject "malformed --cap-drop" "cap-drop";; *) _adv=2;; esac;;
-    # ---- cap-add: a NAMED capability only, NEVER ALL ----
-    --cap-add=*) case "${_t#*=}" in ALL|all|'') fence_reject "'$_t' adds ALL/empty capabilities" "cap-add";; esac;;
-    --cap-add) case "$_next" in ALL|all) fence_reject "--cap-add ALL (≈ privileged)" "cap-add";; -*|'') fence_reject "malformed --cap-add" "cap-add";; *) _adv=2;; esac;;
+    # ---- cap-add: a NAMED capability only, NEVER ALL. podman compares the ALL sentinel CASE-
+    # INSENSITIVELY (containers/common EqualFold) and may comma-split the value, so we must too:
+    # uppercase, then reject bare ALL or any comma-list element that is ALL. _capall() does both. ----
+    --cap-add=*) _capall "${_t#*=}" && fence_reject "'$_t' adds ALL capabilities (case/comma-normalized)" "cap-add"; [ -n "${_t#--cap-add=}" ] || fence_reject "empty --cap-add" "cap-add";;
+    --cap-add) case "$_next" in -*|'') fence_reject "malformed --cap-add" "cap-add";; *) _capall "$_next" && fence_reject "--cap-add ALL (≈ privileged; case/comma-normalized)" "cap-add"; _adv=2;; esac;;
     # ---- security-opt: exactly label=disable (blocks seccomp=unconfined, apparmor=unconfined, …) ----
     --security-opt=*) case "${_t#*=}" in label=disable) ;; *) fence_reject "security-opt '${_t#*=}' (only label=disable)" "security-opt";; esac;;
     --security-opt) case "$_next" in label=disable) _adv=2;; *) fence_reject "security-opt '$_next' (only label=disable)" "security-opt";; esac;;

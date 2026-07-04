@@ -56,6 +56,11 @@ check reject '--device /dev/dri/../../dev/sda'       'C2 — device traversal to
 check reject '--net host'                            'H1 — --net alias, space form'
 check reject '--net=host'                            'H1 — --net alias, =form'
 check reject $'--network=none\n-v /:/host:rw'        'H2 — newline-split parser divergence'
+check reject '--cap-add=All'                         'R2 — cap-add ALL, mixed case (podman EqualFold)'
+check reject '--cap-add All'                         'R2 — cap-add ALL mixed case, space form'
+check reject '--cap-add=aLL'                         'R2 — cap-add ALL, other case'
+check reject '--cap-add all,SYS_ADMIN'               'R2 — cap-add comma-list containing all'
+check reject '--cap-add=SYS_ADMIN,ALL'               'R2 — cap-add comma-list, ALL trailing'
 
 echo "== REJECT: extra default-deny primitives (must all fail closed) =="
 check reject '--userns=keep-id:uid=0' 'userns remap to host uid 0'
