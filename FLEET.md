@@ -46,6 +46,14 @@ human touch** → `fedora-dev` merges. Repos enroll dynamically — just label a
 ship a `.live-gate`. Authoritative spec: the `THE FLEET` block in `fedora-dev/policy/fleet-core.md`
 (the parity-guarded source this map mirrors — absent in this tree by design).
 
+> **Two honest caveats to "autonomous except the final merge."** (1) The per-iteration loop turns
+> **within a live agent session** — the host posts the verdict comment but nothing on the dev side
+> machine-reads it, so a session must be alive to pick up RED and push the fix (closing this
+> wake-up gap is a standing control-plane decision, not yet built). (2) For **`fedora-bootstrap`
+> itself** the tail is NOT autonomous: the host ships no image/Quadlet, so its "deploy" is the
+> **operator re-running `setup.sh` as root** (the agent has no host root — by design). Both are
+> deliberate, but neither is covered by the one-click headline.
+
 **Validation is TWO-TIER — NOT "every change goes to the host."** **Tier 1 — in-box (the default):**
 `fedora-dev`'s own `podman build` IS the throwaway — it develops, validates, and iterates in its
 nested engine (build → validate → fix → rebuild) with NO host involvement, for everything it CAN

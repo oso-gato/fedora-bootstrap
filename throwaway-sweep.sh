@@ -35,6 +35,7 @@
 #   FD_SWEEP_DRYRUN        1 = report only, remove nothing             (default unset)
 #   FD_DNF_CACHE              persistent dnf RPM bind-cache dir         (default ~/.cache/fd-dnf)
 #   FD_DNF_CACHE_CAP_GB       dnf cache SIZE cap; cleared wholesale over (default 15)
+#   FD_STORE_MAX_AGE_H        image-store: reap UNUSED images older than (default 1440 = 60d)
 #   FD_THROWAWAY_TMPDIR       throwaway source-tree parent dir          (default ~/.cache/fd-throwaway)
 set -uo pipefail
 
@@ -109,6 +110,17 @@ fi
 # podman's default (no -a), so tagged workload images (ghcr.io/oso-gato/*) are never touched.
 if [ -n "$DRY" ]; then echo "[sweep] DRYRUN would: podman image prune -f (dangling layers)"
 else podman image prune -f >/dev/null 2>&1 || true; fi
+
+# ---- (6) BOUND the image/layer STORE (the one residual with no ceiling before v1.2.53). Per-candidate
+# rmi + the dangling prune above handle churn, but SUPERSEDED, non-dangling images have no cap: a
+# retired GHCR `:latest` digest no longer backing any container, and OLD base images left after a
+# Fedora bump (fedora:44 → 45) or a vendor pin change. Reap images that are BOTH unused (podman
+# `prune -a` never removes an image backing a running container, so a live Quadlet workload is always
+# spared) AND OLDER than FD_STORE_MAX_AGE_H (default 60 days) — long enough that a still-current base
+# costs at most one re-pull per that window, never per churn iteration. Overridable + DRY-aware.
+STORE_MAX_AGE_H="${FD_STORE_MAX_AGE_H:-1440}"   # 1440h = 60d
+if [ -n "$DRY" ]; then echo "[sweep] DRYRUN would: podman image prune -a -f --filter until=${STORE_MAX_AGE_H}h (cold/superseded images, in-use spared)"
+else podman image prune -a -f --filter "until=${STORE_MAX_AGE_H}h" >/dev/null 2>&1 || true; fi
 
 [ -z "$DRY" ] && : > "$LAST"
 echo "[sweep] done"
