@@ -141,7 +141,7 @@ One authoritative home per concept; every other mention is a one-line pointer or
 | # | Principle | Rule |
 |---|---|---|
 | 1 | TARGET | Fedora Cloud Base, pinned latest stable (image tag in distrobox.ini, host assumptions documented in README). Bump deliberately, per rule 3. |
-| 2 | SOURCES | Host and box install only from an official source, exactly one of: (a) Fedora repos via dnf (RPM); (b) the vendor's/developer's own RPM or dnf repo (`.repo` with `gpgcheck=1`); (c) an **official-upstream binary release artifact with NO class-(a)/(b) source** — bounded by the **Class-(c) rules** below (last-resort/zero-base; publisher GPG-signature-or-checksum-verified, fail-closed; one of three self-contained consumption shapes; never loose on `$PATH`; disclosed per-artifact). Never: COPR or other third-party repos, pip/npm/cargo/gem/brew installs, curl-pipe-sh, tarball-on-PATH, flatpak, snap. Anything outside (a)/(b)/(c)-as-scoped needs an explicit user waiver row. **Class-(c) artifacts in use: none.** |
+| 2 | SOURCES | Host and box install only from an official source, exactly one of: (a) Fedora repos via dnf (RPM); (b) the vendor's/developer's own RPM or dnf repo (`.repo` with `gpgcheck=1`); (c) an **official-upstream binary release artifact with NO class-(a)/(b) source** — bounded by the **Class-(c) rules** below (last-resort/zero-base; take the vendor's directly-published raw binary — never apt/`.deb`; provenance-GRADED c1 GPG-sig / c2 checksum / c3 resolve-log, strongest-available, fail-closed, pinned; shape is a within-grade tiebreaker — a persistent runtime binary IS permitted; disclosed per-artifact). Never: COPR or other third-party repos, pip/npm/cargo/gem/brew installs, curl-pipe-sh, mirror/aggregator binaries, flatpak, snap. Anything outside (a)/(b)/(c)-as-scoped needs an explicit user waiver row. **Class-(c) artifacts in use: none.** |
 | 3 | VERIFY FIRST | Fact-check any source/version against the live source before changing it. |
 | 4 | HOST MINIMAL & IMMUTABLE | The PACKAGES table below is the complete sanctioned host footprint. Anything else runs in a container or in claudebox. Host installs beyond it require an explicit user waiver, recorded as a new row. **Always install the most specific (leaf) package, never a convenience metapackage, unless an explicit architectural reason is recorded in the Why column. `install_weak_deps=False` blocks optional Recommends but NOT a metapackage's hard Requires, so a metapackage can silently drag in components you never use (e.g. `fail2ban` hard-pulls `fail2ban-firewalld`→`firewalld` + `fail2ban-sendmail`→`esmtp`; install `fail2ban-server` instead). Minimalism is a package-choice discipline, not just a flag. If unsure whether a name is a metapackage or what it hard-requires, VERIFY (`dnf repoquery --requires <pkg>` / `rpm -q --requires`) and flag it for review before adding.** **"MINIMUM" IS RELATIVE TO THE CHOSEN CAPABILITY, not the absolute package count.** Once a capability is decided (e.g. a working desktop; an RDP-grade web gate), install the minimal LEAF footprint that makes THAT capability work, and accept + DISCLOSE the irreducible hard-dependency closure it entails (e.g. a `gnome-shell` desktop→webkit + `gnome-control-center`; a KDE desktop→samba/codec). Between options that deliver the SAME capability, prefer the smaller-footprint / built-in / class-(a) one. A lighter option that REDUCES the capability is NOT "more minimal" — it is a lesser function, and choosing it is a recorded capability trade-off, NOT a minimalism win. (Worked decision in fedora-desktop: Guacamole [RDP-grade web gate — H.264/audio/clipboard/file-transfer in the browser] was chosen over noVNC [VNC-grade], so its Tomcat + JVM + `.war` footprint IS the minimum for full RDP-in-the-browser.) |
 | 5 | NO SECRETS | No passwords, keys, or tokens in this repo, ever. Tailscale auth is interactive or via TS_AUTHKEY env at run time. |
@@ -161,22 +161,39 @@ binary release artifact**, fetched over TLS from the project's **own canonical r
 changeable only as a control-plane change** — never a mirror, aggregator, COPR, PPA, OBS home
 project, language-package-manager registry (Maven Central/npm/PyPI/crates.io/RubyGems), or
 third-party rebuild. Each artifact MUST be **(1) version-pinned** via a Containerfile `ARG` (or
-`distrobox.ini` pin), the SOLE exception being an artifact Principle 6 designates
-latest-at-build; and **(2) integrity-verified before any use** — against the publisher's **GPG
-signature** (`gpg --verify`, key fingerprint pinned in-repo) **whenever one is published**; a
-bare `sha*sum -c` is acceptable **only** when the project publishes no signature; the build
-**fails closed** on any mismatch / missing / unfetchable check. *(For a latest-at-build artifact
-where no hash can be pre-pinned: TLS-authenticated fetch from the publisher's own release API +
-**resolve-and-log** — an auditable record, NOT a fail-closed gate; reserved to explicitly-named
-latest-at-build artifacts only.)* The artifact may be consumed in **exactly one of three
-self-contained shapes**: (i) a developer/vendor **AppImage** run from `/opt` (never a bare
-ELF/script/tarball); (ii) a webapp/archive **deployed into a class-(a) runtime** (an Apache
-`.war` into Fedora's Tomcat); or (iii) a **build-time-only tool** that is itself (c)-verified,
-transforms a named (c) artifact, fetches no further network, installs nothing onto `$PATH`, runs
-deterministically, and is deleted. **A loose executable / script / tarball on `$PATH` is NEVER
-permitted under (c).** Each (c) artifact gets a **disclosure row** in the PACKAGES table (pinned
-canonical URL + version + signature/checksum kind); the table's **enumeration line lists every
-(c) artifact in use**. **Backstop:** there is NO CI guard — the in-session clickable merge gate
+`distrobox.ini`/setup pin), the SOLE exception being an artifact Principle 6 designates
+latest-at-build; and **(2) integrity-verified FAIL-CLOSED before any use, GRADED by what is
+verifiable on the RAW BINARY via the direct-download path** (not by a signed repo we do not
+consume):
+- **c1** — a detached **GPG signature on the binary** (`<artifact>.asc`/`.sig`), verified against
+  the vendor's key fingerprint pinned in-repo (`gpg --verify`). Strongest.
+- **c2** — a vendor-published **checksum** (`sha256/sha512`) with **no binary signature
+  available**; `sha*sum -c`, acceptable ONLY because no signature is offered.
+- **c3** — a **latest-at-build** artifact with no pre-pinnable hash: TLS-authenticated fetch from
+  the vendor's own release API + **resolve-and-log** (auditable record, NOT a fail-closed gate);
+  reserved to artifacts that GENUINELY cannot be pinned, each **individually named AND
+  control-plane-approved** — never a general unpinned escape hatch.
+
+Take the **strongest grade the direct channel offers** — you may NOT use c2 when a c1 signature
+exists, nor c3 when a hash can be pinned. The build **fails closed** on any mismatch / missing /
+unfetchable check.
+
+**Consume the BINARY, never a foreign-distro package manager.** Where a vendor ships a signed
+**apt** (or other non-dnf) repo but no dnf repo, do NOT add or invoke that package manager on
+Fedora, and do NOT unpack its `.deb`/`.pkg` to reach the binary — take the vendor's
+**directly-published raw binary** from the same canonical channel and verify it per the grades
+above. A signed foreign-distro repo raises confidence the vendor's key is genuine but does NOT set
+the grade; the grade is what we can verify on the binary we install.
+
+**Shape is a within-grade TIEBREAKER, not a gate.** A **persistent runtime-layer binary IS
+permitted** (the former absolute "$PATH binary NEVER permitted" ban is removed — the rule gates
+PROVENANCE, not shape). When two artifacts share a grade, prefer strongest→weakest: (i) a
+**build-time-only tool** (runs once, installs nothing on `$PATH`, deleted) → (ii) a webapp/archive
+**deployed into a class-(a) runtime** (an Apache `.war` into Fedora's Tomcat) → (iii) a
+self-contained **AppImage from `/opt`** → (iv) a **persistent runtime-layer binary** (e.g. an OCI
+runtime such as `runsc`) registered with the engine. Each (c) artifact gets a **disclosure row**
+in the PACKAGES table (pinned canonical URL + version + **grade c1/c2/c3** + shape); the table's
+**enumeration line lists every (c) artifact in use**. **Backstop:** there is NO CI guard — the in-session clickable merge gate
 (Arthur's click) is the sole backstop; the discipline that every binary on `$PATH` resolves to an
 rpm (`rpm -qf`) is asserted at PR-review time against the disclosure rows, not by a CI job.
 
