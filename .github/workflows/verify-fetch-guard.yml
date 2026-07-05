@@ -1,0 +1,24 @@
+name: verify-fetch-guard
+
+# HOST mechanical backstop for Principle 2(c). fedora-bootstrap ships no image (it is the host,
+# provisioned by setup*.sh), so the in-image No-loose-binary check the image boxes use cannot run here.
+# This asserts the host-script analogue: every setup/validation script that fetches + installs an
+# executable is DISCLOSED (on the guard's allowlist) AND integrity-verifies it fail-closed. Catches a
+# future PR that curls a binary onto the host without verifying it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-fetch-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run host binary-fetch guard
+        run: bash bin/verify-fetch-guard.sh
