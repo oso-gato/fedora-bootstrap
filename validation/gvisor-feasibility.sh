@@ -14,9 +14,10 @@
 #     [health-cmd] optional --health-cmd string (else the image's own / none)
 #     [fence...]   optional extra podman run flags to mirror the target's real fence (e.g. the grd fence)
 #
-# Output: a PASS/FAIL for runsc and for plain, a verdict, and — if runsc FAILS but plain PASSES — the
-# exact `~/.config/live-gate/plain-fence.allow` line to add so that target keeps working (on the weaker
-# but functional fence) while everything else gains gVisor isolation.
+# Output: a PASS/FAIL for runsc and for plain, and a verdict. Shipped model: default = plain fence,
+# runsc is OPT-IN per PROVEN lineage. If runsc PASSES → the exact `~/.config/live-gate/runsc.allow`
+# line to OPT this lineage into gVisor. If runsc FAILS but plain PASSES → leave it on the default plain
+# fence (add nothing). So gVisor is adopted only where empirically proven, one lineage at a time.
 set -uo pipefail
 IMG="${1:?usage: gvisor-feasibility.sh <image-ref> [health-cmd] [fence...]}"; shift
 HEALTH="${1:-}"; [ $# -gt 0 ] && shift
@@ -69,15 +70,19 @@ fi
 boot_under plain && pl=0 || pl=1
 
 echo
+# Verdicts speak the SHIPPED model: default = plain fence; runsc is OPT-IN per PROVEN lineage via the
+# host runsc.allow file (live-gate-run.sh). A CAPABLE lineage is OPTED IN by adding it to runsc.allow;
+# an INCAPABLE one simply stays on the default plain fence (add NOTHING).
 if [ "$gv" = 0 ]; then
-  echo "VERDICT: gVisor-CAPABLE — this target should run under runsc (stronger isolation, no change needed;"
-  echo "  runsc is the gate default)."
+  echo "VERDICT: gVisor-CAPABLE — OPT this lineage into gVisor (stronger isolation) by adding it to the"
+  echo "  host runsc allowlist (default is the plain fence; runsc is opt-in per proven lineage):"
+  echo "     echo '<repo>[:<target>]' >> ~/.config/live-gate/runsc.allow"
 elif [ "$gv" = 2 ]; then
   echo "VERDICT: INCONCLUSIVE — install gVisor first (validation/gvisor-setup.sh), then re-run."
 elif [ "$pl" = 0 ]; then
-  echo "VERDICT: gVisor-INCAPABLE but plain-fence OK — keep this target on the plain fence (weaker, but"
-  echo "  functional). Add it to the host allowlist so the gate does not fail-closed on it:"
-  echo "     echo '<repo>[:<target>]' >> ~/.config/live-gate/plain-fence.allow"
+  echo "VERDICT: gVisor-INCAPABLE but plain-fence OK — leave this lineage on the DEFAULT plain fence"
+  echo "  (add NOTHING to runsc.allow; the plain fence is already the default). Record WHY it can't run"
+  echo "  under gVisor so a future session doesn't retry blindly."
 else
   echo "VERDICT: BROKEN under both — the candidate itself does not boot; fix the candidate, not the runtime."
 fi
