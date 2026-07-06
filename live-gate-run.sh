@@ -109,6 +109,11 @@ lg_load(){
     key="${trimmed%%=*}"; rest="${trimmed#*=}"
     case "$key" in *[!A-Za-z0-9_]*) lg_reason="invalid key name: $key"; return 1;; esac
     case "$key" in                                       # schema-key allowlist (no arbitrary clobber)
+      # RUNTIME is HOST-ONLY — never settable by the untrusted contract (a PR could otherwise set
+      # CAND_RUNTIME=default to DOWNGRADE itself off gVisor onto the weaker plain fence). Reject it
+      # BEFORE the CAND_* wildcard would accept it. (run_target also passes the host's CAND_RUNTIME
+      # explicitly, which overrides the ambient — this is belt-and-suspenders.)
+      CAND_RUNTIME|RUNTIME|RUNTIME_*) echo "[live-gate] WARN: refusing host-only key in contract: $key"; continue;;
       LIVE_GATE_TARGETS|HEALTH|CAND_*|CFILE_*|FENCE_*|HEALTH_*|PROBE_*|SECRET_MOUNT_*|SECRET_ENV_*|MEMORY_*|PIDS_*) : ;;
       *) echo "[live-gate] WARN: ignoring non-schema key in contract: $key"; continue;;
     esac
@@ -242,8 +247,9 @@ for t in "${targets[@]}"; do
   hstart="$(pt HEALTH_START "$t" "${CAND_HEALTH_START:-}")"
   htries="$(pt HEALTH_TRIES "$t" "${CAND_HEALTH_TRIES:-}")"
   hsleep="$(pt HEALTH_SLEEP "$t" "${CAND_HEALTH_SLEEP:-}")"
+  runtime="$(runtime_for "$REPO_NAME" "$t")"   # HOST-decided (runsc.allow opt-in); default = plain fence
 
-  say "== target [$t]  CFILE=$cfile =="
+  say "== target [$t]  CFILE=$cfile  RUNTIME=$runtime =="
   if run_target; then say "== target [$t]: GREEN =="; else say "== target [$t]: RED =="; overall=RED; fi
 done
 say "== OVERALL VERDICT: $overall  ($SLUG#$PR @ $SHA) =="
