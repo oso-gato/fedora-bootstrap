@@ -197,6 +197,16 @@ in the PACKAGES table (pinned canonical URL + version + **grade c1/c2/c3** + sha
 (Arthur's click) is the sole backstop; the discipline that every binary on `$PATH` resolves to an
 rpm (`rpm -qf`) is asserted at PR-review time against the disclosure rows, not by a CI job.
 
+**ANTI-THEATER (doctrine — do not rebuild the sieve).** A static SCRIPT-SCAN for "bad" fetch/install
+patterns is **NOT** a valid 2(c) backstop — it is the exact pattern the fleet already de-theatered
+(v1.2.48 dropped the inert `--cap-add` denylist; `managed-settings.json`'s deny-list "is best-effort
+only… not the boundary"). Detecting bad patterns in arbitrary shell is a sieve — a seventh evasion
+always exists — and a guard that implies coverage it can't deliver is **worse than none**. The host
+ships no image, so for a fetched binary the boundary is the **installer's OWN fail-closed
+verification** (sha/GPG; exit non-zero + install nothing on any mismatch/missing) **+ the disclosure
+row + the click** — never a scan. (A host static fetch-guard was built and closed for exactly this
+reason — do not resurrect it.)
+
 **Class-(c) artifacts in use: none.** This host/box ships no upstream binary artifact today; the
 rule is carried for fleet parity so any future need inherits the identical bounded definition.
 (The only repo with class-(c) artifacts is fedora-desktop: `guacamole.war` + Obsidian.)
