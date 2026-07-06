@@ -153,6 +153,50 @@ if [ "$_rootless" != "true" ]; then
   echo "VERDICT: RED (podman not rootless — fence containment invariant violated)"; exit 1
 fi
 
+# ==== RUNTIME SELECTION — gVisor (runsc) DEFENSE-IN-DEPTH over the fence [PROVISIONAL / OPT-IN] ======
+# gVisor interposes a USER-SPACE kernel between the candidate and the host kernel, so a host-kernel
+# exploit inside un-merged PR code hits gVisor's kernel, not the host's — a stronger boundary than the
+# shared-kernel fence above (feasible on this VPS where a real VM is not: nested virt is provider-
+# disabled). CAND_RUNTIME picks it: 'runsc' = gVisor; 'default'/'crun'/'runc' = the plain fence.
+#
+# PROVISIONAL — DEFAULT IS THE PLAIN FENCE (current behaviour), runsc is OPT-IN per proven lineage.
+# gVisor is NOT yet decided: its concern is that it may only PARTIALLY run the fleet (a systemd-PID-1
+# lineage like grd may not boot under it). Until the host feasibility test (validation/gvisor-feasibility.sh)
+# PROVES a lineage runs under runsc, that lineage stays on the plain fence — so merging this wiring
+# changes NOTHING by default and cannot break the loop. The host opts a PROVEN lineage into runsc via a
+# HOST-side runsc allowlist (live-gate-run.sh), never the untrusted `.live-gate`.
+#
+# SECURITY-CRITICAL — CAND_RUNTIME IS HOST-CONTROLLED, NEVER FROM THE `.live-gate` (a contract choosing
+# its own runtime would just pick the weaker fence). `RUNTIME` is not a schema key in lg_load.
+# FAIL-CLOSED: if runsc is explicitly requested (a proven lineage) but not installed, RED — never a
+# silent downgrade. But the DEFAULT is plain, so an un-proven / un-opted lineage simply runs as today.
+CAND_RUNTIME="${CAND_RUNTIME:-default}"
+RUNTIME_ARGS=()
+case "$CAND_RUNTIME" in
+  runsc|runsc-*)
+    if podman info --format '{{range .Host.OCIRuntime.Runtimes}}{{end}}' >/dev/null 2>&1 && \
+       podman --runtime "$CAND_RUNTIME" info >/dev/null 2>&1; then
+      RUNTIME_ARGS=( --runtime "$CAND_RUNTIME" )
+      echo "  runtime: $CAND_RUNTIME (gVisor — user-space kernel isolation over the fence)"
+    else
+      echo "  REFUSING: runtime '$CAND_RUNTIME' (gVisor) opted-in for this lineage but not installed."
+      echo "  Un-merged code will NOT be silently downgraded to the weaker shared-kernel fence. Either"
+      echo "  install gVisor (validation/gvisor-setup.sh), or remove this lineage from the host runsc"
+      echo "  allowlist (~/.config/live-gate/runsc.allow) to run it on the plain fence again."
+      echo "VERDICT: RED (gVisor runtime opted-in but unavailable — refusing to downgrade isolation)"; exit 1
+    fi
+    ;;
+  default|crun|runc)
+    # Plain shared-kernel fence — a HOST-allowlisted exception (weaker than gVisor). Logged as such.
+    [ "$CAND_RUNTIME" = default ] || RUNTIME_ARGS=( --runtime "$CAND_RUNTIME" )
+    echo "  runtime: plain fence ($CAND_RUNTIME) — WEAKER than gVisor; host-allowlisted exception for a"
+    echo "  candidate gVisor cannot run. Shared-kernel isolation; the fence above is the only boundary."
+    ;;
+  *)
+    echo "  REFUSING: unrecognized CAND_RUNTIME '$CAND_RUNTIME' (expected runsc|default|crun|runc)."
+    echo "VERDICT: RED (bad runtime selector)"; exit 1;;
+esac
+
 # Scratch secrets: the fenced run gets DISPOSABLE test values, NEVER the real ones and NEVER baked
 # into a layer or logged. A workload whose entrypoint reads a secrets file supplies CAND_SECRET_ENV
 # (KEY=VALUE lines) + the in-container CAND_SECRET_MOUNT path; the gate materializes a 0600 file +
@@ -171,7 +215,7 @@ fi
 # word-split, no glob expansion, no newline divergence). FENCE_FLOOR is prepended so the imposed floor
 # (--cap-drop=ALL [+ --network=none if the fence named no network]) always precedes; a fence-declared
 # --cap-add X only adds X back on top of the drop-all floor.
-launch=( podman run -d --rm --name "$NAME" "${FENCE_FLOOR[@]}" "${_ftok[@]}"
+launch=( podman run -d --rm --name "$NAME" "${RUNTIME_ARGS[@]}" "${FENCE_FLOOR[@]}" "${_ftok[@]}"
          "${SECRET_MOUNT[@]}"
          --memory="${CAND_MEMORY:-2g}" --pids-limit="${CAND_PIDS:-512}"
          -e DUMMY_SECRETS=1 )

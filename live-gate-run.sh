@@ -109,6 +109,11 @@ lg_load(){
     key="${trimmed%%=*}"; rest="${trimmed#*=}"
     case "$key" in *[!A-Za-z0-9_]*) lg_reason="invalid key name: $key"; return 1;; esac
     case "$key" in                                       # schema-key allowlist (no arbitrary clobber)
+      # RUNTIME is HOST-ONLY — never settable by the untrusted contract (a PR could otherwise set
+      # CAND_RUNTIME=default to DOWNGRADE itself off gVisor onto the weaker plain fence). Reject it
+      # BEFORE the CAND_* wildcard would accept it. (run_target also passes the host's CAND_RUNTIME
+      # explicitly, which overrides the ambient — this is belt-and-suspenders.)
+      CAND_RUNTIME|RUNTIME|RUNTIME_*) echo "[live-gate] WARN: refusing host-only key in contract: $key"; continue;;
       LIVE_GATE_TARGETS|HEALTH|CAND_*|CFILE_*|FENCE_*|HEALTH_*|PROBE_*|SECRET_MOUNT_*|SECRET_ENV_*|MEMORY_*|PIDS_*) : ;;
       *) echo "[live-gate] WARN: ignoring non-schema key in contract: $key"; continue;;
     esac
@@ -196,12 +201,32 @@ fi
 # Per-target lookup: VAR_<target> with a global/legacy fallback (indirect expansion).
 pt(){ local v="${1}_${2}"; printf '%s' "${!v:-$3}"; }
 
+# HOST-CONTROLLED runtime selection [PROVISIONAL / OPT-IN]. Chosen HERE by the host, NEVER by the
+# untrusted `.live-gate` (a contract choosing its own runtime would just pick the weaker fence to dodge
+# gVisor). DEFAULT = 'default' (the plain shared-kernel fence = current behaviour). A (repo) or
+# (repo:target) listed in the host runsc allowlist — a lineage the feasibility test has PROVEN runs
+# under gVisor — is opted into 'runsc'. Empty/missing allowlist = everything on the plain fence = the
+# loop behaves exactly as today. This makes gVisor a PROVEN, per-lineage opt-in, never a fleet-wide flip
+# to an unproven runtime. The allowlist is a HOST file, not a schema key — a PR cannot influence it.
+# (When ALL lineages are proven, flip the default to runsc + invert this to a plain-fence exception list.)
+RUNSC_ALLOW="${LG_RUNSC_ALLOW:-$HOME/.config/live-gate/runsc.allow}"
+runtime_for(){ # $1=repo $2=target -> echoes 'runsc' (proven, opted-in) or 'default' (plain fence)
+  local repo="$1" tgt="$2" line
+  [ -f "$RUNSC_ALLOW" ] || { printf 'default'; return; }
+  while IFS= read -r line; do
+    line="${line%%#*}"; line="$(printf '%s' "$line" | tr -d '[:space:]')"; [ -z "$line" ] && continue
+    if [ "$line" = "$repo" ] || [ "$line" = "$repo:$tgt" ]; then printf 'runsc'; return; fi
+  done < "$RUNSC_ALLOW"
+  printf 'default'
+}
+
 say(){ printf '%s\n' "$*" | tee -a "$LOG"; }
 run_target(){ # uses the loop-local vars in scope; tees build+gate output to the verdict LOG
   CAND_FENCE="$fence" CAND_PROBE="$probe" HEALTH="$health" \
   CAND_SECRET_MOUNT="$smount" CAND_SECRET_ENV="$senv" \
   CAND_MEMORY="$mem" CAND_PIDS="$pids" \
   CAND_HEALTH_START="$hstart" CAND_HEALTH_TRIES="$htries" CAND_HEALTH_SLEEP="$hsleep" \
+  CAND_RUNTIME="$runtime" \
   CAND_TAG="val-${SHA}-${t}" \
     "$BUILDER" "$REPO_NAME" "$SRC" "" "$cfile" 2>&1 | tee -a "$LOG"
   return "${PIPESTATUS[0]}"
@@ -222,8 +247,9 @@ for t in "${targets[@]}"; do
   hstart="$(pt HEALTH_START "$t" "${CAND_HEALTH_START:-}")"
   htries="$(pt HEALTH_TRIES "$t" "${CAND_HEALTH_TRIES:-}")"
   hsleep="$(pt HEALTH_SLEEP "$t" "${CAND_HEALTH_SLEEP:-}")"
+  runtime="$(runtime_for "$REPO_NAME" "$t")"   # HOST-decided (runsc.allow opt-in); default = plain fence
 
-  say "== target [$t]  CFILE=$cfile =="
+  say "== target [$t]  CFILE=$cfile  RUNTIME=$runtime =="
   if run_target; then say "== target [$t]: GREEN =="; else say "== target [$t]: RED =="; overall=RED; fi
 done
 say "== OVERALL VERDICT: $overall  ($SLUG#$PR @ $SHA) =="
