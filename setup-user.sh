@@ -525,7 +525,7 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     # operator only discovers the missing App credential when the loop stalls on auth. The
     # wizard is part of the fleet contract exactly like the Quadlet below, so enforce it the
     # same way. Announce the delegation so the questions are attributable in the day0 scroll.
-    GH_APP_ID=""; GH_APP_INSTALLATION_ID=""; GH_APP_SECRET=""
+    GH_APP_ID=""; GH_APP_INSTALLATION_ID=""; GH_APP_SECRET=""; BOX_HOSTNAME=""
     if [ ! -x "$HOME/$_c/spin-up.sh" ]; then
         echo "FATAL: $HOME/$_c/spin-up.sh missing or not executable — workload contract violation" >&2
         echo "  (every workload repo must ship an executable spin-up.sh; its questions were NOT asked," >&2
@@ -564,6 +564,17 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
           -e "s|^# *Environment=GH_APP_ID=.*|Environment=GH_APP_ID=${GH_APP_ID} GH_APP_INSTALLATION_ID=${GH_APP_INSTALLATION_ID}|" \
           "$_q"
         echo "  -> ${_c}: standing GitHub App credential wired (podman secret '${GH_APP_SECRET}', App ${GH_APP_ID})."
+    fi
+
+    # (b3) Stamp the wizard-collected pairing hostname into the INSTALLED Quadlet, so the
+    # day0/Quadlet deploy path honors it exactly like a by-hand run.sh does. The workload's
+    # spin-up.sh derives it from THIS host's hostname (host phase 1/7 set it before any of
+    # this user layer ran): erebus -> nox, strix -> nyx. The hostname becomes both the
+    # container hostname AND the tailnet node name; the podman container NAME stays <repo>
+    # (the refresh units key on it). No-op when the wizard emitted none.
+    if [ -n "${BOX_HOSTNAME:-}" ]; then
+        sed -i "s|^HostName=.*|HostName=${BOX_HOSTNAME}|" "$HOME/.config/containers/systemd/$_c.container"
+        echo "  -> ${_c}: container/tailnet hostname stamped: ${BOX_HOSTNAME}"
     fi
 
     # (c) Enable the refresh + retry timers. The Quadlet-generated <name>.service
