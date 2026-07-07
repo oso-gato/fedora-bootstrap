@@ -56,6 +56,15 @@ GATE="$HERE/validate-candidate.sh"
 # survives the candidate `rmi`): the layer cache reuses unchanged layers, the dnf bind cache means
 # even a layer that DOES re-run dnf serves its RPMs from disk instead of the network. Bounded by
 # throwaway-sweep.sh's cache GC (FD_DNF_CACHE_CAP_GB) so it can never exhaust the VPS quota.
+#
+# `,z` (v1.2.53) — MANDATORY once the host converged to SELinux ENFORCING (v1.2.49): without a label
+# option the bind keeps its user_home_t label, the confined (container_t) build's dnf gets EACCES
+# creating repo subdirs / tmpdirs inside it, and EVERY gate build RED-fails org-wide at STEP dnf —
+# a false negative unrelated to the PR under test (observed byte-identical on fedora-dev#82/#107 +
+# fedora-desktop#101, 2026-07-07). Lowercase z = SHARED label (container_file_t): sequential gate
+# builds all read/write one cache. podman relabels the EXISTING tree on mount, so this line also
+# self-heals the pre-enforcement cache content — no manual host relabel/rm needed. (The dev box
+# never saw this: its engine runs the fedora-dev container with SecurityLabelDisable=true.)
 FD_DNF_CACHE="${FD_DNF_CACHE:-$HOME/.cache/fd-dnf}"
 mkdir -p "$FD_DNF_CACHE" 2>/dev/null || true
 
@@ -95,7 +104,7 @@ trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
 echo "== build DISPOSABLE candidate $TAG (Containerfile=$CFILE; host top-level engine; layer cache retained + dnf bind cache $FD_DNF_CACHE; no --no-cache) =="
 iso=(); [ -n "${BUILD_ISOLATION:-}" ] && iso=(--isolation="$BUILD_ISOLATION")
 # shellcheck disable=SC2086
-if ! podman build "${iso[@]}" ${BUILD_ARGS:-} -v "$FD_DNF_CACHE:/var/cache/libdnf5:rw" -t "$TAG" -f "$SRC/$CFILE" "$SRC"; then
+if ! podman build "${iso[@]}" ${BUILD_ARGS:-} -v "$FD_DNF_CACHE:/var/cache/libdnf5:rw,z" -t "$TAG" -f "$SRC/$CFILE" "$SRC"; then
   echo "VERDICT: RED (build failed)"; exit 1
 fi
 
