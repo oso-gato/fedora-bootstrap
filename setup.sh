@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.52 (release-doc de-ceremony: changelog-table convention; UPGRADING.md collapsed; docs only)
+# Version: 1.2.53 (live-gate fix: dnf bind cache gets :z — SELinux-enforcing host was RED-failing every gate build)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

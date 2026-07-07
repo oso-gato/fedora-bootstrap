@@ -50,6 +50,7 @@ git pull --ff-only origin main
 | v1.2.50 | Cache/UI knobs simplified (blunt dnf-cache cap, 60s live-gate poll, tmux toggle dropped) | — |
 | v1.2.51 | fastfetch installed on the host + login banner for every user | — |
 | v1.2.52 | Release-doc de-ceremony: changelog-table convention; this file collapsed from 51 subsections | — |
+| v1.2.53 | live-gate fix: dnf bind cache mounted `:z` — the v1.2.49 SELinux-enforcing convergence was RED-failing **every** gate build org-wide (EACCES in `/var/cache/libdnf5`; false negatives on fedora-dev#82/#107, fedora-desktop#101). `:z` also relabels the existing cache on first mount, so no manual heal. Re-gate affected PRs by pushing a new head SHA (per-SHA dedup) | — |
 
 ## Retained full procedures
 
