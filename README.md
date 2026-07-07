@@ -179,13 +179,15 @@ As root on a fresh Fedora Cloud instance (take a Hostinger snapshot first — `d
 
 ```sh
 dnf -y upgrade --refresh
-dnf -y install git util-linux
+dnf -y install git util-linux-script
 git clone https://github.com/oso-gato/fedora-bootstrap /opt/fedora-bootstrap 2>/dev/null || git -C /opt/fedora-bootstrap pull
 script -qec /opt/fedora-bootstrap/day0.sh /dev/null        # interactive Day-0 wizard — keep this the LAST line
 ```
 
-The block is **channel-proof and re-run-safe**: `util-linux` supplies `script(1)` (the minimal Cloud
-image ships only `util-linux-core`, which lacks it), whose pseudo-terminal makes the wizard work even
+The block is **channel-proof and re-run-safe**: `util-linux-script` supplies `script(1)` (on F44 it
+is its own subpackage — plain `util-linux` does NOT contain it, verified live; if a future Fedora
+re-splits it again, dnf fails loudly with "no match" and `dnf provides '*/bin/script'` names the new
+owner), whose pseudo-terminal makes the wizard work even
 in a **pty-less browser console** (Hostinger's runs commands with no `/dev/tty` — verified live; a
 plain `ssh root@<host>` login doesn't need the wrapper but is unharmed by it). The clone falls back to
 a `pull` when `/opt/fedora-bootstrap` already exists (re-run after a failure or on a restored
