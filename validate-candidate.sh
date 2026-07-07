@@ -215,7 +215,12 @@ fi
 # word-split, no glob expansion, no newline divergence). FENCE_FLOOR is prepended so the imposed floor
 # (--cap-drop=ALL [+ --network=none if the fence named no network]) always precedes; a fence-declared
 # --cap-add X only adds X back on top of the drop-all floor.
-launch=( podman run -d --rm --name "$NAME" "${RUNTIME_ARGS[@]}" "${FENCE_FLOOR[@]}" "${_ftok[@]}"
+# NO --rm (v1.2.54): the EXIT trap above already reaps $NAME, so --rm was redundant — and it DESTROYED
+# the evidence: a candidate that dies during the healthy-wait auto-removed itself, leaving
+# `healthy FAIL(none)` + "no such container" and NO boot log in the verdict (2026-07-07: every
+# fedora-dev boot-death was undiagnosable from the PR thread). Keeping the corpse until the trap lets
+# the evidence dump below post the dying breath.
+launch=( podman run -d --name "$NAME" "${RUNTIME_ARGS[@]}" "${FENCE_FLOOR[@]}" "${_ftok[@]}"
          "${SECRET_MOUNT[@]}"
          --memory="${CAND_MEMORY:-2g}" --pids-limit="${CAND_PIDS:-512}"
          -e DUMMY_SECRETS=1 )
@@ -236,6 +241,17 @@ for _ in $(seq 1 "${CAND_HEALTH_TRIES:-18}"); do
   sleep "${CAND_HEALTH_SLEEP:-6}"
 done
 [ "$st" = healthy ] && g healthy PASS || g healthy "FAIL($st)"
+
+# EVIDENCE on failure (v1.2.54): when the candidate never went healthy, post WHY into the verdict —
+# its state (running? exit code? OOM?) and the tail of its boot log. Without this, a boot-death RED
+# reads identically to every other RED and the dev side debugs blind. The corpse exists because the
+# launch above no longer uses --rm; the EXIT trap still reaps it after this dump.
+if [ "$st" != healthy ]; then
+  echo "  -- candidate evidence (state + boot-log tail; corpse reaped on exit) --"
+  podman inspect -f '  state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' "$NAME" 2>/dev/null \
+    || echo "  (container not inspectable)"
+  podman logs --tail 60 "$NAME" 2>&1 | sed 's/^/  boot| /' || true
+fi
 
 echo "== access-path probe =="
 # CAND_PROBE = the workload's "does it actually serve" assertion, run INSIDE the candidate via
