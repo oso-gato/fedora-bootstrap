@@ -115,6 +115,62 @@ sudo dnf system-upgrade reboot
 
 Both reboot the host twice (offline transaction, then into the new release). Append `-y` for unattended. If more than +2 releases behind, repeat the block for the next step.
 
+### GitHub Apps — the fleet's standing identities (create BEFORE Day 0)
+
+Day 0 asks you to paste **two GitHub App credentials** (both prompts default **y**): one for the **HOST**
+(this box — `live-gate-watch` discovers `live-validate` PRs and posts the GREEN/RED verdicts as this
+identity) and one for the **dev box** (`fedora-dev` authors PRs as it). They MUST be **two distinct
+Apps**: the deterministic auto-merge refuses any verdict authored by the PR author, so one shared App
+would fail-closed every gate forever. Create both before running `day0.sh`.
+
+**1. Create (×2)** — github.com → avatar → **Settings → Developer settings → GitHub Apps → New GitHub
+App**. Name them readably (they become the `[bot]` names on PRs, e.g. `oso-gato-host-gate` /
+`oso-gato-devbox`); Homepage URL = anything; **uncheck Webhook → Active** (the fleet polls); "Where can
+this App be installed?" → **Only on this account** → **Create GitHub App**.
+
+**2. Permissions** — set only these; leave everything else at *No access*:
+
+| Repository permissions | Host App (`host-gate`) | Dev App (`devbox`) | Why |
+|---|---|---|---|
+| Actions | Read-only | Read-only | watch CI run results |
+| Contents | **Read-only** | **Read and write** | host only clones PR heads to gate them; dev pushes feature branches |
+| Issues | Read and write | Read and write | the `live-validate` label + PR comments ride the issues API |
+| Metadata | Read-only *(mandatory, auto-set)* | Read-only *(mandatory, auto-set)* | forced by GitHub |
+| Pull requests | Read and write | Read and write | host posts verdict comments; dev opens PRs |
+| Workflows | **No access** | **Read and write** | only the dev box edits `.github/workflows/**` |
+| Packages | **No access** | **No access** | ratified constraint — CI publishes images, never the boxes |
+
+| Organization permissions | both Apps |
+|---|---|
+| *all* | No access |
+
+| Account permissions | both Apps |
+|---|---|
+| *all* | No access |
+
+The Contents/Workflows asymmetry is least-privilege doing real work: a compromised host box can only
+*comment*; a compromised dev box can write code but its verdicts count for nothing; neither can merge
+or publish packages.
+
+**3. Install (×2)** — on the App's page → left sidebar **Install App** → install on `oso-gato` →
+**All repositories** (recommended — repos enroll in the loop dynamically) or select the fleet repos →
+**Install**.
+
+**4. Credentials to have ready (3 per App, 6 total)** — what Day 0 actually asks for:
+
+| Credential | Where to find it |
+|---|---|
+| **App ID** | the App's settings page, top ("App ID: 12345") |
+| **Installation ID** | after installing: Settings → **Applications** → Installed GitHub Apps → **Configure** — the number at the end of the URL `github.com/settings/installations/`**`123456`** |
+| **Private key (PEM)** | App page → **Private keys → Generate a private key** → a `.pem` downloads **once** (GitHub only re-shows its SHA-256 fingerprint, never the key). Lost it? Generate a new one and Delete the orphaned fingerprint. |
+
+At the prompt: paste the **whole PEM** (`-----BEGIN … END PRIVATE KEY-----`), then a line with just
+`END`. The PEM streams straight into a rootless **podman secret** (host: `gh_app_host_key`; dev box:
+`gh_app_key`) — never a loose file; each box mints its own ≤1h installation tokens from it forever
+(host: `host-gh-refresh.timer`, hourly; dev box: the entrypoint tick). App/Installation IDs are public
+integers; only the PEM is secret — keep the two `.pem` files in a password manager. No username, no
+password, no manually-created token, no expiry to babysit.
+
 ### Day 0 — fresh VPS
 
 As root on a fresh Fedora Cloud instance (take a Hostinger snapshot first — `day0.sh` reboots the host into the automated SELinux convergence).
