@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly refresh of the HOST's standing GitHub App token (token lifetime <=1h)
+
+[Timer]
+# Soon after boot (the live-gate may fire on the first watch tick), then well inside the
+# 1h token lifetime so gh never goes stale between refreshes.
+OnBootSec=2min
+OnUnitActiveSec=45min
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target

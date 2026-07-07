@@ -338,6 +338,55 @@ install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.timer"    "$HOME/.c
 install -m 0644 "$HERE/systemd-units/live-gate-watch.service"          "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE/systemd-units/live-gate-watch.timer"            "$HOME/.config/systemd/user/"
 
+# ---- HOST standing GitHub App credential (the live-gate's OWN identity) ----
+# The HOST runs `gh` itself — live-gate-watch discovers PRs and POSTS the GREEN/RED verdicts —
+# so it needs a standing identity exactly like the dev box, and a DISTINCT one: the deterministic
+# auto-merge (fedora-dev bin/auto-merge.sh) only trusts a verdict whose author DIFFERS from the PR
+# author, so host and dev box MUST NOT share an App. Same paste->podman-secret model as the
+# workloads (helpers mirrored VERBATIM from fedora-dev, the canonical copy); the PEM's only at-rest
+# home is the rootless podman secret store; a <=1h installation token is minted + rewired hourly
+# by host-gh-refresh.timer. Declining (or a scripted run) => the host falls back to whatever
+# `gh auth login` the operator did — the WARN says so and how to provision later.
+install -m 0755 "$HERE/gh-app-auth.sh"       "$HOME/.local/bin/gh-app-auth.sh"
+install -m 0755 "$HERE/host-gh-refresh.sh"   "$HOME/.local/bin/host-gh-refresh.sh"
+install -m 0644 "$HERE/systemd-units/host-gh-refresh.service" "$HOME/.config/systemd/user/"
+install -m 0644 "$HERE/systemd-units/host-gh-refresh.timer"   "$HOME/.config/systemd/user/"
+if podman secret exists gh_app_host_key 2>/dev/null && [ -r "$HOME/.config/gh-app-host.env" ]; then
+    echo "[host-gh] standing HOST App credential already provisioned (secret gh_app_host_key) — keeping it."
+else
+    . "$HERE/gh-app-provision.sh"
+    GHA_TTY="${SPINUP_TTY:-/dev/tty}"; GHA_IN="$GHA_TTY"
+    _hg_ans=y
+    if { : <"$GHA_IN"; } 2>/dev/null; then
+        printf '>> Provision the HOST'\''s standing GitHub App credential now (paste the key)? — DEFAULT y: the live-gate posts verdicts as this identity; MUST be a DIFFERENT App than the dev box'\''s (y/n) [y]: ' >"$GHA_TTY"
+        IFS= read -r _hg_ans <"$GHA_IN" || _hg_ans=""; _hg_ans="${_hg_ans:-y}"
+    else
+        echo "[host-gh] no terminal — cannot paste the HOST App key in this run." >&2
+        _hg_ans=n
+    fi
+    if [ "$_hg_ans" = y ]; then
+        GH_APP_HOST_ID=""; GH_APP_HOST_INST=""
+        prompt_github_app gh_app_host_key GH_APP_HOST_ID GH_APP_HOST_INST \
+            || { echo "FATAL: HOST GitHub App provisioning failed" >&2; exit 1; }
+        _um="$(umask)"; umask 077
+        printf 'GH_APP_ID=%s\nGH_APP_INSTALLATION_ID=%s\n' "$GH_APP_HOST_ID" "$GH_APP_HOST_INST" \
+            > "$HOME/.config/gh-app-host.env"   # PUBLIC integers only; the PEM stays in the secret
+        umask "$_um"
+        "$HOME/.local/bin/host-gh-refresh.sh" \
+            || { echo "FATAL: initial HOST token mint failed (bad App id/key?)" >&2; exit 1; }
+        echo "[host-gh] HOST App credential provisioned + first token minted (App $GH_APP_HOST_ID)."
+        echo "[host-gh] NOTE: this user's github.com identity (gh hosts.yml + git store helper) is"
+        echo "          now the App token and is REWRITTEN hourly — a manual 'gh auth login' on the"
+        echo "          host will be overwritten; the host acts as the App by design."
+    else
+        echo "[host-gh] NO standing HOST App credential — the live-gate's gh calls rely on a manual" >&2
+        echo "          'gh auth login' until you provision one: re-run setup, or as $USER run:" >&2
+        echo "          . $HERE/gh-app-provision.sh && prompt_github_app gh_app_host_key GH_APP_HOST_ID GH_APP_HOST_INST" >&2
+        echo "          then write ~/.config/gh-app-host.env and run host-gh-refresh.sh" >&2
+    fi
+fi
+systemctl --user enable --now host-gh-refresh.timer
+
 # ---- image signature verification scaffolding ----
 # Default policy: reject everything; then trust THREE repos unconditionally
 # (insecureAcceptAnything): ghcr.io/oso-gato/* (the production workloads that
