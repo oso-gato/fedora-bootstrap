@@ -471,11 +471,26 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     # its container asks (a new workload type ships its own spin-up.sh and is asked automatically).
     # The wizard reads /dev/tty (preserved through the `su` into this user) and emits its resolved
     # env as one `export …` line, captured here WITHOUT clobbering the host's own TS_AUTHKEY.
+    # FAIL-LOUD (was a silent `if -x` skip): a workload whose spin-up.sh is missing or
+    # non-executable would previously be provisioned with NO questions and NO error — the
+    # operator only discovers the missing App credential when the loop stalls on auth. The
+    # wizard is part of the fleet contract exactly like the Quadlet below, so enforce it the
+    # same way. Announce the delegation so the questions are attributable in the day0 scroll.
     GH_APP_ID=""; GH_APP_INSTALLATION_ID=""; GH_APP_SECRET=""
-    if [ -x "$HOME/$_c/spin-up.sh" ]; then
-        _collected="$(cd "$HOME/$_c" && COLLECT_ONLY=1 ./spin-up.sh)" \
-            || { echo "FATAL: $_c spin-up.sh collect failed" >&2; exit 1; }
-        _save_ts="${TS_AUTHKEY:-}"; eval "$_collected"; TS_AUTHKEY="$_save_ts"
+    if [ ! -x "$HOME/$_c/spin-up.sh" ]; then
+        echo "FATAL: $HOME/$_c/spin-up.sh missing or not executable — workload contract violation" >&2
+        echo "  (every workload repo must ship an executable spin-up.sh; its questions were NOT asked," >&2
+        echo "   so its secrets/credentials were NOT provisioned — refusing to continue silently)" >&2
+        exit 1
+    fi
+    echo ">> ${_c}: asking its setup questions (delegated to its own spin-up.sh) ..."
+    _collected="$(cd "$HOME/$_c" && COLLECT_ONLY=1 ./spin-up.sh)" \
+        || { echo "FATAL: $_c spin-up.sh collect failed" >&2; exit 1; }
+    _save_ts="${TS_AUTHKEY:-}"; eval "$_collected"; TS_AUTHKEY="$_save_ts"
+    if [ -z "${GH_APP_SECRET:-}" ]; then
+        echo "  -> ${_c}: NO standing GitHub App credential provisioned (declined or skipped)." >&2
+        echo "     The autonomous loop will stall on auth until one exists: run" >&2
+        echo "     'cd ~/${_c} && ./spin-up.sh' later, or re-run setup." >&2
     fi
 
     # (b) Install the container's Quadlet into systemd's user search path.
