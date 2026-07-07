@@ -34,6 +34,8 @@ if ! { : </dev/tty; } 2>/dev/null; then
     echo "  RUN IT INTERACTIVELY:  ssh root@<host>   (a plain login, NOT 'ssh host <cmd>')" >&2
     echo "                         /opt/fedora-bootstrap/day0.sh" >&2
     echo "  Or force a tty:        ssh -t root@<host> /opt/fedora-bootstrap/day0.sh" >&2
+    echo "  Browser console (Hostinger etc. — no pty): wrap in script(1) to manufacture one:" >&2
+    echo "                         script -qec /opt/fedora-bootstrap/day0.sh /dev/null" >&2
     echo "  (Fully-scripted runs: export TS_AUTHKEY + GH_APP_ID/GH_APP_INSTALLATION_ID/" >&2
     echo "   GH_APP_SECRET and call setup.sh directly — day0 is the interactive wizard.)" >&2
     exit 1
