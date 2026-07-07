@@ -23,12 +23,17 @@ if [ "$(id -u)" = 0 ]; then
     # the setup duration only, and pass the path down as SPINUP_TTY (wizards read the device
     # directly — no controlling terminal needed). Fully-scripted runs (no tty) pass no
     # SPINUP_TTY and the wizards take env/defaults loudly.
+    # Capture the REAL device name (/dev/pts/N) via tty(1)/ttyname — NEVER the /proc fd-link
+    # trick: an fd opened on /dev/tty readlinks back to the literal "/dev/tty" (the magic 5,0
+    # alias's own dentry, not the pts it points at). Verified live round 5: the banner said
+    # "/dev/tty -> core", and for core — whose su session has no controlling terminal — that
+    # alias dereferences to NOTHING (ENXIO), which is precisely the problem being ferried
+    # around. Only a concrete /dev/pts/N (or console) name survives the su boundary.
     SPINUP_TTY=""
-    if { exec 9</dev/tty; } 2>/dev/null; then
-        SPINUP_TTY="$(readlink -f /proc/self/fd/9 2>/dev/null || true)"; exec 9<&-
-    fi
-    # Fallback capture: the process's controlling terminal per ps (covers a readlink/procfs
-    # oddity while /dev/tty itself is openable). "?" = no controlling terminal.
+    _t="$(tty </dev/tty 2>/dev/null || true)"
+    case "$_t" in /dev/tty|'') _t="";; esac      # the alias itself is NOT a ferryable answer
+    [ -n "$_t" ] && [ -e "$_t" ] && SPINUP_TTY="$_t"
+    # Fallback: the controlling terminal per ps ("?" = none).
     if [ -z "$SPINUP_TTY" ]; then
         _pstty="$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')"
         [ -n "$_pstty" ] && [ "$_pstty" != "?" ] && [ -e "/dev/$_pstty" ] && SPINUP_TTY="/dev/$_pstty"
