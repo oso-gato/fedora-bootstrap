@@ -358,7 +358,13 @@ else
     GHA_TTY="${SPINUP_TTY:-/dev/tty}"; GHA_IN="$GHA_TTY"
     _hg_ans=y
     if { : <"$GHA_IN"; } 2>/dev/null; then
-        printf '>> Provision the HOST'\''s standing GitHub App credential now (paste the key)? — DEFAULT y: the live-gate posts verdicts as this identity; MUST be a DIFFERENT App than the dev box'\''s (y/n) [y]: ' >"$GHA_TTY"
+        {
+            printf '── GitHub App credential for THE HOST '\''%s'\'' (fedora-bootstrap) ─────────────────\n' "$(hostname -s)"
+            printf '   This is the HOST'\''s live-gate identity (the '\''host-gate'\'' App — posts the GREEN/RED\n'
+            printf '   verdicts; Contents read-only). NOT the dev box'\''s App: that one is asked separately,\n'
+            printf '   in the fedora-dev spin-up section — the two MUST be DIFFERENT Apps.\n'
+            printf '>> Provision the HOST (%s) App credential now (paste the key)? — DEFAULT y (y/n) [y]: ' "$(hostname -s)"
+        } >"$GHA_TTY"
         IFS= read -r _hg_ans <"$GHA_IN" || _hg_ans=""; _hg_ans="${_hg_ans:-y}"
     else
         echo "[host-gh] no terminal — cannot paste the HOST App key in this run." >&2
