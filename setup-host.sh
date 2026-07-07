@@ -316,14 +316,10 @@ ACCEPT_ROUTES="$(ts_bool "${TS_ACCEPT_ROUTES:-}")"; ADVERTISE_EXIT="$(ts_bool "$
 if [ "$ADVERTISE_EXIT" = true ]; then
     printf 'net.ipv4.ip_forward = 1\nnet.ipv6.conf.all.forwarding = 1\n' > /etc/sysctl.d/99-tailscale.conf
     sysctl -p /etc/sysctl.d/99-tailscale.conf >/dev/null
-    # Fedora Cloud Base ships no firewalld, and we install nothing that pulls it in, so this is a
-    # DEFENSIVE no-op kept only in case a future package re-introduces firewalld. Only if firewalld is
-    # actually running do
-    # the exit-node docs (kb/1103, known issue tailscale/tailscale#3416) require masquerade so forwarded
-    # internet egress is NAT'd.
-    if systemctl is-active --quiet firewalld; then
-        firewall-cmd --permanent --add-masquerade && firewall-cmd --reload
-    fi
+    # No firewalld masquerade step: this host runs no firewalld (Fedora Cloud Base ships none, we
+    # install nothing that pulls it in, and it's actively removed above), and tailscaled programs its
+    # own netfilter rules for exit-node NAT. kb/1103's firewall-cmd masquerade applies only to a
+    # firewalld-managed host, so the guarded call was a permanent no-op here — dropped.
 fi
 # Carry EVERY routing pref on the join so they apply atomically as part of authentication. --accept-routes
 # on the join also avoids the transient "peers are advertising routes but --accept-routes is false" snapshot.
