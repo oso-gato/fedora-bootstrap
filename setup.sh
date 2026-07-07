@@ -27,9 +27,26 @@ if [ "$(id -u)" = 0 ]; then
     if { exec 9</dev/tty; } 2>/dev/null; then
         SPINUP_TTY="$(readlink -f /proc/self/fd/9 2>/dev/null || true)"; exec 9<&-
     fi
+    # Fallback capture: the process's controlling terminal per ps (covers a readlink/procfs
+    # oddity while /dev/tty itself is openable). "?" = no controlling terminal.
+    if [ -z "$SPINUP_TTY" ]; then
+        _pstty="$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')"
+        [ -n "$_pstty" ] && [ "$_pstty" != "?" ] && [ -e "/dev/$_pstty" ] && SPINUP_TTY="/dev/$_pstty"
+    fi
     # Defensive: a quote in the device path would break the su -c string below (readlink of a
     # pts never contains one, but fail SAFE to "no ferry" rather than a mangled command).
     case "$SPINUP_TTY" in *"'"*) SPINUP_TTY="";; esac
+    # REPORT the ferry outcome either way — a silent no-terminal run cost a live Day-0
+    # (2026-07-07: Tailscale question skipped wordlessly, App pastes impossible, FATAL at
+    # user 4/5 with no hint why). day0.sh now refuses to start without a terminal; this
+    # banner covers direct setup.sh runs and makes every log self-diagnosing.
+    if [ -n "$SPINUP_TTY" ]; then
+        echo ">> tty ferry: $SPINUP_TTY -> $U (user-layer questions will prompt on this terminal)"
+    else
+        echo ">> tty ferry: NO TERMINAL — user-layer questions take their defaults; App-credential" >&2
+        echo ">>            pastes are impossible (fedora-dev's will FATAL unless GH_APP_* env is set)." >&2
+        echo ">>            Interactive setup: run day0.sh from a plain 'ssh root@<host>' login." >&2
+    fi
     if [ -n "$SPINUP_TTY" ] && [ -e "$SPINUP_TTY" ]; then
         # Branch on setfacl SUCCESS, not existence: devpts does NOT support POSIX ACLs
         # (`setfacl` on /dev/pts/N fails "Operation not supported"), so on a real interactive

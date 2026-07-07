@@ -20,9 +20,28 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TS_AUTHKEY="${TS_AUTHKEY:-}"
 
+# --- TERMINAL PREFLIGHT (fail at the front door, not at user 4/5) --------------
+# Day-0 is INTERACTIVE: the Tailscale key, the HOST GitHub App paste, and each workload's
+# questions (fedora-dev's App paste) all read the terminal. Verified live 2026-07-07: with no
+# terminal, the old silent [ -r /dev/tty ] guard skipped the Tailscale question WITHOUT A WORD,
+# the host App declined itself, and setup died only at fedora-dev's App paste — three symptoms,
+# one cause. A terminal is ABSENT when day0 is launched via `ssh root@host '<cmd>'` (command
+# mode allocates NO tty), any piped/heredoc invocation, or console tools that don't allocate a
+# pty. So refuse loudly up front, with the fix:
+if ! { : </dev/tty; } 2>/dev/null; then
+    echo "FATAL: no terminal (/dev/tty is not readable) — Day-0 asks interactive questions" >&2
+    echo "  (Tailscale key + two GitHub App key pastes) and cannot proceed without one." >&2
+    echo "  RUN IT INTERACTIVELY:  ssh root@<host>   (a plain login, NOT 'ssh host <cmd>')" >&2
+    echo "                         /opt/fedora-bootstrap/day0.sh" >&2
+    echo "  Or force a tty:        ssh -t root@<host> /opt/fedora-bootstrap/day0.sh" >&2
+    echo "  (Fully-scripted runs: export TS_AUTHKEY + GH_APP_ID/GH_APP_INSTALLATION_ID/" >&2
+    echo "   GH_APP_SECRET and call setup.sh directly — day0 is the interactive wizard.)" >&2
+    exit 1
+fi
+
 # --- the one Day-0 question (read from the terminal, not stdin) ---------------
 # Blank = the browser web-login fallback (a login.tailscale.com URL prints during setup).
-if [ -z "$TS_AUTHKEY" ] && [ -r /dev/tty ]; then
+if [ -z "$TS_AUTHKEY" ]; then
     printf '>> Tailscale auth key for an UNATTENDED join (tskey-…; blank = browser web-login): ' >/dev/tty
     IFS= read -r TS_AUTHKEY </dev/tty || TS_AUTHKEY=""
 fi
