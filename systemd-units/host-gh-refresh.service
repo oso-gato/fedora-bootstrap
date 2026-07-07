@@ -1,0 +1,7 @@
+[Unit]
+Description=Mint + rewire the HOST's standing GitHub App installation token (<=1h)
+# No-op (rc 0) when no host App is provisioned — safe to keep enabled unconditionally.
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/host-gh-refresh.sh
