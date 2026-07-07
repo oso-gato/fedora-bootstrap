@@ -179,10 +179,20 @@ As root on a fresh Fedora Cloud instance (take a Hostinger snapshot first — `d
 
 ```sh
 dnf -y upgrade --refresh
-dnf -y install git
-git clone https://github.com/oso-gato/fedora-bootstrap /opt/fedora-bootstrap
-/opt/fedora-bootstrap/day0.sh        # interactive Day-0 wizard — keep this the LAST line
+dnf -y install git util-linux
+git clone https://github.com/oso-gato/fedora-bootstrap /opt/fedora-bootstrap 2>/dev/null || git -C /opt/fedora-bootstrap pull
+script -qec /opt/fedora-bootstrap/day0.sh /dev/null        # interactive Day-0 wizard — keep this the LAST line
 ```
+
+The block is **channel-proof and re-run-safe**: `util-linux` supplies `script(1)` (the minimal Cloud
+image ships only `util-linux-core`, which lacks it), whose pseudo-terminal makes the wizard work even
+in a **pty-less browser console** (Hostinger's runs commands with no `/dev/tty` — verified live; a
+plain `ssh root@<host>` login doesn't need the wrapper but is unharmed by it). The clone falls back to
+a `pull` when `/opt/fedora-bootstrap` already exists (re-run after a failure or on a restored
+snapshot). `day0.sh` itself refuses loudly up front if it still can't find a terminal, naming these
+exact fixes. Caveat: browser consoles can mangle long pastes — the two GitHub App PEM pastes are the
+fragile part; if a paste garbles, the mint fails loudly and you can just re-run. Real ssh is the more
+reliable channel for Day 0.
 
 `day0.sh` is the interactive Day-0 wizard (mirrors the workload `spin-up.sh`): it **ASKS for a Tailscale auth key** (`tskey-…`; press **Enter** to leave it blank → **browser web-login**, a `login.tailscale.com` link prints — open it and approve), then runs `setup.sh`, then **prompts for core's password** (admin/sudo + Cockpit — never stored in the repo) and, on success, **reboots** into the no-wait SELinux convergence (relabel in permissive → auto-reboot → flips to enforcing **live**: **2 reboots, no waiting**). Run it as the **last** line so its prompt has nothing buffered behind it.
 
