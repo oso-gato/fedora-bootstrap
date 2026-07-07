@@ -44,7 +44,12 @@ fi
 # --- the one Day-0 question (read from the terminal, not stdin) ---------------
 # Blank = the browser web-login fallback (a login.tailscale.com URL prints during setup).
 if [ -z "$TS_AUTHKEY" ]; then
-    printf '>> Tailscale auth key for an UNATTENDED join (tskey-…; blank = browser web-login): ' >/dev/tty
+    {
+        printf '── Tailscale key for THE HOST '\''%s'\'' (fedora-bootstrap) ────────────────────────\n' "${BOOTSTRAP_HOSTNAME:-erebus}"
+        printf '   Joins the tailnet as node '\''%s'\'' (the VPS itself). The DEV BOX ('\''nox'\'') joins\n' "${BOOTSTRAP_HOSTNAME:-erebus}"
+        printf '   separately, asked later in its own spin-up section.\n'
+        printf '>> Tailscale auth key for HOST '\''%s'\'' (tskey-…; blank = browser web-login): ' "${BOOTSTRAP_HOSTNAME:-erebus}"
+    } >/dev/tty
     IFS= read -r TS_AUTHKEY </dev/tty || TS_AUTHKEY=""
 fi
 export TS_AUTHKEY
