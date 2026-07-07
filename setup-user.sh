@@ -368,13 +368,16 @@ else
         GH_APP_HOST_ID=""; GH_APP_HOST_INST=""
         prompt_github_app gh_app_host_key GH_APP_HOST_ID GH_APP_HOST_INST \
             || { echo "FATAL: HOST GitHub App provisioning failed" >&2; exit 1; }
-        umask 077
+        _um="$(umask)"; umask 077
         printf 'GH_APP_ID=%s\nGH_APP_INSTALLATION_ID=%s\n' "$GH_APP_HOST_ID" "$GH_APP_HOST_INST" \
             > "$HOME/.config/gh-app-host.env"   # PUBLIC integers only; the PEM stays in the secret
-        umask 022
+        umask "$_um"
         "$HOME/.local/bin/host-gh-refresh.sh" \
             || { echo "FATAL: initial HOST token mint failed (bad App id/key?)" >&2; exit 1; }
         echo "[host-gh] HOST App credential provisioned + first token minted (App $GH_APP_HOST_ID)."
+        echo "[host-gh] NOTE: this user's github.com identity (gh hosts.yml + git store helper) is"
+        echo "          now the App token and is REWRITTEN hourly — a manual 'gh auth login' on the"
+        echo "          host will be overwritten; the host acts as the App by design."
     else
         echo "[host-gh] NO standing HOST App credential — the live-gate's gh calls rely on a manual" >&2
         echo "          'gh auth login' until you provision one: re-run setup, or as $USER run:" >&2
