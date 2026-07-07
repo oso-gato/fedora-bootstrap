@@ -541,7 +541,12 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     echo ">> ${_c}: asking its setup questions (delegated to its own spin-up.sh) ..."
     _collected="$(cd "$HOME/$_c" && COLLECT_ONLY=1 ./spin-up.sh)" \
         || { echo "FATAL: $_c spin-up.sh collect failed" >&2; exit 1; }
-    _save_ts="${TS_AUTHKEY:-}"; eval "$_collected"; TS_AUTHKEY="$_save_ts"
+    # The eval sets the WORKLOAD's answers (incl. ITS TS_AUTHKEY); the host's own TS_AUTHKEY
+    # is saved/restored around it — but the workload's key must be CAPTURED first, or it is
+    # silently DROPPED (verified live: the operator pasted nox's key and the box still fell
+    # back to web-login — the Quadlet path had no channel for it at all). (b4) ferries it.
+    _save_ts="${TS_AUTHKEY:-}"; eval "$_collected"
+    _wl_ts="${TS_AUTHKEY:-}"; TS_AUTHKEY="$_save_ts"
     if [ -z "${GH_APP_SECRET:-}" ]; then
         echo "  -> ${_c}: NO standing GitHub App credential provisioned (declined or skipped)." >&2
         echo "     The autonomous loop will stall on auth until one exists: run" >&2
@@ -582,6 +587,24 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
         sed -i "s|^HostName=.*|HostName=${BOX_HOSTNAME}|" "$HOME/.config/containers/systemd/$_c.container"
         echo "  -> ${_c}: container/tailnet hostname stamped: ${BOX_HOSTNAME}"
     fi
+
+    # (b4) Ferry the WORKLOAD's TS_AUTHKEY into its Quadlet deploy: the key goes into a
+    # podman secret (never a file/env-file) and the shipped commented `Secret=` line is
+    # activated — the entrypoint sees $TS_AUTHKEY (type=env) and joins unattended. No key
+    # collected => no-op (the box's web-login fallback prints its URL in `podman logs`).
+    if [ -n "${_wl_ts:-}" ]; then
+        printf '%s' "$_wl_ts" | podman secret create --replace "${_c}-ts-authkey" - >/dev/null
+        sed -i "s|^# *Secret=${_c}-ts-authkey,type=env,target=TS_AUTHKEY.*|Secret=${_c}-ts-authkey,type=env,target=TS_AUTHKEY|" \
+            "$HOME/.config/containers/systemd/$_c.container"
+        if grep -q "^Secret=${_c}-ts-authkey,type=env,target=TS_AUTHKEY" "$HOME/.config/containers/systemd/$_c.container"; then
+            echo "  -> ${_c}: unattended tailnet join wired (podman secret '${_c}-ts-authkey')."
+        else
+            echo "  -> ${_c}: WARN — its Quadlet ships no '# Secret=${_c}-ts-authkey' line to activate;" >&2
+            echo "     secret created but NOT wired; the box will use the web-login fallback" >&2
+            echo "     (URL in 'podman logs ${_c}') until the workload repo adds the line." >&2
+        fi
+    fi
+    unset _wl_ts
 
     # (c) Enable the refresh + retry timers. The Quadlet-generated <name>.service
     # is enabled separately by the operator (or by the per-version upgrade
