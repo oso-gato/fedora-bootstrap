@@ -4,10 +4,14 @@ Description=Poll workload repos for `live-validate` PRs to live-gate
 [Timer]
 # Poll for `live-validate` PRs (host is NAT/tailnet-only — no inbound webhook is possible). The
 # build+gate (~90s+) dominates the turn, and the watcher self-serializes (flock) + dedups by `.done`,
-# so cadence is purely a PICKUP-LATENCY knob: a plain 60s poll is imperceptible in a human-in-the-loop
-# review and lets systemd batch the timer normally (no forced sub-minute AccuracySec).
-OnBootSec=60s
-OnUnitActiveSec=60s
+# so cadence is purely a PICKUP-LATENCY knob: 10s keeps the autonomous dev↔host round-trip snappy
+# (the dev-side poller sweeps at the same 10s). AccuracySec=1s is REQUIRED for a sub-minute cadence —
+# systemd's default 1min accuracy window would coalesce a bare 10s timer back to ~60s firings.
+# Discovery is one org-wide gh label query per tick (~360/h, well inside the 5k/h token budget;
+# the search API allows 30/min). A failed query is a skipped tick — the next one retries.
+OnBootSec=10s
+OnUnitActiveSec=10s
+AccuracySec=1s
 Persistent=true
 
 [Install]
