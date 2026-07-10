@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.56 (live-gate: verdict header carries the FULL head sha — dev-side consumers bind on 40 hex; 7-hex prefixes were grindable)
+# Version: 1.2.57 (host agent: consume `host-task` GitHub-issue tickets → perform host ops → post outcomes — the host half of the autonomous apparatus, fedora-dev#131 R5)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
