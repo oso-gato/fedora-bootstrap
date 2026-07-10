@@ -103,7 +103,8 @@ respond(){
   gh issue edit  "$issue" --repo "$slug" --add-label "host-$st" >/dev/null 2>&1 \
      || log "$slug#$issue: add-label host-$st failed (non-fatal; label is decorative)"
   if gh issue comment "$issue" --repo "$slug" --body "$body" >/dev/null; then                 # stderr → journald on failure
-    : > "$STATE/${repo}-${issue}.done"; rm -f "$STATE/${repo}-${issue}.acted"
+    : > "$STATE/${repo}-${issue}.done"    # .acted is left as a PERMANENT tombstone — .done alone gates the
+                                          # discovery skip, so removing .acted would only add a non-atomic re-act hole.
     log "$slug#$issue -> $verb ($detail) — delivered + closed"
   else
     log "$slug#$issue -> $verb: issue closed but outcome COMMENT failed — no marker, will re-deliver next tick"
@@ -116,10 +117,10 @@ respond(){
 do_redeploy(){ # <repo> <issue> <workload>
   local repo="$1" issue="$2" wl="$3" acted="$STATE/${1}-${2}.acted" st detail
   is_known_workload "$wl" || { respond "$repo" "$issue" failed "unknown workload '$wl' (allowed: $KNOWN_WORKLOADS)"; return; }
-  if [ -e "$acted" ]; then
+  if [ -e "$acted" ] && IFS='|' read -r st detail < "$acted" && [ -n "$st" ]; then
     # the host op already ran ONCE for this ticket (a prior tick) — re-DELIVER the recorded outcome
     # only; NEVER re-run the mutating action (that is the health-flap / re-pull defect this guards).
-    IFS='|' read -r st detail < "$acted"
+    # A corrupt/empty marker fails the [ -n "$st" ] guard and falls to a safe (digest-idempotent) re-act.
     log "$ORG/$repo#$issue: redeploy already performed; re-delivering recorded outcome ($st)"
   else
     local err sc scmain
