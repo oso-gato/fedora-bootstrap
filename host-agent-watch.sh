@@ -29,6 +29,11 @@
 # RUNS INSIDE claudebox (needs gh/git + the CONTAINER_HOST bridge to drive the host engine), driven
 # by host-agent-watch.timer (systemd --user). Stands down during a box rebuild (ExecCondition).
 set -uo pipefail
+# noglob: the ticket's line-1 instruction ($op) is attacker-influenced and is word-split UNQUOTED in
+# dispatch() (intended — to separate verb from args). Without this, a `host-op: redeploy *` would ALSO
+# pathname-expand against the CWD (leaking ~/.local/bin filenames into a public issue comment, and
+# smearing the arg). The script does no intentional globbing anywhere, so disable it wholesale.
+set -f
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 STATE="$HOME/.local/state/host-agent"; mkdir -p "$STATE"
@@ -62,6 +67,9 @@ if [ "${1:-}" = "--selftest" ]; then
   ck "backtick ex"  '`host-op: redeploy fedora-dev`'                 ''
   is_known_workload fedora-dev   && echo "ok: known fedora-dev"    || { echo "FAIL known"; f=1; }
   is_known_workload evil-repo    && { echo "FAIL: evil-repo accepted"; f=1; } || echo "ok: unknown workload rejected"
+  is_known_workload '*'          && { echo "FAIL: glob '*' accepted as workload"; f=1; } || echo "ok: glob workload rejected"
+  # noglob proof: with set -f, an attacker '*' in the arg position word-splits but does NOT expand to filenames.
+  set -- $(printf 'redeploy *'); [ "${2:-}" = '*' ] && echo "ok: noglob keeps '*' literal" || { echo "FAIL: '*' expanded to '${2:-}'"; f=1; }
   [ "$f" = 0 ] && echo "ALL HOST-AGENT SELFTESTS PASS" || echo "HOST-AGENT SELFTESTS FAILED"; exit "$f"
 fi
 
