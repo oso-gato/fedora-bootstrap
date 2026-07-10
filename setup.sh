@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.55 (live-gate: 10s pickup cadence — OnBootSec/OnUnitActiveSec=10s + AccuracySec=1s, matching the dev-side poller; was 60s)
+# Version: 1.2.56 (live-gate: verdict header carries the FULL head sha — dev-side consumers bind on 40 hex; 7-hex prefixes were grindable)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
