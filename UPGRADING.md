@@ -47,11 +47,12 @@ git pull --ff-only origin main
 | v1.2.47 | Less-is-more doc reduction: gospel DRY'd to single-source pointers; dangling pointers fixed | — |
 | v1.2.48 | Live-gate fence de-theater: inert `--cap-add=` denylist arm dropped | — |
 | v1.2.49 | SELinux convergence goes no-wait: fire-once flip, 2 reboots, no soak | **full procedure below** |
-| v1.2.50 | Cache/UI knobs simplified (blunt dnf-cache cap, 60s live-gate poll, tmux toggle dropped) | — |
+| v1.2.50 | Cache/UI knobs simplified (blunt dnf-cache cap, 60s live-gate poll, tmux toggle dropped) | — *(60s poll superseded by v1.2.55 — 10s)* |
 | v1.2.51 | fastfetch installed on the host + login banner for every user | — |
 | v1.2.52 | Release-doc de-ceremony: changelog-table convention; this file collapsed from 51 subsections | — |
 | v1.2.53 | live-gate fix: dnf bind cache mounted `:z` — the v1.2.49 SELinux-enforcing convergence was RED-failing **every** gate build org-wide (EACCES in `/var/cache/libdnf5`; false negatives on fedora-dev#82/#107, fedora-desktop#101). `:z` also relabels the existing cache on first mount, so no manual heal. Re-gate affected PRs by pushing a new head SHA (per-SHA dedup) | — |
 | v1.2.54 | live-gate: preset fences now NAME the podman default-cap closure (CHOWN/DAC_OVERRIDE/FOWNER/FSETID/KILL/NET_BIND_SERVICE/SETFCAP/SETGID/SETPCAP/SETUID/SYS_CHROOT) — the launch floor is `--cap-drop=ALL`, so the old 2-cap fences under-capped candidates vs their own run-contract and PID-1 died at first boot (`healthy FAIL(none)`, proven A/B in-box: <1s death → alive). Gate also drops the evidence-destroying `--rm` (EXIT trap already reaps) and posts candidate state + boot-log tail into the verdict on health-FAIL | — |
+| v1.2.55 | live-gate pickup cadence 60s → 10s (`OnBootSec`/`OnUnitActiveSec=10s` **+ `AccuracySec=1s`** — without the accuracy override systemd's default 1-min window coalesces a sub-minute timer back to ~60s). Operator-requested loop latency cut, paired with the dev-side poller's matching 10s sweep (fedora-dev). Work is still bounded by flock + per-SHA `.done` dedup; ~360 label queries/h stays well inside API budgets | — |
 
 ## Retained full procedures
 

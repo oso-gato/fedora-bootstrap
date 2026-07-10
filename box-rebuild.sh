@@ -22,7 +22,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 rm -f "$HOME/.local/state/claudebox/rebuild.pending" 2>/dev/null || true
 
 # STAND DOWN the live-gate watcher for the WHOLE rebuild. THIS is the fix for the rebuild-only
-# "builds then fails": live-gate-watch.timer fires `distrobox enter claudebox` every 15s, and during
+# "builds then fails": live-gate-watch.timer fires `distrobox enter claudebox` every 10s, and during
 # a rebuild that races setup-user.sh's own first `distrobox enter claudebox -- true` — the enter that
 # runs distrobox-init (the dnf install). Two `distrobox enter` then drive distrobox-init concurrently
 # in the same fresh box: they collide on the pre-init hooks (init errors) OR deadlock on distrobox's
