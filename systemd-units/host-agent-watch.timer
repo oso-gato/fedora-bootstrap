@@ -1,0 +1,16 @@
+[Unit]
+Description=Poll for `host-task` tickets (dev→host instruction bus) to execute
+
+[Timer]
+# Poll for `host-task` issues (host is NAT/tailnet-only — no inbound webhook). Self-serialising
+# (flock) + per-(repo,issue) `.done` dedup, so cadence is a pickup-latency knob: 10s matches the
+# dev-side poller + live-gate watcher for a snappy dev↔host round-trip. AccuracySec=1s is REQUIRED
+# for a sub-minute cadence (systemd's default 1min window would coalesce a 10s timer back to ~60s).
+# One org-wide gh issues query per tick (~360/h, well inside the host App's budget).
+OnBootSec=15s
+OnUnitActiveSec=10s
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

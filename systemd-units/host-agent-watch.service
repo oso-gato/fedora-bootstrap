@@ -1,0 +1,18 @@
+[Unit]
+Description=Host agent — consume `host-task` GitHub-issue tickets, perform host ops, post outcomes (apparatus R5)
+Documentation=https://github.com/oso-gato/fedora-dev/issues/131
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Never enter the box during a claudebox rebuild (same race the live-gate watcher guards): a second
+# `distrobox enter` mid-rebuild collides on distrobox-init. ExecCondition skips this firing cleanly
+# (unit NOT marked failed) when a rebuild is active; box-rebuild.sh also stops this timer.
+ExecCondition=/usr/bin/bash -c '! systemctl --user is-active --quiet claudebox-rebuild-run.service'
+# Runs INSIDE claudebox: needs gh (tickets) + the CONTAINER_HOST bridge; `bash -lc` loads the box
+# login env; gh auth is the shared home. The host operations it performs (workload-refresh@) act on
+# the HOST via systemctl --user, which the box shares.
+ExecStart=/usr/bin/distrobox enter claudebox -- bash -lc 'exec "$HOME/.local/bin/host-agent-watch.sh"'
+# Bounded so a slow host op can't wedge the timer forever.
+TimeoutStartSec=1800

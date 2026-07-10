@@ -337,6 +337,11 @@ install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.timer"    "$HOME/.c
 # Live-gate watcher (poll `live-validate` PRs + build/gate/verdict them on the host)
 install -m 0644 "$HERE/systemd-units/live-gate-watch.service"          "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE/systemd-units/live-gate-watch.timer"            "$HOME/.config/systemd/user/"
+# Host agent (consume `host-task` GitHub-issue tickets → perform host ops → post outcomes) — the host
+# half of the autonomous apparatus (fedora-dev#131 R5); the dev box instructs the host through this.
+install -m 0755 "$HERE/host-agent-watch.sh"                            "$HOME/.local/bin/host-agent-watch.sh"
+install -m 0644 "$HERE/systemd-units/host-agent-watch.service"         "$HOME/.config/systemd/user/"
+install -m 0644 "$HERE/systemd-units/host-agent-watch.timer"           "$HOME/.config/systemd/user/"
 
 # ---- HOST standing GitHub App credential (the live-gate's OWN identity) ----
 # The HOST runs `gh` itself — live-gate-watch discovers PRs and POSTS the GREEN/RED verdicts —
@@ -622,6 +627,8 @@ done
 systemctl --user daemon-reload
 # Enable the live-gate watcher (polls `live-validate`-labelled PRs and builds/gates them on the host).
 systemctl --user enable --now live-gate-watch.timer
+# Enable the host agent (polls `host-task` tickets and performs host ops — apparatus R5).
+systemctl --user enable --now host-agent-watch.timer
 
 PHASE "user 5/5 verify"
 bash "$HERE/verify.sh"
