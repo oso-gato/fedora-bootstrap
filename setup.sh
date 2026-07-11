@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.60 (BOX-STABILITY: claudebox-up.service owns the box so its conmon lands in an INDEPENDENT scope — watcher-tick cgroup teardowns no longer SIGTERM the box [incident: 41 deaths in an afternoon]; both watchers Wants= the owner + carry an env -u INVOCATION_ID belt; host-agent TimeoutStartSec 1800→300)
+# Version: 1.2.61 (BOX STARTUP DEFAULTS: the claude wrapper now launches `--model default --permission-mode auto --effort ultracode` — recommended model (not the opus version pin), auto mode (not manual), ultracode; identical to fedora-dev. A fleet build requirement so every box starts ready at full capability with no per-session toggling.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
