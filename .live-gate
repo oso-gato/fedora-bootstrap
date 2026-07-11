@@ -1,0 +1,16 @@
+# .live-gate — fedora-bootstrap SHELL live-gate contract (P0 uniform loop). PARSED, never sourced.
+#
+# fedora-bootstrap ships no product image, so before this it carried no `.live-gate`/Containerfile and the
+# host live-gate STRUCTURAL GUARD posted a neutral SKIPPED for its PRs — the verdict hole that forced the
+# manual click-merges. This contract makes the host gate this repo like any workload, with ONE difference:
+# the target 'shellgate' builds Containerfile.livegate, whose RUN steps ARE the gate (shellcheck + bash -n
+# on every shipped *.sh, plus every --selftest and the mock host-agent dry-run — all sandboxed in the
+# DISPOSABLE build). The BUILD decides the verdict: a failing check fails the build = RED; a clean build
+# = GREEN. The health check below is trivial (`true`) and there is no PROBE — this repo is the host
+# orchestrator, not a workload, so there is no service to serve; the build already decided the verdict.
+# Same host harness (live-gate-run.sh → build-candidate.sh → validate-candidate.sh), reused verbatim, zero
+# new host machinery. FENCE unset => the hardest default (--network=none --cap-drop=ALL); the candidate
+# only sleeps, so it needs no egress or caps.
+LIVE_GATE_TARGETS="shellgate"
+CFILE_shellgate="Containerfile.livegate"
+HEALTH_shellgate='true'

@@ -1,0 +1,31 @@
+# Containerfile.livegate — fedora-bootstrap SHELL live-gate (P0 uniform loop). NOT a deployable image.
+#
+# fedora-bootstrap is a NON-IMAGE host-orchestrator repo (shell scripts, no product Containerfile), so the
+# host live-gate used to SKIP its PRs (the SKIPPED-verdict hole behind the manual click-merges). This file
+# closes that hole with ZERO new host machinery: the EXISTING host live-gate builds this DISPOSABLY and its
+# RUN steps ARE the gate — shellcheck + `bash -n` on every shipped *.sh, plus every `--selftest` and the
+# mock host-agent dry-run. A failing check fails its RUN = build RED; all-pass = build GREEN. The untrusted
+# PR shell executes INSIDE this throwaway build (sandboxed on the disposable engine), NEVER on the host —
+# the same disposable build+verdict harness that gates the image repos, reused verbatim.
+FROM registry.fedoraproject.org/fedora:44
+RUN dnf install -y --setopt=install_weak_deps=False ShellCheck && dnf clean all
+COPY . /src
+WORKDIR /src
+
+# STATIC — `bash -n` + shellcheck (errors only, so it does not flap on style) on every shipped *.sh.
+RUN set -u; rc=0; \
+    for f in $(find . -name '*.sh' -not -path './.git/*' | sort); do \
+      bash -n "$f" || { echo "FAIL bash -n: $f"; rc=1; }; \
+      shellcheck --severity=error --external-sources "$f" || { echo "FAIL shellcheck: $f"; rc=1; }; \
+    done; [ "$rc" = 0 ] || { echo "== SHELL LINT: RED =="; exit 1; }; echo "== SHELL LINT: GREEN =="
+
+# BEHAVIOURAL — every script exposing a --selftest handler (pure, podman-free).
+RUN set -eu; for s in *.sh; do if grep -q -- '--selftest' "$s"; then echo "== selftest: $s =="; bash "$s" --selftest; fi; done
+
+# BEHAVIOURAL — every validation/*.test.sh, in podman-free mode (FENCE_CHECK_ONLY) so it runs in the build.
+RUN set -eu; for t in validation/*.test.sh; do if [ -f "$t" ]; then echo "== test: $t =="; FENCE_CHECK_ONLY=1 bash "$t"; fi; done
+
+# Stay up so the host live-gate's trivial health check passes — this is a GATE, not a workload; the
+# verdict was already decided by the RUN steps above (build failed = RED, build succeeded = GREEN). 300s
+# comfortably outlasts the gate's healthy-wait budget (default 18×6=108s); the gate tears it down after.
+CMD ["sleep", "300"]
