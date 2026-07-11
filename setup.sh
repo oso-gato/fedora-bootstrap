@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.58 (host live-gate gates NON-image repos: fedora-bootstrap ships Containerfile.livegate + .live-gate → the host builds a disposable shell-check candidate → GREEN/RED verdict, closing the SKIPPED-verdict hole; zero new host machinery)
+# Version: 1.2.59 (UNSHACKLE: retire the gate-push PreToolUse hook + auto-classifier in the host claudebox — managed-settings.json goes defaultMode=default with a `gh pr merge` deny; fleet parity with fedora-dev #137)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

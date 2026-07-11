@@ -10,7 +10,7 @@ ck "host: no shim symlinks in ~/.local/bin" "test ! -e ~/.local/bin/podman && te
 ck "box: exists"                           "distrobox list | grep -q claudebox"
 ck "box: claude runs"                      "distrobox enter claudebox -- /usr/bin/claude --version"
 ck "box: policy present"                   "distrobox enter claudebox -- sh -c 'test -f /etc/claude-code/CLAUDE.md && test -f /etc/claude-code/managed-settings.json'"
-ck "box: promotion-gate hook present"      "distrobox enter claudebox -- sh -c 'test -x /etc/claude-code/hooks/gate-push.sh'"
+ck "box: retired gate hook ABSENT"         "distrobox enter claudebox -- sh -c 'test ! -e /etc/claude-code/hooks/gate-push.sh'"
 ck "box: podman reaches HOST engine"       "distrobox enter claudebox -- sh -lc 'podman info --format {{.Host.RemoteSocket.Exists}} | grep -q true'"
 # Tolerate the browser-auth path: setup-host.sh joins the tailnet unattended (TS_AUTHKEY) OR leaves
 # the node in NeedsLogin until you click the consent link (it absorbs a missed window with `|| true`
