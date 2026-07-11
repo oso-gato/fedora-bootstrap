@@ -116,16 +116,23 @@ mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.local/state/cla
 # denied"); a normal SSH login already has the right value, so it is a no-op there. It holds a SHARED
 # session lock (so the DAILY refresh can tell a session is live and defer), and on exit it (a) follows
 # a Claude-triggered rebuild, or (b) runs a daily refresh that was deferred while you worked — your
-# "quit -> it rebuilds". It also injects --model opus --settings {"ultracode":true} so every session
-# STARTS in ultracode (xhigh effort + workflow-by-default). ultracode REQUIRES an xhigh-capable model:
-# claude-code 2.1.195 changed the DEFAULT model to Sonnet 4.6, which has no ultracode mode, so without
-# the --model pin a rebuild to that client silently downgrades the model and ultracode vanishes even
-# though --settings is unchanged; the `opus` alias (always the latest Opus) restores the pre-downgrade
-# default and is immune to future client default-model changes (still /model-overridable mid-session).
-# Both ultracode AND the model default are SESSION-SCOPED / IGNORED in settings files, so the wrapper
-# is the only place they can be made a default (effortLevel:xhigh lives in policy/managed-settings.json
-# as the persistent floor for any non-wrapper path). Emitted via a QUOTED heredoc so
-# $(id -u)/"$@"/$HOME/$state AND the literal {"ultracode":true} stay LITERAL.
+# "quit -> it rebuilds". BOX STARTUP DEFAULTS (Arthur, 2026-07-11 — a fleet build requirement, identical
+# to fedora-dev's bin/claude): the wrapper launches claude with three flags so every session STARTS ready
+# at full capability with NO per-session toggling, all session-scoped (survive rebuilds without depending
+# on accumulated home state) and all overridable mid-session:
+#   --model default        the RECOMMENDED model, NOT a version pin — the `default` alias resolves to the
+#                          provider's recommended model and auto-follows new releases (Opus 4.8 today,
+#                          Sonnet 5 on lower tiers; every recommended tier is xhigh/ultracode-capable). This
+#                          un-pins the model (was `--model opus`, which Arthur does not want) AND avoids the
+#                          2.1.195 regression where dropping --model let the client fall to a non-ultracode
+#                          Sonnet default.
+#   --permission-mode auto AUTO mode (not manual) — a launch flag so a FRESH box reliably starts autonomous
+#                          (a bare box came up "manual"). Compatible with the unshackle: it does not re-add
+#                          the removed gate-push prompts.
+#   --effort ultracode     the canonical ultracode flag (xhigh effort + dynamic workflows); replaces the old
+#                          `--settings '{"ultracode":true}'` injection. Ultracode is session-only by design.
+# effortLevel:xhigh stays in policy/managed-settings.json as the persistent floor for any non-wrapper path.
+# Emitted via a QUOTED heredoc so $(id -u)/"$@"/$HOME/$state stay LITERAL.
 cat > "$HOME/.local/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
@@ -150,7 +157,7 @@ fi
 # before the exec and the ptsname race does not arise there — it is intentionally not retried).
 attempt=0
 while :; do
-    flock -s "$state/session.lock" distrobox enter claudebox -- bash -lc 'exec /usr/bin/claude --model opus --settings "{\"ultracode\":true}" "$@"' bash "$@"
+    flock -s "$state/session.lock" distrobox enter claudebox -- bash -lc 'exec /usr/bin/claude --model default --permission-mode auto --effort ultracode "$@"' bash "$@"
     rc=$?
     { [ "$rc" -eq 125 ] || [ "$rc" -eq 126 ]; } && [ "$attempt" -lt 6 ] || break
     attempt=$((attempt + 1))
