@@ -127,8 +127,11 @@ mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.local/state/cla
 #                          2.1.195 regression where dropping --model let the client fall to a non-ultracode
 #                          Sonnet default.
 #   --permission-mode auto AUTO mode (not manual) — a launch flag so a FRESH box reliably starts autonomous
-#                          (a bare box came up "manual"). Compatible with the unshackle: it does not re-add
-#                          the removed gate-push prompts.
+#                          (a bare box came up "manual"). RECONCILIATION with the v1.2.59 unshackle: that
+#                          release set managed-settings `defaultMode: default` as the NO-FLAG floor; this
+#                          launch flag is the DELIBERATE per-box override back to auto for the operator's
+#                          session — an explicit choice, not a silent regression — and it does NOT re-add
+#                          the removed gate-push hook/prompts.
 #   --effort ultracode     the canonical ultracode flag (xhigh effort + dynamic workflows); replaces the old
 #                          `--settings '{"ultracode":true}'` injection. Ultracode is session-only by design.
 # effortLevel:xhigh stays in policy/managed-settings.json as the persistent floor for any non-wrapper path.
