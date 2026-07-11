@@ -32,9 +32,13 @@ rm -f "$HOME/.local/state/claudebox/rebuild.pending" 2>/dev/null || true
 # already firing throughout. Stopping the timer AND any in-flight service instance removes the race
 # window. setup-user.sh re-enables the timer at its end (user 4/5); the trap is the backstop so a
 # FAILED rebuild still re-arms the watcher (never leave PR gating dead).
-echo ">> claudebox rebuild: standing down the live-gate watcher + host agent for the rebuild window …"
-systemctl --user stop live-gate-watch.timer live-gate-watch.service host-agent-watch.timer host-agent-watch.service 2>/dev/null || true
-trap 'systemctl --user start live-gate-watch.timer host-agent-watch.timer 2>/dev/null || true' EXIT
+echo ">> claudebox rebuild: standing down the live-gate watcher + host agent + box owner for the rebuild window …"
+# Also stop claudebox-up.service (the incident-2026-07-11 box owner): the rebuild does `distrobox rm -f
+# claudebox`, so a concurrent `podman start claudebox` would just error on a removed box. setup-user.sh
+# re-enables + starts it against the FRESH box at its end; the EXIT trap re-arms it (+ the watchers) so a
+# FAILED rebuild still leaves the box owned and PR gating alive.
+systemctl --user stop live-gate-watch.timer live-gate-watch.service host-agent-watch.timer host-agent-watch.service claudebox-up.service 2>/dev/null || true
+trap 'systemctl --user start claudebox-up.service live-gate-watch.timer host-agent-watch.timer 2>/dev/null || true' EXIT
 
 echo ">> claudebox rebuild: removing the existing box (force) …"
 distrobox rm -f claudebox >/dev/null 2>&1 || true

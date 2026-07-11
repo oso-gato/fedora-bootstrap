@@ -1,8 +1,13 @@
 [Unit]
 Description=Host agent — consume `host-task` GitHub-issue tickets, perform host ops, post outcomes (apparatus R5)
 Documentation=https://github.com/oso-gato/fedora-dev/issues/131
-After=network-online.target
+After=network-online.target claudebox-up.service
 Wants=network-online.target
+# OWN THE BOX; never auto-start it from this tick (incident 2026-07-11). claudebox-up starts the box so
+# its conmon lands in an INDEPENDENT scope; pulling it in here ensures the box is up (reviving it if it
+# died) BEFORE this watcher enters, so the enter below only EXECS INTO a running box. `Wants=` (weak) so
+# a rebuild does not cascade.
+Wants=claudebox-up.service
 
 [Service]
 Type=oneshot
@@ -13,6 +18,10 @@ ExecCondition=/usr/bin/bash -c '! systemctl --user is-active --quiet claudebox-r
 # Runs INSIDE claudebox: needs gh (tickets) + the CONTAINER_HOST bridge; `bash -lc` loads the box
 # login env; gh auth is the shared home. The host operations it performs (workload-refresh@) act on
 # the HOST via systemctl --user, which the box shares.
-ExecStart=/usr/bin/distrobox enter claudebox -- bash -lc 'exec "$HOME/.local/bin/host-agent-watch.sh"'
-# Bounded so a slow host op can't wedge the timer forever.
-TimeoutStartSec=1800
+# `env -u INVOCATION_ID` BELT (see live-gate-watch.service): keep conmon out of this oneshot's cgroup if
+# an enter ever races the box down and auto-starts it.
+ExecStart=/usr/bin/env -u INVOCATION_ID /usr/bin/distrobox enter claudebox -- bash -lc 'exec "$HOME/.local/bin/host-agent-watch.sh"'
+# FIX 3 (incident 2026-07-11): 300s, NOT 1800. A host-agent tick takes SECONDS (read a ticket, dispatch,
+# comment); 1800 was copied from live-gate's real candidate-BUILD budget and turned any hang into a
+# 30-minute "activating" wedge whose timeout-kill took the box's conmon down with it. 300s fails fast.
+TimeoutStartSec=300

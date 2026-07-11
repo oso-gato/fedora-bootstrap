@@ -21,6 +21,10 @@ ck "tailnet: host joined (or pending browser-auth)" "tailscale status --json 2>/
 ck "box-update: ask-Claude watcher enabled"        "systemctl --user is-enabled claudebox-rebuild.path"
 ck "box-update: daily refresh timer enabled"       "systemctl --user is-enabled claudebox-rebuild-daily.timer"
 ck "box-update: claudebox-rebuild command present"  "test -x ~/.local/bin/claudebox-rebuild"
+# box owner (incident 2026-07-11): claudebox-up.service holds the box's conmon in an independent scope so
+# a watcher-tick teardown can't kill it. Assert it is enabled (so it starts on boot + is Wants='d by both
+# watchers). Its being "active (exited)"/inactive is normal for a oneshot — enablement is what matters.
+ck "box owner: claudebox-up.service enabled"        "systemctl --user is-enabled claudebox-up.service"
 # host self-update — dnf-automatic on the monthly cadence
 ck "host: dnf-automatic timer enabled"             "systemctl is-enabled dnf5-automatic.timer"
 # v1.2.39: fail2ban removed fleet-wide — the public ssh door is key-only (no password to brute-force),

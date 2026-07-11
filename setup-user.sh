@@ -328,6 +328,11 @@ install -m 0644 "$HERE/systemd-units/workload-refresh@.service"        "$HOME/.c
 install -m 0644 "$HERE/systemd-units/workload-refresh@.timer"          "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.service"  "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.timer"    "$HOME/.config/systemd/user/"
+# claudebox OWNER (incident 2026-07-11): starts the box so its conmon lands in an INDEPENDENT scope,
+# not in a watcher-tick's oneshot cgroup (which the tick's teardown/timeout would SIGTERM, killing the
+# box — 41 deaths in one afternoon). Both watchers Wants= it, so every tick first ensures the box is up
+# and revives it if it died. Enabled + started below, BEFORE the watcher timers.
+install -m 0644 "$HERE/systemd-units/claudebox-up.service"             "$HOME/.config/systemd/user/"
 # Live-gate watcher (poll `live-validate` PRs + build/gate/verdict them on the host)
 install -m 0644 "$HERE/systemd-units/live-gate-watch.service"          "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE/systemd-units/live-gate-watch.timer"            "$HOME/.config/systemd/user/"
@@ -619,6 +624,11 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
 done
 
 systemctl --user daemon-reload
+# Enable + START the claudebox OWNER first: it holds the box's conmon in an independent scope so the
+# watcher ticks below can never kill it (incident 2026-07-11). Idempotent (`podman start` no-ops a
+# running box); `|| true` so a first run where the box is briefly still assembling never fails setup —
+# the watchers' Wants= will bring it up on the next tick regardless.
+systemctl --user enable --now claudebox-up.service || true
 # Enable the live-gate watcher (polls `live-validate`-labelled PRs and builds/gates them on the host).
 systemctl --user enable --now live-gate-watch.timer
 # Enable the host agent (polls `host-task` tickets and performs host ops — apparatus R5).
