@@ -103,18 +103,12 @@ sed -e "/<!--FLEET-CORE-->/r ${_fc}" \
 distrobox enter claudebox -- sudo cp "/run/host${_law}" /etc/claude-code/CLAUDE.md
 rm -f "$_law" "$_fc"
 distrobox enter claudebox -- sudo cp "/run/host$HERE/policy/managed-settings.json" /etc/claude-code/managed-settings.json
-# Stamp the managed PreToolUse hooks. managed-settings.json wires
-# /etc/claude-code/hooks/gate-push.sh as a Bash PreToolUse hook with
-# allowManagedHooksOnly:true — the hook MUST exist there or a missing PreToolUse
-# hook fails OPEN, defeating the promotion gate. FAIL LOUDLY if it didn't land.
-distrobox enter claudebox -- sudo mkdir -p /etc/claude-code/hooks
-distrobox enter claudebox -- sudo cp -a "/run/host$HERE/policy/hooks/." /etc/claude-code/hooks/
-distrobox enter claudebox -- sudo bash -c 'chmod 0755 /etc/claude-code/hooks/*.sh 2>/dev/null || true'
-distrobox enter claudebox -- sudo test -x /etc/claude-code/hooks/gate-push.sh || {
-    echo "FATAL: promotion-gate hook /etc/claude-code/hooks/gate-push.sh missing or not" \
-         "executable after stamp — refusing to leave the genesis box without its gate." >&2
-    exit 1
-}
+# UNSHACKLED (P0, 2026-07-11): the gate-push PreToolUse hook is RETIRED fleet-wide — policy/hooks/
+# no longer exists and managed-settings.json registers no PreToolUse hook. Interactive-merge safety
+# is the require-PR server ruleset + the `Bash(gh pr merge:*)` deny in managed-settings.json; the
+# autonomous merge path is the dev-side poller's two independent gates. Remove any hooks dir a
+# PREVIOUS stamp left so an already-deployed box converges to the hook-free state on rebuild.
+distrobox enter claudebox -- sudo rm -rf /etc/claude-code/hooks
 mkdir -p "$HOME/.local/bin" "$HOME/.config/systemd/user" "$HOME/.local/state/claudebox"
 
 # `claude` entry wrapper. XDG_RUNTIME_DIR is pinned so `su core` works (su keeps the prior user's

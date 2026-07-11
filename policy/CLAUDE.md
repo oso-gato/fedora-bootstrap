@@ -136,7 +136,7 @@ Task mentions any of:
 
 ## OPERATING FACTS
 
-- **Push bare on this PR-only box — a gate trip is a `deny`.** Run `git push origin <branch>` ALONE (no pipe / redirect / chain — `… | tail`, `… 2>&1`, `… && …` makes even a feature-branch push unparseable → DENIED; the Bash tool captures output anyway — get the result in a separate command). A command whose ARGS contain a push/merge verb (a commit message, PR title/body) also matches the scanner → write that text to a FILE (`git commit -F <file>`, `gh pr create --body-file <file>` — never an inline `-m` / `--body` / heredoc carrying the verb).
+- **UNSHACKLED (P0, 2026-07-11): no gate-push hook, no auto-classifier.** Commands run without prompts — compound, piped, or carrying push/merge words in their text (the old "push bare / verb-free titles / `-F` files" discipline is OBSOLETE; it existed only to dodge the removed text-scanning hook). This box stays PR-only: `main` accepts nothing outside a PR (require-PR server ruleset) and `gh pr merge` is a hard managed-settings **deny** (auto-deny, no prompt). A raw-API merge is technically possible under `Bash(*)` (known, accepted residual — see the managed-settings comment) but is FORBIDDEN: merges happen ONLY via the dev-side poller's two independent gates (label a PR `live-validate`; host live-gate + fitness decide).
 
 - `$HOME` = host's real home (no separate volume).
 - `/run/host` = host's root filesystem. Read-only convention.
