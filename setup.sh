@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.59 (UNSHACKLE: retire the gate-push PreToolUse hook + auto-classifier in the host claudebox — managed-settings.json goes defaultMode=default with a `gh pr merge` deny; fleet parity with fedora-dev #137)
+# Version: 1.2.60 (BOX-STABILITY: claudebox-up.service owns the box so its conmon lands in an INDEPENDENT scope — watcher-tick cgroup teardowns no longer SIGTERM the box [incident: 41 deaths in an afternoon]; both watchers Wants= the owner + carry an env -u INVOCATION_ID belt; host-agent TimeoutStartSec 1800→300)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

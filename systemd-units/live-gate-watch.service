@@ -1,8 +1,14 @@
 [Unit]
 Description=Live-gate open `live-validate` PRs — build + gate candidates disposably on the host, post verdicts
 Documentation=https://github.com/oso-gato/fedora-bootstrap
-After=network-online.target
+After=network-online.target claudebox-up.service
 Wants=network-online.target
+# OWN THE BOX; never auto-start it from this tick (incident 2026-07-11, 41 box deaths). claudebox-up
+# starts the box so its conmon lands in an INDEPENDENT scope; pulling it in here means every tick first
+# ensures the box is up (reviving it if it died) BEFORE this watcher enters — and the `distrobox enter`
+# below then only EXECS INTO the already-running box, spawning no conmon in this doomed oneshot cgroup.
+# `Wants=` (weak) so a rebuild — box intentionally absent, this watcher skipped anyway — never cascades.
+Wants=claudebox-up.service
 
 [Service]
 Type=oneshot
@@ -18,6 +24,9 @@ ExecCondition=/usr/bin/bash -c '! systemctl --user is-active --quiet claudebox-r
 # engine via the box's CONTAINER_HOST bridge, so run it INSIDE the claudebox. distrobox lives on the
 # host; `bash -lc` loads the box login env (CONTAINER_HOST + gh/git on PATH); gh auth is the shared
 # home (~/.config/gh). The build/run still land on the HOST engine via CONTAINER_HOST.
-ExecStart=/usr/bin/distrobox enter claudebox -- bash -lc 'exec "$HOME/.local/bin/live-gate-watch.sh"'
+# `env -u INVOCATION_ID` BELT: claudebox-up should already have the box running (so this enter just
+# execs in, no start), but if a tick ever races the box down and this enter DOES auto-start it, unsetting
+# INVOCATION_ID makes podman give conmon its own scope instead of parking it in THIS oneshot's cgroup.
+ExecStart=/usr/bin/env -u INVOCATION_ID /usr/bin/distrobox enter claudebox -- bash -lc 'exec "$HOME/.local/bin/live-gate-watch.sh"'
 # Bounded so a hung/slow build can't wedge the timer forever (one full candidate build + gate).
 TimeoutStartSec=1800
