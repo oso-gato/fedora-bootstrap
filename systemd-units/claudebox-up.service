@@ -26,9 +26,12 @@ Type=oneshot
 # every 10s, and `distrobox enter` STARTS a stopped box — into an independent conmon scope thanks to
 # the same INVOCATION_ID belt (v1.2.60). VERIFIED LIVE on erebus 2026-07-12, not assumed: `podman stop
 # claudebox` → 30s later the box was back ("Up 30 seconds") with NO human action, and it then SURVIVED
-# multiple 10s watcher ticks. That survival is what proves the scope is INDEPENDENT — a conmon parented
-# to a tick's cgroup dies at that tick's teardown (the incident signature: 41 deaths, each within +/-1s
-# of a teardown), so outliving several ticks is only possible outside them.
+# multiple 10s watcher ticks. The scope independence is then confirmed DIRECTLY, not inferred:
+#   $ systemctl --user list-units --type=scope | grep conmon
+#     libpod-conmon-0a71103….scope   loaded active running
+# i.e. the revived container's conmon sits in its OWN libpod-conmon scope under the user manager, and
+# the box stayed up 18 min across ~100 tick teardowns. A conmon parented to a tick's cgroup dies at that
+# tick's teardown (the incident signature: 41 deaths, each within +/-1s of one).
 RemainAfterExit=yes
 ExecCondition=/usr/bin/bash -c '! systemctl --user is-active --quiet claudebox-rebuild-run.service'
 ExecStart=/usr/bin/env -u INVOCATION_ID /usr/bin/podman start claudebox
