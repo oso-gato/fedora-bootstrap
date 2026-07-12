@@ -6,20 +6,35 @@ Wants=podman.socket
 
 [Service]
 Type=oneshot
-# THE FIX (incident 2026-07-11, 41 box deaths): a container started by podman FROM WITHIN a systemd
-# unit does NOT get its own libpod-conmon scope — podman bails on scope creation when INVOCATION_ID is
-# set (quadlet behavior). conmon then lands in the STARTING unit's cgroup, and dies with it (exit 143)
-# the moment that unit's cgroup is torn down. The watcher oneshots (live-gate/host-agent), which used
-# to auto-start the box via `distrobox enter`, were the killers. `env -u INVOCATION_ID` removes that
-# variable for the podman child, so podman DOES create the container's own scope under the user manager
-# — an independent lifetime that no watcher-tick teardown can touch.
+# WHY env -u INVOCATION_ID (incident 2026-07-11, 41 box deaths): a container started by podman FROM
+# WITHIN a systemd unit does NOT get its own libpod-conmon scope — podman bails on scope creation when
+# INVOCATION_ID is set (quadlet behavior). conmon then lands in the STARTING unit's cgroup and dies with
+# it (exit 143) the moment that unit's cgroup is torn down. The 10s watcher oneshots were the killers.
+# Unsetting INVOCATION_ID for the podman child makes podman create the container's OWN scope under the
+# user manager — an independent lifetime no watcher-tick teardown can touch.
+#
+# WHY RemainAfterExit=yes AND NO ExecStop (regression fix, same day — v1.2.60 shipped BOTH mistakes):
+# a Type=oneshot unit WITHOUT RemainAfterExit goes INACTIVE the instant ExecStart returns — and systemd
+# runs ExecStop on that deactivation. So v1.2.60's `ExecStop=podman stop` fired ~immediately after every
+# start: the unit STARTED the box and then STOPPED it, every single watcher tick (~10s). A `claude`
+# session died within 5s. RemainAfterExit=yes keeps the unit "active (exited)" so no deactivation (and
+# thus no stop) ever happens; carrying no ExecStop at all means the box also survives a real unit stop.
+# Do NOT re-add ExecStop, and do NOT drop RemainAfterExit — either one alone re-creates the thrash.
+#
+# RECOVERY of a dead box is NOT this unit's job (RemainAfterExit means it will not re-fire per tick).
+# It is the watchers': live-gate-watch/host-agent-watch run `env -u INVOCATION_ID … distrobox enter`
+# every 10s, and `distrobox enter` STARTS a stopped box — into an independent conmon scope thanks to
+# the same INVOCATION_ID belt (v1.2.60). VERIFIED LIVE on erebus 2026-07-12, not assumed: `podman stop
+# claudebox` → 30s later the box was back ("Up 30 seconds") with NO human action, and it then SURVIVED
+# multiple 10s watcher ticks. The scope independence is then confirmed DIRECTLY, not inferred:
+#   $ systemctl --user list-units --type=scope | grep conmon
+#     libpod-conmon-0a71103….scope   loaded active running
+# i.e. the revived container's conmon sits in its OWN libpod-conmon scope under the user manager, and
+# the box stayed up 18 min across ~100 tick teardowns. A conmon parented to a tick's cgroup dies at that
+# tick's teardown (the incident signature: 41 deaths, each within +/-1s of one).
+RemainAfterExit=yes
 ExecCondition=/usr/bin/bash -c '! systemctl --user is-active --quiet claudebox-rebuild-run.service'
 ExecStart=/usr/bin/env -u INVOCATION_ID /usr/bin/podman start claudebox
-# `podman start` is a NO-OP if the box is already running (exit 0), so this unit is safe to re-run every
-# watcher tick (each watcher Wants= it) — which is the AUTOMATIC RECOVERY: if the box ever exits, the
-# next tick re-runs this and revives it, always into an independent conmon scope. NOT RemainAfterExit:
-# staying "active (exited)" would suppress that per-tick re-run and defeat recovery.
-ExecStop=/usr/bin/podman stop -t 10 claudebox
 TimeoutStartSec=120
 
 [Install]
