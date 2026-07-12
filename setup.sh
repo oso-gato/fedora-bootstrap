@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.61 (BOX STARTUP DEFAULTS: the claude wrapper now launches `--model default --permission-mode auto --effort ultracode` — recommended model (not the opus version pin), auto mode (not manual), ultracode; identical to fedora-dev. A fleet build requirement so every box starts ready at full capability with no per-session toggling.)
+# Version: 1.2.62 (CONMON REGRESSION FIX: claudebox-up.service gains RemainAfterExit=yes and DROPS ExecStop. v1.2.60 had neither — a Type=oneshot unit without RemainAfterExit deactivates the instant ExecStart returns, and systemd runs ExecStop on deactivation, so the unit STARTED then STOPPED the box every ~10s watcher tick and a `claude` session died in 5s. Verified live on the host. Includes v1.2.61 box startup defaults.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
