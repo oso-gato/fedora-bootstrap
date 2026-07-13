@@ -1,0 +1,21 @@
+[Unit]
+Description=Force-rebuild (KILL + recreate) workload container %i — R17 rebuild-devbox executor
+Documentation=https://github.com/oso-gato/fedora-bootstrap
+Wants=podman.socket
+After=podman.socket
+
+[Service]
+Type=oneshot
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:%h/.local/bin
+# FORCE_REBUILD=1 REUSES container-refresh.sh's SAME health-gate + digest auto-rollback (R10) — not a
+# duplicate implementation — but overrides its busy-defer (a purposeful rebuild deliberately kills an
+# active session) and its digest-unchanged short-circuit (a lifecycle rebuild must recreate even on the
+# same image). This is R17's "REBUILD via the sanctioned path"; host-agent-watch.sh fires it --no-block
+# and polls it. NO SuccessExitStatus=10 (FORCE never defers); a rolled-back rebuild exits 1 = unit
+# failed = host-agent reports FAILED-rolled-back.
+Environment=FORCE_REBUILD=1
+ExecStart=%h/.local/bin/container-refresh.sh %i
+# Health-gate + a fat-image pull can take minutes; match workload-refresh@'s budget.
+TimeoutStartSec=1800

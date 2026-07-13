@@ -23,6 +23,14 @@
 #   1   pull failed (pending marker written; retry will try again)
 #   2   busy-probe broken (pending marker written; investigate)
 #   10  deferred (busy; pending marker written; retry will try again)
+#
+# FORCE_REBUILD (R17 rebuild-devbox, via the workload-rebuild@ unit): a PURPOSEFUL kill+recreate. It
+# reuses THIS script's health-gate + digest auto-rollback UNCHANGED, but (a) SKIPS the busy-probe — a
+# purposeful rebuild deliberately overrides an active session (the whole point of R17) — and (b) SKIPS
+# the digest-unchanged short-circuit — a lifecycle rebuild must recreate even on the same image. The
+# `systemctl restart` below, run from the host, tears down the whole container (reaping every process
+# in its PID namespace) and Notify=healthy gates the fresh one; on health failure the SAME rollback
+# fires. It is UNSET in every other path, so zero behaviour change there.
 set -u
 
 name="${1:?usage: container-refresh.sh <name>}"
@@ -41,26 +49,31 @@ flock -n 9 || {
 # (2) Busy probe — distinguishes idle vs busy vs broken. BUSY_PROBE overrides the default
 #     claudebox probe (UNSET in production → claudebox-busy-probe.sh); a non-claudebox workload
 #     supplies an empty/appropriate probe (e.g. BUSY_PROBE=/bin/true), per CLAUDE.md.
-"${BUSY_PROBE:-$HOME/.local/bin/claudebox-busy-probe.sh}" "$name"
-rc=$?
-case $rc in
-    0)  : ;;  # idle, proceed
-    1)
-        echo "[$name] busy (claude session or box rebuild active); deferring"
-        date -Iseconds >> "$pending"
-        # Cap defer-count visibility: > 24 means stuck for > 1 day of hourly retries.
-        c=$(wc -l <"$pending")
-        if [ "$c" -gt 24 ]; then
-            echo "[$name] WARNING: deferred $c times — investigate why busy never clears" >&2
-        fi
-        exit 10
-        ;;
-    *)
-        echo "[$name] busy-probe FAILED with exit $rc (broken probe, container down, etc.)" >&2
-        date -Iseconds >> "$pending"
-        exit 2
-        ;;
-esac
+#     FORCE_REBUILD (R17) SKIPS the busy-probe: a purposeful kill+rebuild overrides an active session.
+if [ -n "${FORCE_REBUILD:-}" ]; then
+    echo "[$name] FORCE_REBUILD: skipping busy-probe — a purposeful R17 rebuild overrides an active session."
+else
+    "${BUSY_PROBE:-$HOME/.local/bin/claudebox-busy-probe.sh}" "$name"
+    rc=$?
+    case $rc in
+        0)  : ;;  # idle, proceed
+        1)
+            echo "[$name] busy (claude session or box rebuild active); deferring"
+            date -Iseconds >> "$pending"
+            # Cap defer-count visibility: > 24 means stuck for > 1 day of hourly retries.
+            c=$(wc -l <"$pending")
+            if [ "$c" -gt 24 ]; then
+                echo "[$name] WARNING: deferred $c times — investigate why busy never clears" >&2
+            fi
+            exit 10
+            ;;
+        *)
+            echo "[$name] busy-probe FAILED with exit $rc (broken probe, container down, etc.)" >&2
+            date -Iseconds >> "$pending"
+            exit 2
+            ;;
+    esac
+fi
 
 # (3) Capture prior image digest BEFORE pulling, for rollback if needed.
 prior_id=$(podman container inspect "$name" -f '{{.Image}}' 2>/dev/null || echo "")
@@ -86,10 +99,13 @@ if [ -z "$new_id" ]; then
     date -Iseconds >> "$pending"
     exit 1
 fi
-if [ "$prior_id" = "$new_id" ]; then
+if [ "$prior_id" = "$new_id" ] && [ -z "${FORCE_REBUILD:-}" ]; then
     echo "[$name] already at $new_id — no change."
     rm -f "$pending"
     exit 0
+fi
+if [ -n "${FORCE_REBUILD:-}" ] && [ "$prior_id" = "$new_id" ]; then
+    echo "[$name] FORCE_REBUILD: digest unchanged ($new_id) — forcing a clean recreate anyway (R17 lifecycle)."
 fi
 
 # (6) Restart via Quadlet-generated unit. Notify=healthy gates "active"
