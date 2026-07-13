@@ -333,11 +333,14 @@ install -m 0755 "$HERE/live-gate-watch.sh"      "$HOME/.local/bin/live-gate-watc
 mkdir -p "$HOME/.config/live-gate"
 install -m 0644 "$HERE/live-gate-presets/"*.env "$HOME/.config/live-gate/" 2>/dev/null || true
 
-# ---- systemd template units (refresh trigger + retry) ----
+# ---- systemd template units (refresh trigger + retry, + R17 force-rebuild) ----
 install -m 0644 "$HERE/systemd-units/workload-refresh@.service"        "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE/systemd-units/workload-refresh@.timer"          "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.service"  "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.timer"    "$HOME/.config/systemd/user/"
+# R17 rebuild-devbox executor: on-demand FORCE rebuild (no timer — host-agent-watch.sh starts it).
+# Reuses container-refresh.sh under FORCE_REBUILD (health-gate + rollback preserved).
+install -m 0644 "$HERE/systemd-units/workload-rebuild@.service"        "$HOME/.config/systemd/user/"
 # claudebox OWNER (incident 2026-07-11): starts the box so its conmon lands in an INDEPENDENT scope,
 # not in a watcher-tick's oneshot cgroup (which the tick's teardown/timeout would SIGTERM, killing the
 # box — 41 deaths in one afternoon). Both watchers Wants= it, so every tick first ensures the box is up

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.62 (CONMON REGRESSION FIX: claudebox-up.service gains RemainAfterExit=yes and DROPS ExecStop. v1.2.60 had neither — a Type=oneshot unit without RemainAfterExit deactivates the instant ExecStart returns, and systemd runs ExecStop on deactivation, so the unit STARTED then STOPPED the box every ~10s watcher tick and a `claude` session died in 5s. Verified live on the host. Includes v1.2.61 box startup defaults.)
+# Version: 1.2.63 (R17 rebuild-devbox host verb: host-agent gains `rebuild-devbox <devbox>` — KILL the dev box from OUTSIDE (total teardown a shared-PID-ns in-container `distrobox rm` cannot), REBUILD via the sanctioned workload-rebuild@ path (container-refresh under FORCE_REBUILD — R10 health-gate + rollback preserved), then RESTORE+RESUME the session-manifest sessions and VERIFY the poller is sweeping; kill verified BY CONTAINER ID; destructive-verb author-gate.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
