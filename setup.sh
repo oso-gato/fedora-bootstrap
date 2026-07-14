@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.63 (R17 rebuild-devbox host verb: host-agent gains `rebuild-devbox <devbox>` — KILL the dev box from OUTSIDE (total teardown a shared-PID-ns in-container `distrobox rm` cannot), REBUILD via the sanctioned workload-rebuild@ path (container-refresh under FORCE_REBUILD — R10 health-gate + rollback preserved), then RESTORE+RESUME the session-manifest sessions and VERIFY the poller is sweeping; kill verified BY CONTAINER ID; destructive-verb author-gate.)
+# Version: 1.2.64 (R9 FLEET HALT reaches the host live-gate watcher: live-gate-watch.sh now reads the maintainer-bound `halt` label on the FLEET HALT CONTROL issue (#128, via new fleet-halt.sh) at the TOP of every tick and goes observe-only while it stands — building/posting nothing; maintainer-bound both directions from the label timeline (App-applied is inert), fails closed toward stopping.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
