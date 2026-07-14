@@ -125,6 +125,19 @@ hcr_install_from() {
     return "$rc"
 }
 
+# Byte-exact file equality using ONLY coreutils. The absorber's dependency contract (see the OWNERSHIP
+# header) is git + coreutils — `cmp`/`diff` are DIFFUTILS, NOT guaranteed present (a minimal host, and
+# the live-gate's own fedora build image, ship no diffutils), which would make the read-back below
+# spuriously fail-closed FOREVER (every artifact "mismatches" because the compare tool errors). So we
+# hash with `sha256sum` (coreutils): a byte-for-byte match ⇒ identical digest. Both files are read via
+# stdin so the output format is identical (`<hash>  -`) and equality reduces to the two digests. Any
+# read failure (missing/unreadable file) fails-closed to 1 (= differ), preserving the readback posture.
+hcr_same() {
+    local a b
+    a="$(sha256sum < "$1" 2>/dev/null)" && b="$(sha256sum < "$2" 2>/dev/null)" || return 1
+    [ "$a" = "$b" ]
+}
+
 # LIVE READ-BACK (fail-closed). Re-read each INSTALLED artifact on disk and byte-compare it to the
 # just-merged source in CLONE. Returns 0 only if EVERY installed artifact matches; logs each drift
 # loudly and returns 1 on ANY mismatch/missing. This is the load-bearing verification: it proves the
@@ -138,7 +151,7 @@ hcr_verify_from() {
             warn "READBACK MISMATCH: installed artifact MISSING: $dst"
             rc=1; continue
         fi
-        if ! cmp -s "$dst" "$clone/$src"; then
+        if ! hcr_same "$dst" "$clone/$src"; then
             warn "READBACK MISMATCH: on-disk $dst != merged source $clone/$src"
             rc=1
         fi

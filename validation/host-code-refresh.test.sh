@@ -94,7 +94,7 @@ run_absorber c1
   && [ -f "$A_STATE/applied.sha" ] && [ "$(cat "$A_STATE/applied.sha")" = "$want_sha" ] \
   && [ "$(git -C "$C_WORK" rev-parse HEAD)" = "$want_sha" ] \
   && grep -q 'ADVANCED one' "$A_BIN/throwaway-sweep.sh" \
-  && cmp -s "$A_BIN/host-agent-watch.sh" "$C_WORK/host-agent-watch.sh" \
+  && hcr_same "$A_BIN/host-agent-watch.sh" "$C_WORK/host-agent-watch.sh" \
   && grep -q 'SYSTEMCTL --user daemon-reload' "$A_SCLOG"; } \
   && ok "ff-applied, merged content live, applied.sha == merged sha, daemon-reload issued" \
   || bad "advanced+clean" "rc=$RC applied=$(cat "$A_STATE/applied.sha" 2>/dev/null) want=$want_sha; out: $(tr '\n' '|' <"$A_OUT")"
