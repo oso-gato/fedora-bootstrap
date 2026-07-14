@@ -8,7 +8,9 @@
 # PR shell executes INSIDE this throwaway build (sandboxed on the disposable engine), NEVER on the host —
 # the same disposable build+verdict harness that gates the image repos, reused verbatim.
 FROM registry.fedoraproject.org/fedora:44
-RUN dnf install -y --setopt=install_weak_deps=False ShellCheck && dnf clean all
+# ShellCheck runs the static gate; git-core (the leaf git package, Build Principle 4) lets
+# validation/host-code-refresh.test.sh drive its REAL git mock-clone inside this disposable build.
+RUN dnf install -y --setopt=install_weak_deps=False ShellCheck git-core && dnf clean all
 COPY . /src
 WORKDIR /src
 

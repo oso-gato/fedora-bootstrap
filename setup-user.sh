@@ -307,57 +307,25 @@ WORKLOAD_CONTAINERS=(
     # fedora-desktop  # uncomment when onboarded (the desktop workload — xrdp + grd lineages)
 )
 
-# ---- generic helpers (one source of truth for the fleet) ----
-install -m 0755 "$HERE/container-refresh.sh"    "$HOME/.local/bin/container-refresh.sh"
-install -m 0755 "$HERE/claudebox-busy-probe.sh" "$HOME/.local/bin/claudebox-busy-probe.sh"
-# Pre-merge live-gate pair (Gate B + its build step): build-candidate.sh builds a PR candidate
-# DISPOSABLY on the host (v1.2.25 carve-out: localhost/disposable/*, never pushed, --rm/rmi'd) and
-# hands it to validate-candidate.sh, which live-runs + access-probes it. validate-candidate.sh was
-# previously uninstalled (an orphan with no caller); install both so the live-gate harness can call them.
-install -m 0755 "$HERE/validate-candidate.sh"   "$HOME/.local/bin/validate-candidate.sh"
-install -m 0755 "$HERE/build-candidate.sh"      "$HOME/.local/bin/build-candidate.sh"
-# Throwaway-churn reaper: build-candidate.sh persists a dnf RPM bind cache + the podman layer cache
-# across candidate builds; throwaway-sweep.sh reaps the orphans a `kill -9`/crash leaves (the EXIT
-# traps miss) and caps both persistent caches so churn can't exhaust the VPS quota. Invoked at
-# live-gate-watch.sh start (self-throttled); may also be wired to a periodic timer/cron.
-install -m 0755 "$HERE/throwaway-sweep.sh"      "$HOME/.local/bin/throwaway-sweep.sh"
-# Pre-merge live-gate loop transport (Model C, dynamic): live-gate-watch.sh discovers ALL open
-# `live-validate`-labelled PRs ORG-WIDE in one query (no workload list), dedups per-(repo,commit);
-# live-gate-run.sh gates ONE PR — fetches the PR head into an ephemeral tree ON DEMAND (no
-# pre-placed clone), builds + gates EVERY declared target, comments the verdict back. The host
-# comments, NEVER merges. Not gated on any dev session.
-install -m 0755 "$HERE/live-gate-run.sh"        "$HOME/.local/bin/live-gate-run.sh"
-install -m 0755 "$HERE/live-gate-watch.sh"      "$HOME/.local/bin/live-gate-watch.sh"
-# R9 FLEET HALT reader (fedora-dev#135): live-gate-watch.sh reads the maintainer-bound `halt` signal via
-# this at the top of every tick and goes observe-only while it stands. Installed alongside the watcher so
-# the halt-gate is never absent (the watcher fails CLOSED if it is). Mirrors the dev-side bin/fleet-halt.sh.
-install -m 0755 "$HERE/fleet-halt.sh"           "$HOME/.local/bin/fleet-halt.sh"
-# Per-repo live-gate contracts (new multi-target schema) — HOST FALLBACK; a candidate may ship its
-# own top-level `.live-gate` to override (preferred — it travels in the PR). Read by live-gate-run.sh.
+# ---- managed user-scope artifacts: scripts (→ ~/.local/bin) + systemd --user units ----
+# FACTORED (apparatus F16): the plain-copy install of the autonomous-machinery scripts + their units
+# is now ONE idempotent function — hcr_install_from, defined in host-code-refresh.sh — which is the
+# SINGLE source of truth for the managed manifest. setup-user.sh calls it here at Day-0/upgrade; the
+# F16 self-arming absorber (host-code-refresh.timer, added below) RE-RUNS the very same function every
+# ~15 min so a merged host-code PR becomes LIVE between full setup.sh runs — with a fail-closed live
+# read-back. To change the managed set, edit hcr_manifest in host-code-refresh.sh (it covers:
+# container-refresh, claudebox-busy-probe, validate-candidate, build-candidate, throwaway-sweep,
+# live-gate-run, live-gate-watch, fleet-halt, host-agent-watch, gh-app-auth, host-gh-refresh, and
+# host-code-refresh itself + all their systemd --user units). Sourcing defines the functions without
+# running the absorber (its main is guarded on direct execution).
+# shellcheck source=/dev/null
+. "$HERE/host-code-refresh.sh"
+hcr_install_from "$HERE"
+# Per-repo live-gate contracts (multi-target schema) — HOST FALLBACK; a candidate may ship its own
+# top-level `.live-gate` to override (preferred — it travels in the PR). Read by live-gate-run.sh.
+# (NOT part of the F16 manifest — a directory of *.env presets, not a byte-versioned single artifact.)
 mkdir -p "$HOME/.config/live-gate"
 install -m 0644 "$HERE/live-gate-presets/"*.env "$HOME/.config/live-gate/" 2>/dev/null || true
-
-# ---- systemd template units (refresh trigger + retry, + R17 force-rebuild) ----
-install -m 0644 "$HERE/systemd-units/workload-refresh@.service"        "$HOME/.config/systemd/user/"
-install -m 0644 "$HERE/systemd-units/workload-refresh@.timer"          "$HOME/.config/systemd/user/"
-install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.service"  "$HOME/.config/systemd/user/"
-install -m 0644 "$HERE/systemd-units/workload-refresh-retry@.timer"    "$HOME/.config/systemd/user/"
-# R17 rebuild-devbox executor: on-demand FORCE rebuild (no timer — host-agent-watch.sh starts it).
-# Reuses container-refresh.sh under FORCE_REBUILD (health-gate + rollback preserved).
-install -m 0644 "$HERE/systemd-units/workload-rebuild@.service"        "$HOME/.config/systemd/user/"
-# claudebox OWNER (incident 2026-07-11): starts the box so its conmon lands in an INDEPENDENT scope,
-# not in a watcher-tick's oneshot cgroup (which the tick's teardown/timeout would SIGTERM, killing the
-# box — 41 deaths in one afternoon). Both watchers Wants= it, so every tick first ensures the box is up
-# and revives it if it died. Enabled + started below, BEFORE the watcher timers.
-install -m 0644 "$HERE/systemd-units/claudebox-up.service"             "$HOME/.config/systemd/user/"
-# Live-gate watcher (poll `live-validate` PRs + build/gate/verdict them on the host)
-install -m 0644 "$HERE/systemd-units/live-gate-watch.service"          "$HOME/.config/systemd/user/"
-install -m 0644 "$HERE/systemd-units/live-gate-watch.timer"            "$HOME/.config/systemd/user/"
-# Host agent (consume `host-task` GitHub-issue tickets → perform host ops → post outcomes) — the host
-# half of the autonomous apparatus (fedora-dev#131 R5); the dev box instructs the host through this.
-install -m 0755 "$HERE/host-agent-watch.sh"                            "$HOME/.local/bin/host-agent-watch.sh"
-install -m 0644 "$HERE/systemd-units/host-agent-watch.service"         "$HOME/.config/systemd/user/"
-install -m 0644 "$HERE/systemd-units/host-agent-watch.timer"           "$HOME/.config/systemd/user/"
 
 # ---- HOST standing GitHub App credential (the live-gate's OWN identity) ----
 # The HOST runs `gh` itself — live-gate-watch discovers PRs and POSTS the GREEN/RED verdicts —
@@ -368,10 +336,8 @@ install -m 0644 "$HERE/systemd-units/host-agent-watch.timer"           "$HOME/.c
 # home is the rootless podman secret store; a <=1h installation token is minted + rewired hourly
 # by host-gh-refresh.timer. Declining (or a scripted run) => the host falls back to whatever
 # `gh auth login` the operator did — the WARN says so and how to provision later.
-install -m 0755 "$HERE/gh-app-auth.sh"       "$HOME/.local/bin/gh-app-auth.sh"
-install -m 0755 "$HERE/host-gh-refresh.sh"   "$HOME/.local/bin/host-gh-refresh.sh"
-install -m 0644 "$HERE/systemd-units/host-gh-refresh.service" "$HOME/.config/systemd/user/"
-install -m 0644 "$HERE/systemd-units/host-gh-refresh.timer"   "$HOME/.config/systemd/user/"
+# (gh-app-auth.sh + host-gh-refresh.sh + host-gh-refresh.{service,timer} are installed above via
+# hcr_install_from — they are in the F16 managed manifest; only the paste PROVISIONING is here.)
 if podman secret exists gh_app_host_key 2>/dev/null && [ -r "$HOME/.config/gh-app-host.env" ]; then
     echo "[host-gh] standing HOST App credential already provisioned (secret gh_app_host_key) — keeping it."
 else
@@ -650,6 +616,12 @@ systemctl --user enable --now claudebox-up.service || true
 systemctl --user enable --now live-gate-watch.timer
 # Enable the host agent (polls `host-task` tickets and performs host ops — apparatus R5).
 systemctl --user enable --now host-agent-watch.timer
+# Enable the F16 self-arming absorber: every ~15 min it fast-forwards the control clone to merged
+# `main` and re-runs hcr_install_from with a fail-closed live read-back, so a merged host-code PR
+# becomes LIVE without a full setup.sh run. Safe to enable unconditionally (like host-gh-refresh.timer):
+# each tick fail-closes to a no-op until the control clone is core-writable (see host-code-refresh.sh's
+# ownership note) and is idempotent once the clone is at the applied sha.
+systemctl --user enable --now host-code-refresh.timer
 
 PHASE "user 5/5 verify"
 bash "$HERE/verify.sh"

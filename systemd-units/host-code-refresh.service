@@ -1,0 +1,22 @@
+[Unit]
+Description=Absorb merged host code — fast-forward the control clone to `main` + re-run the idempotent install with a fail-closed live read-back (apparatus F16)
+Documentation=https://github.com/oso-gato/fedora-bootstrap
+# Needs the network for `git fetch`; a fetch failure is a skipped tick (the script bounds + no-ops).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs DIRECTLY on the host as the --user unit (NOT via `distrobox enter`): it needs only git +
+# coreutils + `systemctl --user`, all host-side — no gh, no CONTAINER_HOST. Mirrors
+# host-gh-refresh.service, not the box-entering watchers.
+#
+# NEVER absorb during a claudebox rebuild: box-rebuild.sh stands the watcher timers DOWN for the
+# rebuild window, and this service's reload step `enable --now`s them — re-arming a deliberately
+# stood-down timer mid-rebuild would re-open the distrobox-init race. ExecCondition cleanly SKIPS
+# this firing (unit NOT marked failed) while a rebuild is active; the next tick picks it up.
+ExecCondition=/usr/bin/bash -c '! systemctl --user is-active --quiet claudebox-rebuild-run.service'
+ExecStart=%h/.local/bin/host-code-refresh.sh
+# Fail fast: the script wraps git/systemctl in `timeout`, so a whole tick is comfortably bounded;
+# 300s is a generous ceiling that turns any unforeseen hang into a fast, visible failure (not a wedge).
+TimeoutStartSec=300
