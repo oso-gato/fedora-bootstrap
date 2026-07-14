@@ -328,6 +328,10 @@ install -m 0755 "$HERE/throwaway-sweep.sh"      "$HOME/.local/bin/throwaway-swee
 # comments, NEVER merges. Not gated on any dev session.
 install -m 0755 "$HERE/live-gate-run.sh"        "$HOME/.local/bin/live-gate-run.sh"
 install -m 0755 "$HERE/live-gate-watch.sh"      "$HOME/.local/bin/live-gate-watch.sh"
+# R9 FLEET HALT reader (fedora-dev#135): live-gate-watch.sh reads the maintainer-bound `halt` signal via
+# this at the top of every tick and goes observe-only while it stands. Installed alongside the watcher so
+# the halt-gate is never absent (the watcher fails CLOSED if it is). Mirrors the dev-side bin/fleet-halt.sh.
+install -m 0755 "$HERE/fleet-halt.sh"           "$HOME/.local/bin/fleet-halt.sh"
 # Per-repo live-gate contracts (new multi-target schema) — HOST FALLBACK; a candidate may ship its
 # own top-level `.live-gate` to override (preferred — it travels in the PR). Read by live-gate-run.sh.
 mkdir -p "$HOME/.config/live-gate"

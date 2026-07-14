@@ -37,6 +37,25 @@ exec 9>"$STATE/watch.lock"
 flock -n 9 || { echo "[live-gate-watch] another run holds the lock; skipping"; exit 0; }
 [ -x "$RUNNER" ] || { echo "FATAL: live-gate-run.sh not found"; exit 2; }
 
+# ---- R9 FLEET HALT (apparatus fedora-dev#135): read the maintainer-bound `halt` signal at the TOP of
+# the tick — BEFORE the sweep/discovery/build/post below — so a fleet SOFT STOP takes effect within one
+# tick. HALTED / persistently-unreadable ⇒ OBSERVE-ONLY: log and exit cleanly (sweep nothing, build
+# nothing, post nothing); un-halt resumes next tick (the timer keeps firing). An in-flight build from a
+# prior tick already completed before this tick could acquire the flock above, so it is never touched.
+# The reader (fleet-halt.sh) mirrors the dev-side bin/fleet-halt.sh contract and fails CLOSED toward
+# stopping, so a missing/unreadable reader parks this tick rather than acting blind. ----
+FLEET_HALT="$HOME/.local/bin/fleet-halt.sh"; [ -x "$FLEET_HALT" ] || FLEET_HALT="$HERE/fleet-halt.sh"
+if [ ! -x "$FLEET_HALT" ]; then
+  echo "[live-gate-watch] fail-closed: R9 halt reader (fleet-halt.sh) missing/not executable — cannot read the halt signal; observe-only this tick"
+  exit 0
+fi
+halt_state="$(FLEET_HALT_TAG=live-gate "$FLEET_HALT")"; hrc=$?
+if [ "$hrc" != 0 ]; then
+  echo "[live-gate-watch] FLEET HALT ($halt_state) — OBSERVE-ONLY: sweeping/building/posting NOTHING this tick (un-halt resumes next tick)"
+  exit 0
+fi
+echo "[live-gate-watch] fleet-halt: CLEAR — proceeding"
+
 # ---- ORPHAN SWEEP + CACHE GC (opportunistic, self-throttled, flock-guarded) ----
 # Reap throwaway images/containers/trees a `kill -9`/crash left behind (the per-run EXIT traps only
 # fire on a clean exit) and bound the persistent build caches so churn can't exhaust the VPS quota.
