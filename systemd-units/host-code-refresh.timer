@@ -1,0 +1,15 @@
+[Unit]
+Description=Periodically absorb merged host code onto the live host (make merged `main` live)
+
+[Timer]
+# Cadence is a merged→live LATENCY knob, not a load one: the absorber is a no-op once the clone is at
+# the applied sha, and it self-serialises via git state. ~15 min keeps a merged host-code PR live
+# within a quarter hour without hammering the git remote. Slower than the 10s dev↔host watchers (those
+# are interactive round-trips); in the same family as host-gh-refresh's 45 min token refresh.
+OnBootSec=3min
+OnUnitActiveSec=15min
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target
