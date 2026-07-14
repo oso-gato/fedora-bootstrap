@@ -10,6 +10,10 @@
 # every branch, and stub live-gate-run.sh / throwaway-sweep.sh recorders prove the watcher builds/sweeps
 # nothing under halt. Runs on a plain CI runner (no podman, no host engine, no network).
 #
+# The assertions BITE: every case runs its ck() in THIS shell (no ( ) subshell would swallow the pass/fail
+# increment before the summary sees it), and a MUTATION-CHECK block injects a fail-open / App-active
+# regression and requires the guarding case to FAIL — so an inert assertion can never ship green.
+#
 # Run:  bash validation/fleet-halt-dryrun.test.sh   → exit 0 = all cases pass
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -64,53 +68,90 @@ chmod +x "$BIN/gh"
 pass=0; fail=0
 ck(){ [ "$1" = 1 ] && { pass=$((pass+1)); printf '  ok   %s\n' "$2"; } || { fail=$((fail+1)); printf '  FAIL %s\n       %s\n' "$2" "$3"; }; }
 
-# fh_case <desc> <expect_state> <expect_rc>   (scenario env already exported; fresh state each call)
+# fh_case <desc> <expect_state> <expect_rc> [VAR=val ...]   (scenario env passed INLINE, not exported in a
+# subshell — a subshell would trap ck()'s pass/fail increments and the summary would never see them, so the
+# suite must call this in the PARENT shell; fresh HOME/state each call keeps cases independent.)
 fh_case(){
-  local desc="$1" exp_state="$2" exp_rc="$3" out rc home
+  local desc="$1" exp_state="$2" exp_rc="$3"; shift 3
+  local out rc home
   home="$ROOT/h$RANDOM$RANDOM"; mkdir -p "$home"
-  out="$(HOME="$home" FLEET_HALT_STATE="$home/st" FLEET_HALT_TAG=t PATH="$BIN:$PATH" bash "$FH" 2>/dev/null)"; rc=$?
+  out="$(HOME="$home" FLEET_HALT_STATE="$home/st" FLEET_HALT_TAG=t PATH="$BIN:$PATH" env "$@" bash "$FH" 2>/dev/null)"; rc=$?
   if [ "$out" = "$exp_state" ] && [ "$rc" = "$exp_rc" ]; then ck 1 "$desc"; else
     ck 0 "$desc" "got state='$out' rc=$rc — want state='$exp_state' rc=$exp_rc"; fi
 }
 
 echo "== fleet-halt.sh: timeline-driven halt state (maintainer-bound both directions; App inert) =="
-( export FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled arthur' FAKE_MAINTAINERS='arthur'
-  fh_case "maintainer applied halt ⇒ HALTED" HALTED 10 )
-( export FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled botapp' FAKE_MAINTAINERS='arthur'
-  fh_case "App applied halt (404) ⇒ inert ⇒ CLEAR" CLEAR 0 )
-( export FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled arthur\nunlabeled botapp' FAKE_MAINTAINERS='arthur'
-  fh_case "App tries to UN-halt a maintainer halt ⇒ still HALTED" HALTED 10 )
-( export FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled arthur\nunlabeled arthur' FAKE_MAINTAINERS='arthur'
-  fh_case "maintainer applied then removed ⇒ CLEAR" CLEAR 0 )
-( export FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled writer' FAKE_WRITERS='writer'
-  fh_case "write-role collaborator halt (not maintain) ⇒ inert ⇒ CLEAR" CLEAR 0 )
-( export FAKE_ISSUE_NUM=128 FAKE_TIMELINE=''
-  fh_case "no halt-label events at all ⇒ CLEAR" CLEAR 0 )
-( export FAKE_ISSUE_NUM=''
-  fh_case "control issue ABSENT (empty search) ⇒ CLEAR" CLEAR 0 )
+fh_case "maintainer applied halt ⇒ HALTED" HALTED 10 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled arthur' FAKE_MAINTAINERS=arthur
+fh_case "App applied halt (404) ⇒ inert ⇒ CLEAR" CLEAR 0 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled botapp' FAKE_MAINTAINERS=arthur
+fh_case "App tries to UN-halt a maintainer halt ⇒ still HALTED" HALTED 10 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled arthur\nunlabeled botapp' FAKE_MAINTAINERS=arthur
+fh_case "maintainer applied then removed ⇒ CLEAR" CLEAR 0 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled arthur\nunlabeled arthur' FAKE_MAINTAINERS=arthur
+fh_case "write-role collaborator halt (not maintain) ⇒ inert ⇒ CLEAR" CLEAR 0 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled writer' FAKE_WRITERS=writer
+fh_case "ghost/deleted actor (empty login) halt is inert ⇒ CLEAR" CLEAR 0 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled '
+fh_case "no halt-label events at all ⇒ CLEAR" CLEAR 0 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE=
+fh_case "control issue ABSENT (empty search) ⇒ CLEAR" CLEAR 0 \
+  FAKE_ISSUE_NUM=
 
 echo "== fleet-halt.sh: FAIL-CLOSED — unreadable pauses, K consecutive declares a persistent halt =="
-( export FAKE_ISSUE_FAIL=1
-  fh_case "discovery API error ⇒ PAUSED (transient)" PAUSED 11 )
-( export FAKE_ISSUE_NUM=128 FAKE_TIMELINE_FAIL=1
-  fh_case "timeline API error ⇒ PAUSED (transient)" PAUSED 11 )
-( export FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled flaky' FAKE_UNREADABLE='flaky'
-  fh_case "role check UNREADABLE on the halt actor ⇒ PAUSED (fail-closed, not inert)" PAUSED 11 )
+fh_case "discovery API error ⇒ PAUSED (transient)" PAUSED 11 \
+  FAKE_ISSUE_FAIL=1
+fh_case "timeline API error ⇒ PAUSED (transient)" PAUSED 11 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE_FAIL=1
+fh_case "role check UNREADABLE on the halt actor ⇒ PAUSED (fail-closed, not inert)" PAUSED 11 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled flaky' FAKE_UNREADABLE=flaky
 
 echo "-- K-debounce escalation: 3 consecutive unreadable reads on ONE counter ⇒ HALTED-UNREADABLE --"
-( home="$ROOT/kh"; mkdir -p "$home"
-  s1=$(HOME="$home" FLEET_HALT_STATE="$home/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r1=$?
-  s2=$(HOME="$home" FLEET_HALT_STATE="$home/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r2=$?
-  s3=$(HOME="$home" FLEET_HALT_STATE="$home/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r3=$?
-  # a CLEAR read must RESET the counter so a later blip starts over (not escalate immediately)
-  s4=$(HOME="$home" FLEET_HALT_STATE="$home/st" FLEET_HALT_TAG=k FAKE_ISSUE_NUM='' PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r4=$?
-  s5=$(HOME="$home" FLEET_HALT_STATE="$home/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r5=$?
-  if [ "$s1|$r1" = "PAUSED|11" ] && [ "$s2|$r2" = "PAUSED|11" ] && [ "$s3|$r3" = "HALTED-UNREADABLE|12" ] \
-     && [ "$s4|$r4" = "CLEAR|0" ] && [ "$s5|$r5" = "PAUSED|11" ]; then
-    ck 1 "PAUSED,PAUSED,HALTED-UNREADABLE then CLEAR resets → PAUSED"
+# NOT a subshell — ck must increment pass/fail in the PARENT. One shared HOME/state so the counter carries
+# across the five reads; env passed inline per read.
+kh="$ROOT/kh"; mkdir -p "$kh"
+s1=$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r1=$?
+s2=$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r2=$?
+s3=$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r3=$?
+# a CLEAR read must RESET the counter so a later blip starts over (not escalate immediately)
+s4=$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k FAKE_ISSUE_NUM='' PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r4=$?
+s5=$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r5=$?
+if [ "$s1|$r1" = "PAUSED|11" ] && [ "$s2|$r2" = "PAUSED|11" ] && [ "$s3|$r3" = "HALTED-UNREADABLE|12" ] \
+   && [ "$s4|$r4" = "CLEAR|0" ] && [ "$s5|$r5" = "PAUSED|11" ]; then
+  ck 1 "PAUSED,PAUSED,HALTED-UNREADABLE then CLEAR resets → PAUSED"
+else
+  ck 0 "K-debounce escalation+reset" "got $s1/$r1,$s2/$r2,$s3/$r3,$s4/$r4,$s5/$r5"
+fi
+
+echo "== MUTATION-CHECK: the safety assertions BITE — inject a regression, require the guard case to FAIL =="
+# A suite that reports GREEN while its assertions fail is worse than none — the exact defect this file had
+# (fh_case/K-debounce once ran in ( ) subshells whose ck() pass/fail increments never reached the summary,
+# so breaking fail-closed still printed "0 failed"). #131 requires tests that BITE, mutation-checked. So we
+# PROVE each safety property's assertion distinguishes correct from broken: build a mutant reader with that
+# property inverted and require the case guarding it to MISMATCH the good answer. A mutant that still
+# satisfies the assertion means the assertion is inert — and THIS check then fails loudly.
+# mut_case <mutant-file> <desc> <good_state> <good_rc> [VAR=val ...]
+mut_case(){
+  local mut="$1" desc="$2" good_state="$3" good_rc="$4"; shift 4
+  local out rc home
+  home="$ROOT/m$RANDOM$RANDOM"; mkdir -p "$home"
+  out="$(HOME="$home" FLEET_HALT_STATE="$home/st" FLEET_HALT_TAG=m PATH="$BIN:$PATH" env "$@" bash "$mut" 2>/dev/null)"; rc=$?
+  if [ "$out" = "$good_state" ] && [ "$rc" = "$good_rc" ]; then
+    ck 0 "$desc" "MUTANT still satisfied the assertion (it is INERT / does not bite): got '$out'/$rc"
   else
-    ck 0 "K-debounce escalation+reset" "got $s1/$r1,$s2/$r2,$s3/$r3,$s4/$r4,$s5/$r5"
-  fi )
+    ck 1 "$desc — mutant caught (got '$out'/$rc ≠ good '$good_state'/$good_rc)"
+  fi
+}
+MUT_FO="$ROOT/mut-failopen.sh"     # FAIL-OPEN regression: every unreadable read ⇒ CLEAR (proceed-when-blind)
+sed 's/echo UNREADABLE/echo CLEAR/g' "$FH" > "$MUT_FO"
+MUT_APP="$ROOT/mut-appactive.sh"   # APP-ACTIVE regression: a non-maintainer/App event is no longer inert
+sed 's/0) continue;;/0) case "$event" in labeled) echo HALTED;; *) echo CLEAR;; esac; return 0;;/' "$FH" > "$MUT_APP"
+mut_case "$MUT_FO"  "fail-closed bites: discovery-error mutant no longer PAUSED" PAUSED 11 \
+  FAKE_ISSUE_FAIL=1
+mut_case "$MUT_FO"  "fail-closed bites: role-check-U mutant no longer PAUSED"    PAUSED 11 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled flaky' FAKE_UNREADABLE=flaky
+mut_case "$MUT_APP" "App-inert bites: App-label mutant no longer CLEAR"          CLEAR  0 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled botapp' FAKE_MAINTAINERS=arthur
 
 echo "== live-gate-watch.sh INTEGRATION: HALTED ⇒ sweeps/builds NOTHING; CLEAR ⇒ proceeds =="
 # stub live-gate-run.sh + throwaway-sweep.sh as recorders inside a temp HOME so the watcher picks THEM

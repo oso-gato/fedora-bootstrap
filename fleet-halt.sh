@@ -89,6 +89,11 @@ is_maintainer(){ # <login>
 declare -A MAINT_CACHE=()
 maint_cached(){ # <login> — memoized is_maintainer (one API call per distinct actor)
   local login="$1"
+  # A ghost/deleted actor whose timeline event carries a null `.actor.login` arrives here as an EMPTY
+  # login. An empty associative-array subscript is a bash "bad array subscript" fatal — guard it BEFORE
+  # the cache lookup and return the same definitive NO is_maintainer already gives an empty login, so the
+  # event is treated as inert (a non-maintainer), never misclassified UNREADABLE by the crash.
+  [ -n "$login" ] || { echo NO; return 0; }
   [ -n "${MAINT_CACHE[$login]+x}" ] || MAINT_CACHE["$login"]="$(is_maintainer "$login")"
   printf '%s' "${MAINT_CACHE[$login]}"
 }
