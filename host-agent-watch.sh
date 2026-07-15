@@ -85,7 +85,12 @@ KNOWN_WORKLOADS="${HOST_AGENT_WORKLOADS:-fedora-dev fedora-desktop}"
 # semantics restore assumes, and a rebuild KILLS active sessions — so it is not offered fleet-wide.
 REBUILD_WORKLOADS="${HOST_AGENT_REBUILDABLE:-fedora-dev}"
 # The session MANIFEST rides in the ticket BODY between these sentinels (line 1 stays `host-op:`),
-# PARSED as bounded DATA (parse_manifest), never executed. Each line: `session <name> <cwd>`.
+# PARSED as bounded DATA (parse_manifest), never executed. Each line: `session <name> <cwd> [<sid>]`
+# — the optional 4th field is a claude-code session-id (fedora-dev D4/#191): PRESENT ⇒ resume THAT
+# session by id (`claude --resume <sid>`); ABSENT ⇒ the cwd-scoped `claude --continue` (v1, still
+# accepted, so an old producer keeps working). By-id resume is what makes MULTI-TENANT restore correct:
+# N sessions can share one cwd, which `--continue` (most-recent-in-cwd) cannot disambiguate. The sid is
+# validated as DATA (UUID grammar) and only ever passed as LITERAL argv/keystrokes to tmux, never eval'd.
 MANIFEST_BEGIN='%%DEVBOX-MANIFEST-BEGIN%%'
 MANIFEST_END='%%DEVBOX-MANIFEST-END%%'
 DEVBOX_MAX_SESSIONS="${DEVBOX_MAX_SESSIONS:-32}"
@@ -127,11 +132,13 @@ parse_manifest(){
     t==E { if(inb) inb=2; next }
     inb==1 {
       if ($0 ~ /^[[:space:]]*$/) next                                    # blank lines inside the block are fine
-      if ($1 != "session" || NF != 3)                        { rc=2; exit }   # exactly: session <name> <cwd> (no spaces in cwd)
+      if ($1 != "session" || (NF != 3 && NF != 4))           { rc=2; exit }   # session <name> <cwd> [<sid>]
       if ($2 !~ /^[A-Za-z0-9._-]+$/ || length($2) > 64)      { rc=2; exit }   # session name allowlist
       if ($3 !~ /^\/[A-Za-z0-9._\/@%+-]*$/ || length($3) > 256) { rc=2; exit }   # absolute path, no spaces/metacharacters
+      if (NF == 4 && !($4 ~ /^[0-9a-fA-F]+-[0-9a-fA-F]+-[0-9a-fA-F]+-[0-9a-fA-F]+-[0-9a-fA-F]+$/ && length($4) == 36)) { rc=2; exit }   # optional session-id: a real UUID (8-4-4-4-12 hex; what --session-id requires). Strict-UUID also RE-CLOSES the space-in-cwd hole: a fumbled `cwd with-a-space` splits to a 4th field that is not a UUID ⇒ rejected.
       if (++n > MAX)                                         { rc=2; exit }
-      printf "%s\t%s\n", $2, $3
+      if (NF == 4) printf "%s\t%s\t%s\n", $2, $3, $4         # v2: name<TAB>cwd<TAB>sid (resume by id)
+      else         printf "%s\t%s\n",     $2, $3             # v1: name<TAB>cwd (cwd-scoped --continue)
     }
     END{ if(rc) exit rc; if(!seenb) exit 3; if(inb==1) exit 2; exit 0 }
   '
@@ -174,6 +181,12 @@ if [ "${1:-}" = "--selftest" ]; then
   cm "cwd w/ space" $'%%DEVBOX-MANIFEST-BEGIN%%\nsession a /r/a b\n%%DEVBOX-MANIFEST-END%%'                                ''                         2
   cm "relative cwd" $'%%DEVBOX-MANIFEST-BEGIN%%\nsession a rel/path\n%%DEVBOX-MANIFEST-END%%'                              ''                         2
   cm "meta in name" $'%%DEVBOX-MANIFEST-BEGIN%%\nsession a;rm /r/a\n%%DEVBOX-MANIFEST-END%%'                               ''                         2
+  # v2 optional session-id (D4/#191): a valid UUID ⇒ 3rd out-field; absent ⇒ 2 fields (v1); non-UUID/extra ⇒ reject
+  cm "with sid"     $'%%DEVBOX-MANIFEST-BEGIN%%\nsession main /home/core 0deceee8-34ab-4e41-be19-ba4210469eb6\n%%DEVBOX-MANIFEST-END%%' $'main\t/home/core\t0deceee8-34ab-4e41-be19-ba4210469eb6' 0
+  cm "sid + no-sid" $'%%DEVBOX-MANIFEST-BEGIN%%\nsession a /r/a 11111111-2222-3333-4444-555555555555\nsession b /r/b\n%%DEVBOX-MANIFEST-END%%' $'a\t/r/a\t11111111-2222-3333-4444-555555555555\nb\t/r/b' 0
+  cm "sid not uuid" $'%%DEVBOX-MANIFEST-BEGIN%%\nsession a /r/a not-a-uuid\n%%DEVBOX-MANIFEST-END%%'                      ''                         2
+  cm "bad sid meta" $'%%DEVBOX-MANIFEST-BEGIN%%\nsession a /r/a bad;rm\n%%DEVBOX-MANIFEST-END%%'                          ''                         2
+  cm "five fields"  $'%%DEVBOX-MANIFEST-BEGIN%%\nsession a /r/a 0deceee8-34ab-4e41-be19-ba4210469eb6 extra\n%%DEVBOX-MANIFEST-END%%' ''             2
   # kill_verified: <desc> <oldid> <newid> <gone|alive> <expected verdict>
   ckv(){ local g; g="$(kill_verified "$2" "$3" "$4")"; [ "$g" = "$5" ] && echo "ok: kv $1" || { echo "FAIL: kv $1 — got '$g' want '$5'"; f=1; }; }
   ckv "clean kill"  AAAA BBBB gone  ok
@@ -258,13 +271,17 @@ pexec(){ podman exec --user 1000:1000 "$@"; }
 # typing the host-fixed DEVBOX_RESUME_CMD (never manifest content). Idempotent (drops a stale same-name
 # session first). rc 0 = created + resume dispatched; 1 = could-not (surfaces, never a silent success).
 # $1 is the VERIFIED CONTAINER ID (never the name — the reused name is what hid the ghost; R17 req 6).
-restore_session(){ # <cid> <name> <cwd>
-  local cid="$1" name="$2" cwd="$3"
+restore_session(){ # <cid> <name> <cwd> [<sid>]
+  local cid="$1" name="$2" cwd="$3" sid="${4:-}"
+  # RESUME COMMAND: by-id when the manifest carried a sid (multi-tenant; resumes THAT session even when
+  # sessions share a cwd), else the host-fixed cwd-scoped default. The sid is parse_manifest-validated
+  # UUID grammar ([A-Za-z0-9-]) so it is safe as a literal send-keys keystroke — still never eval'd.
+  local resume_cmd; if [ -n "$sid" ]; then resume_cmd="claude --resume $sid"; else resume_cmd="$DEVBOX_RESUME_CMD"; fi
   pexec "$cid" test -d "$cwd" 2>/dev/null || { log "restore: cwd '$cwd' absent in $cid — cannot restore '$name'"; return 1; }
   pexec "$cid" tmux kill-session -t "$name" >/dev/null 2>&1 || true
   pexec "$cid" tmux new-session -d -s "$name" -c "$cwd" >/dev/null 2>&1 \
     || { log "restore: tmux new-session '$name' failed in $cid"; return 1; }
-  pexec "$cid" tmux send-keys -t "$name" "$DEVBOX_RESUME_CMD" Enter >/dev/null 2>&1 \
+  pexec "$cid" tmux send-keys -t "$name" "$resume_cmd" Enter >/dev/null 2>&1 \
     || { log "restore: resume send-keys '$name' failed in $cid"; return 1; }
   return 0
 }
@@ -345,11 +362,11 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
     # CONTAINER ID ($newid — never the name; R17 req 6); then settle ONCE and verify each is actively
     # resuming — a restored-but-idle session is a FAILURE (R17). Names are validated [A-Za-z0-9._-]
     # (no spaces) and `set -f` is on, so word-splitting $created is safe.
-    local total=0 ok=0 name cwd failed_names='' created=''
-    while IFS=$'\t' read -r name cwd; do
+    local total=0 ok=0 name cwd sid failed_names='' created=''
+    while IFS=$'\t' read -r name cwd sid; do
       [ -n "$name" ] || continue
       total=$((total+1))
-      if restore_session "$newid" "$name" "$cwd"; then created="$created $name"; else failed_names="$failed_names $name(norestore)"; fi
+      if restore_session "$newid" "$name" "$cwd" "$sid"; then created="$created $name"; else failed_names="$failed_names $name(norestore)"; fi
     done <<< "$manifest"
     [ -n "$created" ] && sleep "$DEVBOX_RESUME_SETTLE"      # one bounded settle for ALL sessions, not per-session
     for name in $created; do
@@ -378,7 +395,7 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
   local manifest rc
   manifest="$(printf '%s' "$TICKET_BODY" | parse_manifest)"; rc=$?
   if [ "$rc" != 0 ]; then
-    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — $( [ "$rc" = 3 ] && echo "no session manifest found" || echo "malformed session manifest" ): expected \`session <name> <cwd>\` lines between $MANIFEST_BEGIN and $MANIFEST_END (names [A-Za-z0-9._-], cwd an absolute path with no spaces/metacharacters, ≤$DEVBOX_MAX_SESSIONS sessions)."
+    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — $( [ "$rc" = 3 ] && echo "no session manifest found" || echo "malformed session manifest" ): expected \`session <name> <cwd> [<sid>]\` lines between $MANIFEST_BEGIN and $MANIFEST_END (names [A-Za-z0-9._-], cwd an absolute path with no spaces/metacharacters, optional session-id [A-Za-z0-9-], ≤$DEVBOX_MAX_SESSIONS sessions)."
     return
   fi
   local oldid; oldid="$(podman container inspect "$wl" -f '{{.Id}}' 2>/dev/null || echo '')"

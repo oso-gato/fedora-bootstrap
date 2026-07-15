@@ -60,7 +60,8 @@ case "$a" in
   *" test -d "*)        [ "${SCEN_CWD_OK:-yes}" = yes ] && exit 0 || exit 1 ;;
   *"tmux new-session"*) [ "${SCEN_TMUX_NEW_OK:-yes}" = yes ] && exit 0 || exit 1 ;;
   *"tmux list-panes"*)  echo "${SCEN_PANE:-claude}" ;;                            # bare shell name ⇒ idle
-  *"tmux "*)            exit 0 ;;                                                 # kill-session / send-keys
+  *"tmux send-keys"*)   printf '%s\n' "$a" >> "${RESUME_LOG:-/dev/null}"; exit 0 ;; # capture the resume command
+  *"tmux "*)            exit 0 ;;                                                 # kill-session etc.
   *"is-active"*)        [ "${SCEN_POLLER_ACTIVE:-yes}" = yes ] && exit 0 || exit 1 ;;  # poller active?
   *"journalctl"*)       [ -n "${SCEN_POLLER_LOG-x}" ] && echo "${SCEN_POLLER_LOG:-sweep}" ; exit 0 ;;
   *) exit 0 ;;
@@ -71,13 +72,15 @@ chmod +x "$BIN/gh" "$BIN/systemctl" "$BIN/podman"
 pass=0; fail=0
 newhome(){ HOME="$ROOT/home-$RANDOM$RANDOM"; export HOME; mkdir -p "$HOME";
   export GH_LOG="$HOME/gh.log";              : > "$GH_LOG"
-  export SYSTEMCTL_LOG="$HOME/systemctl.log"; : > "$SYSTEMCTL_LOG"; }
+  export SYSTEMCTL_LOG="$HOME/systemctl.log"; : > "$SYSTEMCTL_LOG"
+  export RESUME_LOG="$HOME/resume.log";       : > "$RESUME_LOG"; }
 tick(){ PATH="$BIN:$PATH" DEVBOX_RESUME_SETTLE=2 DEVBOX_POLLER_WINDOW=2 bash "$WATCH" >/dev/null 2>&1 || true; }
 seed_marker(){ mkdir -p "$HOME/.local/state/host-agent"; printf '%s\n%b\n' "$1" "$2" > "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild"; }
 ok(){ pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 no(){ fail=$((fail+1)); printf '  FAIL %s\n       %s\n       gh:  %s\n       sys: %s\n' "$1" "$2" "$(tr '\n' '|' <"$GH_LOG")" "$(tr '\n' '|' <"$SYSTEMCTL_LOG")"; }
 has(){ grep -qF "$1" "$GH_LOG"; }
 sys_has(){ grep -qF "$1" "$SYSTEMCTL_LOG"; }
+resume_has(){ grep -qF -- "$1" "$RESUME_LOG"; }
 
 MF=$'host-op: rebuild-devbox fedora-dev\ntear down + resurrect\n%%DEVBOX-MANIFEST-BEGIN%%\nsession dev134 /home/core/repos/a\n%%DEVBOX-MANIFEST-END%%'
 
@@ -112,6 +115,20 @@ seed_marker OLDID 'dev134\t/home/core/repos/a'
 SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweeping tick
 if has 'host-agent: DONE' && has 'RESTORED+RESUMED 1/1' && has 'poller SWEEPING' && has 'issue close'; then ok "all-green → DONE (killed + restored + resumed + sweeping)"
 else no "all-green DONE" "expected DONE + RESTORED+RESUMED 1/1 + poller SWEEPING + close"; fi
+
+echo "== RESUME (D4/#191): a v1 manifest (no sid) resumes cwd-scoped with 'claude --continue' =="
+newhome; export FAKE_BODY="$MF"
+seed_marker OLDID 'dev134\t/home/core/repos/a'
+SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweep tick
+if resume_has 'claude --continue' && ! resume_has '--resume'; then ok "no sid → resumed with 'claude --continue' (v1 backward-compat)"
+else no "v1 resume" "expected send-keys 'claude --continue', never '--resume' — got: $(tr '\n' '|' <"$RESUME_LOG")"; fi
+
+echo "== RESUME (D4/#191): a v2 manifest (with sid) resumes THAT session by id — 'claude --resume <sid>' =="
+newhome; export FAKE_BODY="$MF"
+seed_marker OLDID 'dev134\t/home/core/repos/a\t0deceee8-34ab-4e41-be19-ba4210469eb6'
+SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweep tick
+if resume_has 'claude --resume 0deceee8-34ab-4e41-be19-ba4210469eb6' && ! resume_has 'claude --continue'; then ok "sid present → resumed 'claude --resume <sid>' (multi-tenant by-id, not --continue)"
+else no "v2 resume-by-id" "expected send-keys 'claude --resume <sid>', never '--continue' — got: $(tr '\n' '|' <"$RESUME_LOG")"; fi
 
 echo "== BITE: a GHOST (old container survives the kill) ⇒ FAILED, not success =="
 newhome; export FAKE_BODY="$MF"
