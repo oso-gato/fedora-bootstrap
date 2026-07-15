@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.64 (R9 FLEET HALT reaches the host live-gate watcher: live-gate-watch.sh now reads the maintainer-bound `halt` label on the FLEET HALT CONTROL issue (#128, via new fleet-halt.sh) at the TOP of every tick and goes observe-only while it stands — building/posting nothing; maintainer-bound both directions from the label timeline (App-applied is inert), fails closed toward stopping.)
+# Version: 1.2.65 (rebuild-devbox RESUME-BY-ID: the session manifest gains an optional 4th field, a claude-code session-id (a valid UUID); when present the host resumes THAT session with `claude --resume <sid>` instead of the cwd-scoped `claude --continue`, so multi-tenant restore no longer collapses N sessions sharing one cwd to the most-recent one. Backward-compatible: a 3-field v1 manifest still resumes with --continue. Strict-UUID validation also re-closes the space-in-cwd hole. fedora-dev D4/#191.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
