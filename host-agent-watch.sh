@@ -31,7 +31,8 @@
 #     2026-07-13) → REBUILD via the SANCTIONED path (workload-rebuild@ = container-refresh.sh under
 #     FORCE_REBUILD, so R10's health-gate + digest auto-rollback still apply — not bypassed, not
 #     duplicated) → VERIFY the kill BY CONTAINER ID (never by name — the reused name is what hid the
-#     ghost) → RESTORE + RESUME every manifest session (tmux at its cwd + the host-fixed resume cmd) →
+#     ghost) → RESTORE + RESUME every manifest session (tmux at its cwd + the validated resume cmd:
+#     the host-fixed default, or the manifest's strict-UUID sid resumed by id — never eval'd) →
 #     VERIFY the entrypoint-supervised poller is OBSERVABLY sweeping → REPORT killed/restored/resumed/
 #     could-not. Fail-safe: any unverified kill, unhealthy rebuild, idle-not-resuming session, or
 #     silent poller SURFACES as FAILED (silence never means restored). Because it kills active sessions,
@@ -135,7 +136,7 @@ parse_manifest(){
       if ($1 != "session" || (NF != 3 && NF != 4))           { rc=2; exit }   # session <name> <cwd> [<sid>]
       if ($2 !~ /^[A-Za-z0-9._-]+$/ || length($2) > 64)      { rc=2; exit }   # session name allowlist
       if ($3 !~ /^\/[A-Za-z0-9._\/@%+-]*$/ || length($3) > 256) { rc=2; exit }   # absolute path, no spaces/metacharacters
-      if (NF == 4 && !($4 ~ /^[0-9a-fA-F]+-[0-9a-fA-F]+-[0-9a-fA-F]+-[0-9a-fA-F]+-[0-9a-fA-F]+$/ && length($4) == 36)) { rc=2; exit }   # optional session-id: a real UUID (8-4-4-4-12 hex; what --session-id requires). Strict-UUID also RE-CLOSES the space-in-cwd hole: a fumbled `cwd with-a-space` splits to a 4th field that is not a UUID ⇒ rejected.
+      if (NF == 4 && $4 !~ /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/) { rc=2; exit }   # optional session-id: a real UUID (fixed-width 8-4-4-4-12 hex; exactly what --session-id requires). Strict-UUID also RE-CLOSES the space-in-cwd hole: a fumbled `cwd with-a-space` splits to a 4th field that is not a UUID ⇒ rejected.
       if (++n > MAX)                                         { rc=2; exit }
       if (NF == 4) printf "%s\t%s\t%s\n", $2, $3, $4         # v2: name<TAB>cwd<TAB>sid (resume by id)
       else         printf "%s\t%s\n",     $2, $3             # v1: name<TAB>cwd (cwd-scoped --continue)
@@ -187,6 +188,7 @@ if [ "${1:-}" = "--selftest" ]; then
   cm "sid not uuid" $'%%DEVBOX-MANIFEST-BEGIN%%\nsession a /r/a not-a-uuid\n%%DEVBOX-MANIFEST-END%%'                      ''                         2
   cm "bad sid meta" $'%%DEVBOX-MANIFEST-BEGIN%%\nsession a /r/a bad;rm\n%%DEVBOX-MANIFEST-END%%'                          ''                         2
   cm "five fields"  $'%%DEVBOX-MANIFEST-BEGIN%%\nsession a /r/a 0deceee8-34ab-4e41-be19-ba4210469eb6 extra\n%%DEVBOX-MANIFEST-END%%' ''             2
+  cm "loose uuid"   $'%%DEVBOX-MANIFEST-BEGIN%%\nsession a /r/a 123456789-abc-4444-5555-123456789012\n%%DEVBOX-MANIFEST-END%%'        ''             2   # length-36, 5 hex groups, but NOT 8-4-4-4-12 ⇒ the fixed-width regex REJECTS (the old loose `+`-group regex wrongly accepted it)
   # kill_verified: <desc> <oldid> <newid> <gone|alive> <expected verdict>
   ckv(){ local g; g="$(kill_verified "$2" "$3" "$4")"; [ "$g" = "$5" ] && echo "ok: kv $1" || { echo "FAIL: kv $1 — got '$g' want '$5'"; f=1; }; }
   ckv "clean kill"  AAAA BBBB gone  ok
@@ -268,14 +270,16 @@ is_authorized_author(){ # <login>
 pexec(){ podman exec --user 1000:1000 "$@"; }
 
 # restore_session: recreate ONE tmux session at its recorded cwd inside the fresh box, then RESUME it by
-# typing the host-fixed DEVBOX_RESUME_CMD (never manifest content). Idempotent (drops a stale same-name
+# typing the validated resume command — the host-fixed DEVBOX_RESUME_CMD default, or, when the manifest
+# carried a session-id, the strict-UUID `claude --resume <sid>` (parse_manifest-validated, literal-only,
+# never eval'd — see below). Idempotent (drops a stale same-name
 # session first). rc 0 = created + resume dispatched; 1 = could-not (surfaces, never a silent success).
 # $1 is the VERIFIED CONTAINER ID (never the name — the reused name is what hid the ghost; R17 req 6).
 restore_session(){ # <cid> <name> <cwd> [<sid>]
   local cid="$1" name="$2" cwd="$3" sid="${4:-}"
   # RESUME COMMAND: by-id when the manifest carried a sid (multi-tenant; resumes THAT session even when
   # sessions share a cwd), else the host-fixed cwd-scoped default. The sid is parse_manifest-validated
-  # UUID grammar ([A-Za-z0-9-]) so it is safe as a literal send-keys keystroke — still never eval'd.
+  # to a strict UUID (hex-only, 8-4-4-4-12) so it is safe as a literal send-keys keystroke — never eval'd.
   local resume_cmd; if [ -n "$sid" ]; then resume_cmd="claude --resume $sid"; else resume_cmd="$DEVBOX_RESUME_CMD"; fi
   pexec "$cid" test -d "$cwd" 2>/dev/null || { log "restore: cwd '$cwd' absent in $cid — cannot restore '$name'"; return 1; }
   pexec "$cid" tmux kill-session -t "$name" >/dev/null 2>&1 || true
@@ -395,7 +399,7 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
   local manifest rc
   manifest="$(printf '%s' "$TICKET_BODY" | parse_manifest)"; rc=$?
   if [ "$rc" != 0 ]; then
-    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — $( [ "$rc" = 3 ] && echo "no session manifest found" || echo "malformed session manifest" ): expected \`session <name> <cwd> [<sid>]\` lines between $MANIFEST_BEGIN and $MANIFEST_END (names [A-Za-z0-9._-], cwd an absolute path with no spaces/metacharacters, optional session-id [A-Za-z0-9-], ≤$DEVBOX_MAX_SESSIONS sessions)."
+    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — $( [ "$rc" = 3 ] && echo "no session manifest found" || echo "malformed session manifest" ): expected \`session <name> <cwd> [<sid>]\` lines between $MANIFEST_BEGIN and $MANIFEST_END (names [A-Za-z0-9._-], cwd an absolute path with no spaces/metacharacters, optional session-id a UUID 8-4-4-4-12 hex, ≤$DEVBOX_MAX_SESSIONS sessions)."
     return
   fi
   local oldid; oldid="$(podman container inspect "$wl" -f '{{.Id}}' 2>/dev/null || echo '')"
