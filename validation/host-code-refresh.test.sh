@@ -95,8 +95,9 @@ run_absorber c1
   && [ "$(git -C "$C_WORK" rev-parse HEAD)" = "$want_sha" ] \
   && grep -q 'ADVANCED one' "$A_BIN/throwaway-sweep.sh" \
   && hcr_same "$A_BIN/host-agent-watch.sh" "$C_WORK/host-agent-watch.sh" \
-  && grep -q 'SYSTEMCTL --user daemon-reload' "$A_SCLOG"; } \
-  && ok "ff-applied, merged content live, applied.sha == merged sha, daemon-reload issued" \
+  && grep -q 'SYSTEMCTL --user daemon-reload' "$A_SCLOG" \
+  && grep -qE '^[0-9]+ OK applied' "$A_STATE/status"; } \
+  && ok "ff-applied, merged content live, applied.sha == merged sha, daemon-reload issued, heartbeat OK" \
   || bad "advanced+clean" "rc=$RC applied=$(cat "$A_STATE/applied.sha" 2>/dev/null) want=$want_sha; out: $(tr '\n' '|' <"$A_OUT")"
 
 echo "== CASE 2: dirty clone → REFUSED, untouched, NO applied.sha =="
@@ -133,9 +134,10 @@ run_absorber c4
 { [ "$RC" = 0 ] \
   && [ "$(cat "$A_STATE/applied.sha")" = "$head_sha" ] \
   && [ ! -s "$A_SCLOG" ] \
-  && [ ! -s "$A_OUT" ]; } \
-  && ok "up-to-date is a silent no-op (systemctl untouched, applied.sha unchanged, no output)" \
-  || bad "up-to-date" "rc=$RC sclog=$(wc -c <"$A_SCLOG") out=$(tr '\n' '|' <"$A_OUT")"
+  && [ ! -s "$A_OUT" ] \
+  && grep -qE '^[0-9]+ OK uptodate' "$A_STATE/status"; } \
+  && ok "up-to-date is a silent no-op (systemctl untouched, applied.sha unchanged, no stdout) — heartbeat OK uptodate (file, not output)" \
+  || bad "up-to-date" "rc=$RC sclog=$(wc -c <"$A_SCLOG") out=$(tr '\n' '|' <"$A_OUT") status='$(cat "$A_STATE/status" 2>/dev/null)'"
 
 echo "== CASE 5: readback MISMATCH → FAIL-CLOSED (no applied.sha, loud log, non-zero exit) =="
 # MUTATION NOTE: this case is the guard on the live read-back. The `install` shim below copies every
@@ -159,6 +161,37 @@ run_absorber c5 "$MBIN:"
   && grep -qi 'READBACK' "$A_OUT"; } \
   && ok "readback mismatch fails closed: non-zero exit, NO applied.sha, loud READBACK log" \
   || bad "readback-mismatch" "rc=$RC applied?=$( [ -f "$A_STATE/applied.sha" ] && echo yes||echo no); out: $(tr '\n' '|' <"$A_OUT")"
+
+echo "== CASE 6: control clone NOT writable → BLOCKED heartbeat, no-op, no applied.sha (the incident) =="
+# The --user absorber cannot `git merge` into a root-owned clone; without setup-host.sh's chown it
+# fail-closes. Previously that was a silent journald warn (the host sat on hand-applied code for days,
+# 2026-07-17); now it records a BLOCKED heartbeat verify.sh reads. Simulate by removing the owner's
+# write bit on the clone dir, then RESTORE it before the EXIT trap so cleanup succeeds.
+build_repo c6
+chmod u-w "$C_WORK"
+run_absorber c6
+chmod u+w "$C_WORK"
+{ [ "$RC" = 0 ] \
+  && [ ! -f "$A_STATE/applied.sha" ] \
+  && grep -qE '^[0-9]+ BLOCKED clone-not-writable' "$A_STATE/status"; } \
+  && ok "not-writable clone → BLOCKED heartbeat (loud + off-box-visible), no-op, no applied.sha" \
+  || bad "not-writable" "rc=$RC applied?=$( [ -f "$A_STATE/applied.sha" ] && echo yes||echo no) status='$(cat "$A_STATE/status" 2>/dev/null)'"
+
+echo "== MUTATION: neutralize the BLOCKED-clone-not-writable annotation → heartbeat loses the reason =="
+# Proves the HCR_OUTCOME annotation is what carries the reason into the heartbeat (not incidental). The
+# mutant still no-ops (the writability GUARD is untouched) but its heartbeat no longer says WHY.
+MUT="$ROOT/hcr-mut.sh"
+sed 's/    HCR_OUTCOME="BLOCKED clone-not-writable.*/    :/' "$ABSORBER" > "$MUT"
+if cmp -s "$ABSORBER" "$MUT"; then bad "mutation vacuous" "sed changed nothing"; else
+  build_repo cm; chmod u-w "$C_WORK"
+  MST="$ROOT/cm-inst/state"; mkdir -p "$MST"
+  HCR_CLONE="$C_WORK" HCR_BIN_DIR="$ROOT/cm-inst/bin" HCR_UNIT_DIR="$ROOT/cm-inst/units" HCR_STATE_DIR="$MST" \
+    SYSTEMCTL_LOG="$ROOT/cm.sclog" PATH="$BIN:$PATH" bash "$MUT" >/dev/null 2>&1
+  chmod u+w "$C_WORK"
+  if grep -qE '^[0-9]+ BLOCKED clone-not-writable' "$MST/status" 2>/dev/null; then
+    bad "mutation" "mutant STILL wrote 'BLOCKED clone-not-writable' — the annotation is not the source"
+  else ok "mutation: without the annotation the heartbeat drops 'BLOCKED clone-not-writable' — the annotation IS the reason"; fi
+fi
 
 echo
 echo "host-code-refresh: $pass passed, $fail failed"

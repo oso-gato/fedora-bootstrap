@@ -484,4 +484,28 @@ systemctl start "user@${uid}.service"
 for _ in $(seq 1 100); do [ -S "/run/user/${uid}/bus" ] && break; sleep 0.1; done
 [ -S "/run/user/${uid}/bus" ] || { echo "FATAL: user D-Bus (/run/user/${uid}/bus) never came up for '$U'." >&2; exit 1; }
 
+# ---- CONTROL CLONE OWNERSHIP (the F16 self-arming absorber's one root bootstrap step) ---------------
+# The "merged → live" absorber (host-code-refresh, a systemd --user unit run as $U) fast-forwards THIS
+# control clone and re-installs the merged host code. It CANNOT do that on a root-owned clone (a --user
+# process can't `git merge` into root-owned .git), so without this step the absorber is a PERMANENT
+# fail-closed no-op — the "merged host code silently never went live" gap (incident 2026-07-17: the
+# running host had never been bootstrapped for it, so a human hand-copied every merged host change).
+# The absorber becomes the SOLE pull mechanism (as $U); root no longer manually `git pull`s the clone
+# (a safe.directory entry keeps a root `git` command in the clone from erroring on the new ownership,
+# but routine upgrades now flow through the absorber — see UPGRADING.md). Idempotent + reversible
+# (`chown -R root:root` restores the old model). Fail-LOUD, never fatal: a chown failure degrades to the
+# prior manual-apply model rather than aborting the whole bootstrap.
+if [ -d "$HERE/.git" ]; then
+    if chown -R "$U:$U" "$HERE"; then
+        git config --global --add safe.directory "$HERE" 2>/dev/null || true
+        echo ">> control clone $HERE is now $U-writable — the host self-refresh absorber can auto-apply merged host code."
+    else
+        echo ">> WARN: could not chown control clone $HERE to $U — the host self-refresh absorber will stay a" \
+             "fail-closed no-op (host stays on hand-applied code). Fix: 'chown -R $U:$U $HERE' as root." >&2
+    fi
+else
+    echo ">> NOTE: $HERE is not a git clone — the host self-refresh absorber has nothing to fast-forward" \
+         "(run setup.sh from the /opt/fedora-bootstrap control clone to enable auto-apply)." >&2
+fi
+
 echo ">> SYSTEM layer complete. Hand off to '$U' for the rootless layer (setup-user.sh)."
