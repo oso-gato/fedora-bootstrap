@@ -101,7 +101,30 @@ DEVBOX_MAX_SESSIONS="${DEVBOX_MAX_SESSIONS:-32}"
 DEVBOX_RESUME_CMD="${DEVBOX_RESUME_CMD:-claude --continue}"     # typed into each restored session (in its cwd)
 DEVBOX_POLLER_UNIT="${DEVBOX_POLLER_UNIT:-poller.service}"      # entrypoint-supervised service to verify sweeping
 DEVBOX_POLLER_WINDOW="${DEVBOX_POLLER_WINDOW:-120}"            # s: poller must LOG within this bound (sweeping, not a PID)
-DEVBOX_RESUME_SETTLE="${DEVBOX_RESUME_SETTLE:-20}"            # s: a restored session must go non-idle within this bound
+DEVBOX_RESUME_SETTLE="${DEVBOX_RESUME_SETTLE:-20}"            # s: a restored session's TUI settles this long before the first nudge
+# --- RESUME-TO-ACTIVE (R17 option-b, 2026-07-17) — a resumed session must come up ACTIVELY CONTINUING its
+#     prior task, not merely present. Empirically established (fedora-dev, tmux + the real claude TUI):
+#       * `claude --resume <sid>` restores context but comes up IDLE-at-the-input — a positional prompt only
+#         PRE-FILLS, it never submits. So "restored" genuinely != "working".
+#       * SUBMITTING a nudge DOES make it continue — typed as literal text then a DISCRETE `send-keys Enter`
+#         (a separate key event; an inline `\r` in one write is swallowed by the TUI's bracketed-paste).
+#       * A live session's transcript does NOT flush to disk within minutes, so transcript growth is NOT a
+#         usable liveness signal; the reliable in-tick proof is a FILESYSTEM HANDSHAKE (below).
+#     So the executor (1) waits for the freshly-rebuilt box to actually be able to run claude before launching
+#     — else the launch falls back to a bare shell (the 0/N-idle race that resumed 0/2 on the first real
+#     rebuild), and (2) submits a nudge that asks the session to TOUCH a per-sid marker as its first act, then
+#     polls that marker (same home volume, base-visible) to CONFIRM the session received+submitted+executed —
+#     genuine progress, not just a process being up. %MARKER% is substituted per session; the manifest never
+#     supplies executable content (the nudge is host-fixed).
+DEVBOX_RESUME_MARKER_DIR="${DEVBOX_RESUME_MARKER_DIR:-/home/core/.local/state/rebuild-resumed}"   # per-sid liveness markers the resumed session touches
+DEVBOX_RESUME_NUDGE="${DEVBOX_RESUME_NUDGE:-[auto-resume] Your dev box was rebuilt and this session was restored. FIRST, acknowledge you are active by running exactly:  touch %MARKER%  — then review your recent messages and CONTINUE the task you were working on, exactly where you left off.}"
+DEVBOX_BOX_READY_WINDOW="${DEVBOX_BOX_READY_WINDOW:-900}"   # s: DEADLINE for the fresh box's claudebox to become assembled+enterable (checked ACROSS ticks, not blocked in one) before we give up
+DEVBOX_WORK_WINDOW="${DEVBOX_WORK_WINDOW:-120}"            # s: after nudging, a session must touch its marker within this to count ACTIVELY WORKING
+DEVBOX_NUDGE_TRIES="${DEVBOX_NUDGE_TRIES:-5}"             # (re)submit the nudge up to this many times across the work window (TUI-readiness timing)
+DEVBOX_WORK_POLL="${DEVBOX_WORK_POLL:-5}"                 # s: marker-poll interval within the work window (lowered by the dry-run test)
+DEVBOX_ASSEMBLED_MARKER="${DEVBOX_ASSEMBLED_MARKER:-/home/core/.local/state/claudebox/.assembled}"          # box-ready signal the `claude` wrapper itself gates on
+DEVBOX_ASSEMBLE_FAILED_MARKER="${DEVBOX_ASSEMBLE_FAILED_MARKER:-/home/core/.local/state/claudebox/.assemble-failed}"  # a half-assembled box (overrides a stale .assembled)
+DEVBOX_BOX_NAME="${DEVBOX_BOX_NAME:-claudebox}"           # the in-container distrobox `claude` runs inside (for the enterable probe)
 TICKET_BODY=''   # set per-ticket in the discovery loop; rebuild-devbox parses its manifest from it
 
 log(){ echo "[$(date -u +%FT%TZ 2>/dev/null || date)] host-agent: $*" >&2; }   # → journald (no file)
@@ -290,6 +313,42 @@ restore_session(){ # <cid> <name> <cwd> [<sid>]
   return 0
 }
 
+# box_ready: is the fresh container's in-container claudebox ASSEMBLED + ENTERABLE right now? A just-recreated
+# dev box first-boot ASSEMBLES its claudebox (distrobox assemble — MINUTES); type `claude` before that
+# finishes and the wrapper diverts to `claudebox-rebuild --watch-only` / tails-or-runs the assemble — never a
+# running claude, so the pane falls back to a BARE SHELL and every session reads IDLE (the 0/N-idle race that
+# made the first real rebuild resume 0/2). SINGLE-SHOT by design: the decoupled state machine re-checks it
+# ACROSS ticks (the do_rebuild_devbox FINISH phase returns-until-ready), so a minutes-long assemble never
+# blocks one 300s-capped tick. Ready = `.assembled` present, `.assemble-failed` absent (a half-assembled box
+# overrides a stale marker), and the box actually enterable (a bounded `distrobox enter -- true`, the
+# entrypoint's own box_ready idiom). $1 = VERIFIED CONTAINER ID. rc 0 = ready.
+box_ready(){ # <cid>
+  local cid="$1"
+  pexec "$cid" test -e "$DEVBOX_ASSEMBLED_MARKER" 2>/dev/null \
+    && ! pexec "$cid" test -e "$DEVBOX_ASSEMBLE_FAILED_MARKER" 2>/dev/null \
+    && pexec "$cid" timeout 15 distrobox enter "$DEVBOX_BOX_NAME" -- true >/dev/null 2>&1
+}
+
+# nudge_session: SUBMIT the auto-continue nudge into a resumed session's claude TUI so it picks its task back
+# up. `-l` types the literal nudge (with %MARKER% resolved to this session's per-sid liveness marker), then a
+# DISCRETE `send-keys Enter` submits it (a separate key event — an inline return is swallowed by the TUI's
+# bracketed paste). Best-effort each call; the caller (re)submits across the work window for TUI-readiness
+# timing. $1=cid $2=name $3=marker-path.
+nudge_session(){ # <cid> <name> <marker>
+  local cid="$1" name="$2" marker="$3" text="${DEVBOX_RESUME_NUDGE//%MARKER%/$3}"
+  pexec "$cid" tmux send-keys -t "$name" -l "$text" >/dev/null 2>&1 || return 1
+  pexec "$cid" tmux send-keys -t "$name" Enter >/dev/null 2>&1 || return 1
+  return 0
+}
+
+# session_working: has the resumed session CONFIRMED it is actively continuing? The reliable in-tick proof is
+# the FILESYSTEM HANDSHAKE — the nudge asked it to `touch` its per-sid marker as its first act; the marker
+# lands on the shared home volume, visible to this base-level probe. Present ⇒ the session received, submitted
+# AND executed the nudge (genuine progress). $1=cid $2=marker. rc 0 = confirmed working.
+session_working(){ # <cid> <marker>
+  pexec "$1" test -e "$2" 2>/dev/null
+}
+
 # session_active: a RESUMED session must be actively running its task — a pane still at a bare login
 # shell is IDLE = a FAILURE (R17). ONE check; the caller settles ONCE for ALL sessions, so total FINISH
 # time is bounded by a SINGLE DEVBOX_RESUME_SETTLE, not N×settle (an adversarial N-idle manifest can't
@@ -362,19 +421,71 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
       printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"; return
     }
 
-    # RESTORE every manifest session (create tmux at its cwd + dispatch the resume), BY VERIFIED
-    # CONTAINER ID ($newid — never the name; R17 req 6); then settle ONCE and verify each is actively
-    # resuming — a restored-but-idle session is a FAILURE (R17). Names are validated [A-Za-z0-9._-]
-    # (no spaces) and `set -f` is on, so word-splitting $created is safe.
-    local total=0 ok=0 name cwd sid failed_names='' created=''
+    # BOX-READY GATE (resume-to-active): the recreated box first-boot ASSEMBLES its claudebox (minutes);
+    # restoring before it can run claude is the 0/N-idle race (the launch falls back to a bare shell). Checked
+    # SINGLE-SHOT and re-tried ACROSS ticks — RETURN (ticket + .rebuild marker stay) until ready, so no one
+    # 300s tick blocks. Bounded by DEVBOX_BOX_READY_WINDOW measured from the marker's OWN mtime: a box that
+    # NEVER assembles surfaces FAILED, it does not loop forever.
+    if ! box_ready "$newid"; then
+      local rbage; rbage=$(( $(date +%s 2>/dev/null || echo 0) - $(stat -c %Y "$rb" 2>/dev/null || echo 0) ))
+      if [ "$rbage" -gt "$DEVBOX_BOX_READY_WINDOW" ]; then
+        st=failed
+        detail="rebuild-devbox '$wl': box recreated (${oldid:0:12}→${newid:0:12}) but its claudebox never became ready within ${DEVBOX_BOX_READY_WINDOW}s — NO sessions restored (they would fall back to idle shells). Re-file to retry."
+        printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"; return
+      fi
+      log "$ORG/$repo#$issue: box recreated (${newid:0:12}) but its claudebox not ready yet (${rbage}s elapsed) — will restore next tick"; return
+    fi
+
+    # RESTORE every manifest session (create tmux at its cwd + dispatch `claude --resume <sid>`), BY VERIFIED
+    # CONTAINER ID ($newid — never the name; R17 req 6). Track name+sid packed as 'name:sid' (name is
+    # [A-Za-z0-9._-] and the sid a UUID — neither holds ':', so the split is clean; empty sid ⇒ 'name:').
+    # `set -f` is on, so word-splitting $created on spaces is safe.
+    local total=0 ok=0 up=0 name cwd sid marker failed_names='' created=''
+    pexec "$newid" mkdir -p "$DEVBOX_RESUME_MARKER_DIR" >/dev/null 2>&1 || true
     while IFS=$'\t' read -r name cwd sid; do
       [ -n "$name" ] || continue
       total=$((total+1))
-      if restore_session "$newid" "$name" "$cwd" "$sid"; then created="$created $name"; else failed_names="$failed_names $name(norestore)"; fi
+      pexec "$newid" rm -f "$DEVBOX_RESUME_MARKER_DIR/${sid:-$name}" >/dev/null 2>&1 || true   # clear a stale handshake marker so it cannot false-confirm
+      if restore_session "$newid" "$name" "$cwd" "$sid"; then created="$created $name:${sid:-}"; else failed_names="$failed_names $name(norestore)"; fi
     done <<< "$manifest"
-    [ -n "$created" ] && sleep "$DEVBOX_RESUME_SETTLE"      # one bounded settle for ALL sessions, not per-session
-    for name in $created; do
-      if session_active "$newid" "$name"; then ok=$((ok+1)); else failed_names="$failed_names $name(idle)"; fi
+    [ -n "$created" ] && sleep "$DEVBOX_RESUME_SETTLE"      # one bounded settle for ALL TUIs to come up before the first nudge
+
+    # RESUME-TO-ACTIVE: SUBMIT the continue-nudge to each restored session and CONFIRM it actually resumed
+    # working via the filesystem handshake (the per-sid marker it was asked to touch). Bounded + SHARED across
+    # all sessions (ONE work window, not N×) so the FINISH tick stays under the 300s cap; (re)nudge up to
+    # DEVBOX_NUDGE_TRIES times to cover TUI-readiness timing (a nudge to a not-yet-ready TUI is lost).
+    local -A worked=()
+    local poll="$DEVBOX_WORK_POLL"; [ "$poll" -ge 1 ] || poll=1
+    local slice=$(( DEVBOX_WORK_WINDOW / DEVBOX_NUDGE_TRIES )); [ "$slice" -ge "$poll" ] || slice=$poll
+    local t j entry
+    for ((t=1; t<=DEVBOX_NUDGE_TRIES; t++)); do
+      local remaining=0
+      for entry in $created; do
+        name="${entry%%:*}"; sid="${entry#*:}"; marker="$DEVBOX_RESUME_MARKER_DIR/${sid:-$name}"
+        [ -n "${worked[$name]:-}" ] && continue
+        remaining=1; nudge_session "$newid" "$name" "$marker"
+      done
+      [ "$remaining" = 0 ] && break
+      for ((j=0; j<slice; j+=poll)); do
+        sleep "$poll"
+        local allworked=1
+        for entry in $created; do
+          name="${entry%%:*}"; sid="${entry#*:}"; marker="$DEVBOX_RESUME_MARKER_DIR/${sid:-$name}"
+          [ -n "${worked[$name]:-}" ] && continue
+          if session_working "$newid" "$marker"; then worked[$name]=1; else allworked=0; fi
+        done
+        [ "$allworked" = 1 ] && break 2
+      done
+    done
+
+    # TALLY (honest, three-way): handshake-confirmed = ACTIVELY CONTINUING; of the rest, distinguish a
+    # claude that is UP but did not confirm (resumed + nudged, activity unproven — NOT claimed working) from a
+    # bare-shell IDLE failure (claude never launched). NFR: no silent degradation — each is named.
+    for entry in $created; do
+      name="${entry%%:*}"
+      if [ -n "${worked[$name]:-}" ]; then ok=$((ok+1))
+      elif session_active "$newid" "$name"; then up=$((up+1)); failed_names="$failed_names $name(up-unconfirmed)"
+      else failed_names="$failed_names $name(idle)"; fi
     done
 
     # VERIFY the entrypoint-supervised poller is OBSERVABLY sweeping in the NEW container (by $newid).
@@ -382,10 +493,11 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
 
     if [ "$ok" = "$total" ] && [ "$poller" = sweeping ]; then
       st=done
-      detail="rebuild-devbox '$wl' COMPLETE — KILLED old ${oldid:0:12} (zero survivors), rebuilt to ${newid:0:12} (health-gated), RESTORED+RESUMED $ok/$total sessions, poller SWEEPING in the new container."
+      detail="rebuild-devbox '$wl' COMPLETE — KILLED old ${oldid:0:12} (zero survivors), rebuilt to ${newid:0:12} (health-gated), RESTORED + RESUMED + ACTIVELY CONTINUING $ok/$total sessions (handshake-confirmed), poller SWEEPING in the new container."
     else
+      local upnote=''; [ "$up" -gt 0 ] && upnote=", claude-up-but-unconfirmed $up"
       st=failed
-      detail="rebuild-devbox '$wl' PARTIAL — killed ${oldid:0:12}→${newid:0:12}, but resumed only $ok/$total sessions${failed_names:+ (idle/failed:$failed_names)}, poller=$poller. Surfacing rather than claiming restored (R17); box is up on the new image."
+      detail="rebuild-devbox '$wl' PARTIAL — killed ${oldid:0:12}→${newid:0:12}; actively-continuing $ok/$total${upnote}${failed_names:+ (${failed_names# })}, poller=$poller. Surfacing rather than claiming restored (R17); box is up on the new image."
     fi
     printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"; return
   fi
