@@ -95,8 +95,9 @@ run_absorber c1
   && [ "$(git -C "$C_WORK" rev-parse HEAD)" = "$want_sha" ] \
   && grep -q 'ADVANCED one' "$A_BIN/throwaway-sweep.sh" \
   && hcr_same "$A_BIN/host-agent-watch.sh" "$C_WORK/host-agent-watch.sh" \
-  && grep -q 'SYSTEMCTL --user daemon-reload' "$A_SCLOG"; } \
-  && ok "ff-applied, merged content live, applied.sha == merged sha, daemon-reload issued" \
+  && grep -q 'SYSTEMCTL --user daemon-reload' "$A_SCLOG" \
+  && grep -qE '^[0-9]+ OK applied' "$A_STATE/status"; } \
+  && ok "ff-applied, merged content live, applied.sha == merged sha, daemon-reload issued, heartbeat OK" \
   || bad "advanced+clean" "rc=$RC applied=$(cat "$A_STATE/applied.sha" 2>/dev/null) want=$want_sha; out: $(tr '\n' '|' <"$A_OUT")"
 
 echo "== CASE 2: dirty clone → REFUSED, untouched, NO applied.sha =="
@@ -133,9 +134,10 @@ run_absorber c4
 { [ "$RC" = 0 ] \
   && [ "$(cat "$A_STATE/applied.sha")" = "$head_sha" ] \
   && [ ! -s "$A_SCLOG" ] \
-  && [ ! -s "$A_OUT" ]; } \
-  && ok "up-to-date is a silent no-op (systemctl untouched, applied.sha unchanged, no output)" \
-  || bad "up-to-date" "rc=$RC sclog=$(wc -c <"$A_SCLOG") out=$(tr '\n' '|' <"$A_OUT")"
+  && [ ! -s "$A_OUT" ] \
+  && grep -qE '^[0-9]+ OK uptodate' "$A_STATE/status"; } \
+  && ok "up-to-date is a silent no-op (systemctl untouched, applied.sha unchanged, no stdout) — heartbeat OK uptodate (file, not output)" \
+  || bad "up-to-date" "rc=$RC sclog=$(wc -c <"$A_SCLOG") out=$(tr '\n' '|' <"$A_OUT") status='$(cat "$A_STATE/status" 2>/dev/null)'"
 
 echo "== CASE 5: readback MISMATCH → FAIL-CLOSED (no applied.sha, loud log, non-zero exit) =="
 # MUTATION NOTE: this case is the guard on the live read-back. The `install` shim below copies every
@@ -159,6 +161,50 @@ run_absorber c5 "$MBIN:"
   && grep -qi 'READBACK' "$A_OUT"; } \
   && ok "readback mismatch fails closed: non-zero exit, NO applied.sha, loud READBACK log" \
   || bad "readback-mismatch" "rc=$RC applied?=$( [ -f "$A_STATE/applied.sha" ] && echo yes||echo no); out: $(tr '\n' '|' <"$A_OUT")"
+
+echo "== CASE 6: control clone NOT a git repo (not provisioned) → BLOCKED heartbeat, no-op, no applied.sha =="
+# The BLOCKED-heartbeat mechanism — the fix for the silent-no-op incident (2026-07-17: a blocked absorber
+# only `warn`'d to journald, so the host sat on hand-applied code for days). Exercised root-SAFELY via the
+# not-provisioned precondition (a nonexistent clone is not a repo for ANY uid — unlike the write bit, which
+# root bypasses, so the not-writable variant is guarded to non-root below).
+S6="$ROOT/c6-inst/state"; mkdir -p "$S6"
+HCR_CLONE="$ROOT/c6-nonexistent" HCR_BIN_DIR="$ROOT/c6-inst/bin" HCR_UNIT_DIR="$ROOT/c6-inst/units" \
+  HCR_STATE_DIR="$S6" SYSTEMCTL_LOG="$ROOT/c6.sclog" PATH="$BIN:$PATH" bash "$ABSORBER" > "$ROOT/c6.out" 2>&1
+rc6=$?
+{ [ "$rc6" = 0 ] \
+  && [ ! -f "$S6/applied.sha" ] \
+  && grep -qE '^[0-9]+ BLOCKED not-provisioned' "$S6/status"; } \
+  && ok "not-provisioned clone → BLOCKED heartbeat (loud + off-box-visible), no-op, no applied.sha" \
+  || bad "not-provisioned" "rc=$rc6 applied?=$( [ -f "$S6/applied.sha" ] && echo yes||echo no) status='$(cat "$S6/status" 2>/dev/null)'"
+
+echo "== CASE 7: control clone NOT writable → BLOCKED clone-not-writable (the incident; non-root only) =="
+# The exact incident shape. The write bit is meaningless to root (the live-gate builds as root), so this
+# runs only as a non-root user (the real absorber runs as `core`; the dev-box test run is as `core` too).
+if [ "$(id -u)" -ne 0 ]; then
+    build_repo c7; chmod u-w "$C_WORK"; run_absorber c7; chmod u+w "$C_WORK"
+    { [ "$RC" = 0 ] && [ ! -f "$A_STATE/applied.sha" ] \
+      && grep -qE '^[0-9]+ BLOCKED clone-not-writable' "$A_STATE/status"; } \
+      && ok "not-writable clone → BLOCKED clone-not-writable heartbeat, no-op, no applied.sha" \
+      || bad "not-writable" "rc=$RC status='$(cat "$A_STATE/status" 2>/dev/null)'"
+else
+    echo "  SKIP (running as root: root bypasses the write bit, so the not-writable precondition can't fire;"
+    echo "        the mechanism is covered by CASE 6 here + not-writable is exercised as core on the dev box + by verify.sh on the real host)"
+fi
+
+echo "== MUTATION: neutralize the BLOCKED not-provisioned annotation → heartbeat loses the reason =="
+# Proves the HCR_OUTCOME annotation carries the reason into the heartbeat (not incidental). The mutant still
+# no-ops (the not-provisioned GUARD is untouched) but its heartbeat no longer says WHY. No `cmp`/diffutils
+# (absent from the minimal live-gate image): vacuity is the annotation line's disappearance, via grep.
+MUT="$ROOT/hcr-mut.sh"
+sed 's/HCR_OUTCOME="BLOCKED not-provisioned.*/:/' "$ABSORBER" > "$MUT"
+if grep -q 'HCR_OUTCOME="BLOCKED not-provisioned' "$MUT"; then bad "mutation vacuous" "sed did not remove the annotation"; else
+  MST="$ROOT/cm-inst/state"; mkdir -p "$MST"
+  HCR_CLONE="$ROOT/cm-nonexistent" HCR_BIN_DIR="$ROOT/cm-inst/bin" HCR_UNIT_DIR="$ROOT/cm-inst/units" \
+    HCR_STATE_DIR="$MST" SYSTEMCTL_LOG="$ROOT/cm.sclog" PATH="$BIN:$PATH" bash "$MUT" >/dev/null 2>&1
+  if grep -qE '^[0-9]+ BLOCKED not-provisioned' "$MST/status" 2>/dev/null; then
+    bad "mutation" "mutant STILL wrote 'BLOCKED not-provisioned' — the annotation is not the source"
+  else ok "mutation: without the annotation the heartbeat drops 'BLOCKED not-provisioned' — the annotation IS the reason"; fi
+fi
 
 echo
 echo "host-code-refresh: $pass passed, $fail failed"

@@ -622,6 +622,13 @@ systemctl --user enable --now host-agent-watch.timer
 # each tick fail-closes to a no-op until the control clone is core-writable (see host-code-refresh.sh's
 # ownership note) and is idempotent once the clone is at the applied sha.
 systemctl --user enable --now host-code-refresh.timer
+# PRIME the absorber ONCE now (as $USER): pull any already-merged host code so the host is CURRENT the
+# moment setup finishes (not up to ~15 min later), and write the first heartbeat so verify.sh below can
+# confirm the host is actually self-refreshing. This is the step that makes "merged → live" real on THIS
+# setup run — the chown of the control clone (setup-host.sh) makes it possible; without it the absorber
+# fail-closes and verify surfaces the exact reason. Fail-safe: a non-zero priming (offline, or the clone
+# still not core-writable) NEVER aborts setup — the timer retries and verify names the blocked reason.
+"$HERE/host-code-refresh.sh" || echo "[host-refresh] priming run non-zero — the timer will retry; see verify's 'host-refresh: absorber' lines for why" >&2
 
 PHASE "user 5/5 verify"
 bash "$HERE/verify.sh"

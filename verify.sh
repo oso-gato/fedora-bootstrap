@@ -21,6 +21,13 @@ ck "tailnet: host joined (or pending browser-auth)" "tailscale status --json 2>/
 ck "box-update: ask-Claude watcher enabled"        "systemctl --user is-enabled claudebox-rebuild.path"
 ck "box-update: daily refresh timer enabled"       "systemctl --user is-enabled claudebox-rebuild-daily.timer"
 ck "box-update: claudebox-rebuild command present"  "test -x ~/.local/bin/claudebox-rebuild"
+# host self-refresh (F16 absorber): the "merged host code -> live" mechanism. These make a NON-armed or
+# BLOCKED absorber a LOUD verify FAIL instead of a silent no-op (incident 2026-07-17: the host sat on
+# hand-applied code for days because the only signal was a journald warn). A correct setup.sh run arms
+# it: setup-host.sh chowns the control clone core-writable, setup-user.sh enables the timer + primes it.
+ck "host-refresh: absorber timer enabled"          "systemctl --user is-enabled host-code-refresh.timer"
+ck "host-refresh: control clone core-writable"     "test -w \"\${HCR_CLONE:-/opt/fedora-bootstrap}\" && test -w \"\${HCR_CLONE:-/opt/fedora-bootstrap}/.git\""
+ck "host-refresh: last tick not BLOCKED/FAILED"    "test -f \"\$HOME/.local/state/host-code-refresh/status\" && ! grep -qE '^[0-9]+ (BLOCKED|FAILED)' \"\$HOME/.local/state/host-code-refresh/status\""
 # box owner (incident 2026-07-11): claudebox-up.service holds the box's conmon in an independent scope so
 # a watcher-tick teardown can't kill it. Assert it is enabled (so it starts on boot + is Wants='d by both
 # watchers). Its being "active (exited)"/inactive is normal for a oneshot — enablement is what matters.

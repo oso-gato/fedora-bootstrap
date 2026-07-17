@@ -205,6 +205,7 @@ hcr_main() {
     command -v git >/dev/null 2>&1 || { warn "git not found on host — cannot absorb; no-op"; return 0; }
     if [ ! -d "$clone/.git" ]; then
         warn "control clone $clone is not a git repo — not provisioned; no-op"
+        HCR_OUTCOME="BLOCKED not-provisioned (no git clone at $clone)"
         return 0
     fi
     # Do NOT assume write access to a possibly root-owned clone. A merge needs to write .git; refuse
@@ -212,12 +213,14 @@ hcr_main() {
     if [ ! -w "$clone" ] || [ ! -w "$clone/.git" ]; then
         warn "control clone $clone is not writable by $(id -un) — REFUSING (one-time fix: as root," \
              "'chown -R $(id -un):$(id -un) $clone', or set HCR_CLONE to a core-owned clone); no-op"
+        HCR_OUTCOME="BLOCKED clone-not-writable ($clone by $(id -un); fix: chown -R $(id -un) $clone)"
         return 0
     fi
 
     # ---- fetch (bounded; a network blip is a skipped tick, never a hang) ----
     if ! GIT_TERMINAL_PROMPT=0 timeout "$gt" git -C "$clone" fetch --quiet origin "$branch" 2>/dev/null; then
         warn "git fetch origin $branch failed (network/auth?) — skipping this tick"
+        HCR_OUTCOME="SKIPPED fetch-failed (network/auth)"
         return 0
     fi
 
@@ -247,7 +250,8 @@ hcr_main() {
             # If applied.sha is absent/stale (a prior readback failed, or a merge landed without a
             # confirmed install), REAPPLY-and-verify to self-heal — do NOT silently trust the tree.
             if [ -f "$applied" ] && [ "$(cat "$applied" 2>/dev/null)" = "$local_sha" ]; then
-                return 0   # silent no-op — already live and verified
+                HCR_OUTCOME="OK uptodate $short"
+                return 0   # already live and verified (heartbeat proves the timer is firing)
             fi
             log "clone at $short but applied.sha absent/stale — running install + readback to confirm"
             decision=REAPPLY
@@ -257,11 +261,13 @@ hcr_main() {
     case "$decision" in
         DIRTY)
             warn "clone has UNCOMMITTED changes — REFUSING (left untouched, not clobbered); no-op"
+            HCR_OUTCOME="BLOCKED dirty-clone (uncommitted changes in $clone)"
             return 0
             ;;
         DIVERGED)
             warn "origin/$branch does NOT fast-forward HEAD (diverged/force-push?) — REFUSING" \
                  "(left untouched); no-op"
+            HCR_OUTCOME="BLOCKED diverged (origin/$branch does not fast-forward)"
             return 0
             ;;
         FF)
@@ -290,11 +296,36 @@ hcr_main() {
     if hcr_verify_from "$clone"; then
         printf '%s\n' "$merged_sha" > "$applied"
         log "APPLIED + VERIFIED merged sha $short — recorded to $applied"
+        HCR_OUTCOME="OK applied $short"
         return 0
     fi
     warn "READBACK FAILED — installed artifacts do NOT all match merged $short; NOT recording success." \
          "System left recoverable (merged tree intact, git-revertable); absorber will re-attempt."
+    HCR_OUTCOME="FAILED readback-mismatch $short"
     return 1
+}
+
+# hcr_heartbeat: record THIS tick's outcome to $state/status so "is the host self-refreshing, and if
+# not WHY?" is OBSERVABLE off-box — verify.sh reads it, a maintainer cats it. The absorber's fail-closed
+# no-ops were previously only `warn`'d to journald (invisible off-box), which is exactly how a host can
+# silently sit on hand-applied code for days (incident 2026-07-17). One line: `<epoch> <outcome>`.
+# Outcomes: OK <state> <sha> (working) · BLOCKED <reason> (stuck, needs a fix) · SKIPPED <reason>
+# (transient) · FAILED <reason> (a real failure). A fresh line = the timer is firing.
+hcr_heartbeat() { # <state-dir> <outcome...>
+    local st="$1"; shift
+    mkdir -p "$st" 2>/dev/null || true
+    printf '%s %s\n' "$(date +%s 2>/dev/null || echo 0)" "$*" > "$st/status" 2>/dev/null || true
+}
+
+# hcr_run: the entry wrapper — run the absorber, then ALWAYS record the heartbeat (whatever outcome
+# hcr_main set via $HCR_OUTCOME), preserving hcr_main's exit code. This is what the unit/CLI invokes so
+# a blocked/transient/failed tick is never silent.
+hcr_run() {
+    local state="${HCR_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/host-code-refresh}"
+    HCR_OUTCOME="ran"
+    hcr_main "$@"; local rc=$?
+    hcr_heartbeat "$state" "$HCR_OUTCOME"
+    return "$rc"
 }
 
 # ---- selftest: exercise the PURE decision core + manifest shape (no git/systemctl/network) --------
@@ -333,6 +364,6 @@ fi
 # Run the absorber only when EXECUTED (systemd ExecStart / CLI); when SOURCED (setup-user.sh reuses
 # the manifest/install functions) only the definitions above are pulled in.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    hcr_main "$@"
+    hcr_run "$@"
     exit $?
 fi
