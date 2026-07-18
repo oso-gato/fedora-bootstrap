@@ -14,11 +14,14 @@
 # Usage: live-gate-run.sh <repo> <pr-number>
 #   <repo>       the bare repo name under github.com/oso-gato (e.g. fedora-desktop)
 #   <pr-number>  the open PR to gate
-# Exit: 0 GREEN | 1 RED | 2 FATAL (bad args / missing builder — infra, NOT a verdict) |
-#       3 SKIPPED (not gateable / PR-head fetch failed-soft) |
+# Exit: 0 GREEN | 1 RED | 2 FATAL (bad args / missing builder / PR-head UNFETCHABLE — infra, NOT a verdict) |
+#       3 SKIPPED (not gateable — a neutral SKIPPED comment WAS delivered to the PR) |
 #       4 UNDELIVERED (verdict computed but the PR comment could not be posted — caller must re-gate)
-# Codes 2 and 4 are NON-VERDICTS: the watcher must NOT write the per-SHA dedup marker for them, or
-# the commit is buried with no comment ever reaching the PR.
+# Codes 2 and 4 are NON-VERDICTS: the watcher must NOT write the per-SHA dedup marker for them, or the
+# commit is buried with no comment ever reaching the PR. CAT-04 (audit 2026-07-18): a PR-head FETCH
+# FAILURE previously exited 3 (deduped as a "delivered SKIP") having posted NO comment — burying the sha
+# forever, the likely kd#23 root cause. It now exits 2 (infra non-verdict → re-gate next poll), so rc 3
+# means ONLY a genuinely-delivered structural skip, honouring the watcher's dedup-only-delivered contract.
 #
 # Contract (CFILE / FENCE / PROBE / HEALTH / secret + resource knobs) resolution order:
 #   1. the candidate's OWN top-level `.live-gate` file (in-tree — preferred; auto-tracks the repo)
@@ -50,8 +53,8 @@ if ! { git -C "$SRC" init -q \
     && git -C "$SRC" remote add origin "https://github.com/$SLUG" \
     && git -C "$SRC" fetch --depth 1 -q origin "pull/$PR/head" \
     && git -C "$SRC" checkout -q FETCH_HEAD; }; then
-  echo "[live-gate] WARN: could not fetch $SLUG PR #$PR head; skipping (treat as not-gateable)"
-  exit 3
+  echo "[live-gate] WARN: could not fetch $SLUG PR #$PR head — INFRA failure, NOT a delivered skip; exit 2 so the watcher does NOT dedup it and RE-GATEs next poll (CAT-04: a transient fetch blip must never bury a live sha as a phantom SKIP)"
+  exit 2
 fi
 SHA="$(git -C "$SRC" rev-parse --short HEAD)"
 # FULL sha for the machine-read verdict header: the dev-side consumers (auto-merge.sh, pr-poller.sh)
