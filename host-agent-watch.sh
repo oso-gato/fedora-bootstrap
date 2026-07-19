@@ -331,8 +331,9 @@ is_authorized_author(){ # <login>
 
 # approved_by_maintainer: has a MAINTAINER applied the `approved` label to <issue>? Resolves the label's
 # own timeline events (oldest-first from the API → reversed to newest-first), role-checks each actor
-# (`.role_name` — `.permission` collapses maintain→"write"; a definitive 404 = non-collaborator/App ⇒ 0;
-# an API error ⇒ U), and folds via approval_fold. FAIL-CLOSED: an unreadable timeline ⇒ NOT approved.
+# (`.role_name` — `.permission` collapses maintain→"write"; a 200 answer maps role → 1/0; ANY failed
+# lookup ⇒ U — `gh api` exits rc≠0 on a 404 and on a rate-limit/5xx alike, and this function does NOT
+# tell them apart), and folds via approval_fold. FAIL-CLOSED: an unreadable timeline ⇒ NOT approved.
 approved_by_maintainer(){ # <issue>
   local issue="$1" rows out='' event actor role m
   rows="$(gh api "repos/$ORG/$REPO/issues/$issue/timeline" --paginate \
@@ -344,12 +345,16 @@ approved_by_maintainer(){ # <issue>
     [ -n "$event" ] && [ -n "$actor" ] || continue
     if role="$(gh api "repos/$ORG/$REPO/collaborators/$actor/permission" -q '.role_name // .permission' 2>/dev/null)"; then
       # App/bot actors answer 200 + role_name:"" (empirically pinned by fleet-halt.sh), so they resolve
-      # DEFINITIVELY to m=0 (inert) — the U path below is only genuine API failure (rate limit / 5xx).
+      # DEFINITIVELY to m=0 (inert). NB: a non-collaborator login (e.g. a departed one) 404s, and
+      # `gh api` exits rc≠0 on that just like on a rate-limit/5xx — so a 404 lands in the U branch
+      # below, NOT here (unlike fleet-halt.sh's 3-way check, which parses stderr for HTTP 404).
       case "$role" in admin|maintain) m=1;; *) m=0;; esac
     else
       # unresolvable actor ⇒ U: fail-closed (approval_fold answers NO outright, the strictest read —
-      # it MIGHT be a maintainer's un-approval). The pending state re-checks next tick, so a transient
-      # blip costs seconds, never correctness.
+      # it MIGHT be a maintainer's un-approval). A transient blip costs one tick (the pending state
+      # re-checks); a PERSISTENT failure — e.g. a departed collaborator's old event 404ing — answers
+      # NO even over an older maintainer approval, and recovery is a maintainer RE-TAP: their fresh
+      # label event becomes newest and decides.
       m=U
     fi
     printf -v line '%s\t%s' "$event" "$m"
