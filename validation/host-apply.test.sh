@@ -96,9 +96,11 @@ run_apply() { # <tag> [extra env assignments...]
   local tag="$1"; shift
   A_BIN="$ROOT/$tag/bin"; A_UNIT="$ROOT/$tag/units"; A_SBIN="$ROOT/$tag/sbin"
   A_STATE="$ROOT/$tag/state"; A_OUT="$ROOT/$tag.out"
-  # APPLY_GIT_RUNNER='' → git runs directly (the test IS 'core'; runuser needs root). APPLY_REPO_MATCH
-  # matches the local mock origin path (C_ORIGIN = "$ROOT/<tag>-origin.git").
-  env APPLY_CLONE="$C_WORK" APPLY_GIT_RUNNER= APPLY_REPO_MATCH='-origin.git' APPLY_BRANCH=main \
+  # APPLY_GIT_RUNNER='' → git runs directly (the test IS 'core'; runuser needs root). APPLY_ORIGIN_ALLOW
+  # is the exact-URL allowlist seam (space-separated; `sudo` env_reset strips it in production) — set to
+  # the local mock origin path (C_ORIGIN = "$ROOT/<tag>-origin.git") so the ANCHORED guard admits the mock
+  # WITHOUT loosening the production canonical-forms match (which host-apply.sh --selftest exercises).
+  env APPLY_CLONE="$C_WORK" APPLY_GIT_RUNNER= APPLY_ORIGIN_ALLOW="$C_ORIGIN" APPLY_BRANCH=main \
       APPLY_STATE_DIR="$A_STATE" APPLY_BIN_DIR="$A_BIN" APPLY_UNIT_DIR="$A_UNIT" APPLY_SBIN_DIR="$A_SBIN" \
       APPLY_SETUP_CMD="bash $STUB_SETUP" APPLY_VERIFY_CMD="bash $STUB_VERIFY" "$@" \
       bash "$EXEC" > "$A_OUT" 2>&1
@@ -142,14 +144,17 @@ run_apply c4
   && ok "diverged refused (exit 3) — a question, not a force-pull" \
   || bad "diverged" "rc=$RC; out: $(tr '\n' '|' <"$A_OUT")"
 
-echo "== CASE 4b: REPOINTED origin (URL not the canonical repo) → REFUSED before any fetch (exit 3) =="
-# The clone is core-writable, so the agent could repoint origin to an attacker remote = arbitrary root.
-# The URL guard must REFUSE before fetching. A green here means only the canonical control repo is a source.
+echo "== CASE 4b: REPOINTED origin — a substring-crafted URL that merely CONTAINS the canonical slug → REFUSED before any fetch (exit 3) =="
+# The clone is core-writable, so the agent could repoint origin. The OLD *substring* guard would have
+# ACCEPTED file:///…/oso-gato/fedora-bootstrap (zero creds needed) or https://evil.tld/oso-gato/fedora-bootstrap
+# and fetched attacker content = arbitrary root (the #133 blocker). The ANCHORED allowlist admits ONLY the
+# exact canonical origin, so a slug-containing repoint is refused BEFORE any fetch. A green = only the real
+# control repo is ever a source. (The production canonical-forms anchoring is unit-proven by --selftest.)
 build_repo c4b
-git -C "$C_WORK" remote set-url origin /tmp/not-the-control-repo
+git -C "$C_WORK" remote set-url origin "file://$ROOT/evil/oso-gato/fedora-bootstrap"
 run_apply c4b
-{ [ "$RC" = 3 ] && [ ! -d "$A_BIN" ] && [ ! -f "$A_STATE/applied.sha" ] && grep -qi 'repoint\|does not name' "$A_OUT"; } \
-  && ok "repointed origin refused (exit 3) before any fetch — inject-proof source" \
+{ [ "$RC" = 3 ] && [ ! -d "$A_BIN" ] && [ ! -f "$A_STATE/applied.sha" ] && grep -qi 'repoint\|not the canonical' "$A_OUT"; } \
+  && ok "substring-crafted repoint refused (exit 3) before any fetch — inject-proof source" \
   || bad "repoint" "rc=$RC; out: $(tr '\n' '|' <"$A_OUT")"
 
 echo "== CASE 5: health-gate FAILS → ROLLBACK to prior + re-converge (exit 1), no applied.sha =="
@@ -179,7 +184,7 @@ if ! grep -q '  return 0' "$MUT" || grep -q '  return "\$rc"' "$MUT"; then
   bad "mutation vacuous" "sed did not neutralize ha_readback's verdict"
 else
   A_BIN="$ROOT/cm/bin"; A_UNIT="$ROOT/cm/units"; A_SBIN="$ROOT/cm/sbin"; A_STATE="$ROOT/cm/state"; A_OUT="$ROOT/cm.out"
-  env APPLY_CLONE="$C_WORK" APPLY_GIT_RUNNER= APPLY_REPO_MATCH='-origin.git' APPLY_BRANCH=main \
+  env APPLY_CLONE="$C_WORK" APPLY_GIT_RUNNER= APPLY_ORIGIN_ALLOW="$C_ORIGIN" APPLY_BRANCH=main \
       APPLY_STATE_DIR="$A_STATE" APPLY_BIN_DIR="$A_BIN" APPLY_UNIT_DIR="$A_UNIT" APPLY_SBIN_DIR="$A_SBIN" \
       APPLY_SETUP_CMD="bash $STUB_SETUP" APPLY_VERIFY_CMD="bash $STUB_VERIFY" MUTATE=sbin \
       bash "$MUT" > "$A_OUT" 2>&1; mrc=$?

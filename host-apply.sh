@@ -26,10 +26,12 @@
 #   * ORIGIN URL-VERIFIED, FETCH AS THE OPERATING USER. All git runs as `core` via runuser (mirroring
 #     F16's proven context: the clone is core-owned since v1.2.67, so core holds the credentials + the
 #     safe.directory entry, and root operating a core-owned clone would trip git's dubious-ownership
-#     guard). Before fetching, the clone's `remote.origin.url` is CHECKED against the canonical repo
-#     (APPLY_REPO_MATCH) — a repointed origin (the clone is core-writable) is REFUSED, so only the real
-#     control repo is ever a source. The fetched sha is read from FETCH_HEAD (set by THIS fetch), which
-#     the agent cannot forge (no push to the merge-gated `main`).
+#     guard). Before fetching, the clone's `remote.origin.url` is matched against an ANCHORED ALLOWLIST
+#     of the canonical control-repo forms (ha_origin_allowed — a whole-string `=` compare, NOT a
+#     `*substring*`: a repointed origin that merely CONTAINS the slug, e.g.
+#     file:///…/oso-gato/fedora-bootstrap or https://evil.tld/oso-gato/fedora-bootstrap, is REFUSED), so
+#     only the real control repo is ever a fetch source. The fetched sha is read from FETCH_HEAD (set by
+#     THIS fetch), which the agent cannot forge (no push to the merge-gated `main`).
 #   * PRISTINE MATERIALISATION. It runs setup.sh from a ROOT-OWNED `git archive` of the exact FETCHED
 #     sha (content-addressed), NOT from the core-writable working tree — so whatever the agent may have
 #     written into /opt/fedora-bootstrap never executes. What runs is byte-for-byte merged `main`.
@@ -43,7 +45,7 @@
 #   0  APPLIED + health-gated + readback-verified   (or an idempotent no-op — already current)
 #   1  forward apply FAILED or host UNHEALTHY after → ROLLED BACK + re-converged to the prior commit
 #   2  readback MISMATCH — live artifacts != merged main (applied != proven-live); success NOT recorded
-#   3  REFUSED — dirty / diverged (non-fast-forward) clone, un-provisioned, or `main` unfetchable
+#   3  REFUSED — repointed origin, dirty / diverged (non-fast-forward) clone, un-provisioned, or `main` unfetchable
 #
 # HONEST LIMIT (surfaced, not hidden): rollback re-runs the PRIOR commit's setup.sh to re-converge the
 # managed config — it does NOT uninstall a package a failed forward-apply may have added (config
@@ -90,6 +92,30 @@ ha_decide() {
   echo REFUSE-DIVERGED
 }
 
+# ORIGIN-URL guard — an ANCHORED ALLOWLIST, never a substring (the #133 blocker). The clone is
+# core-writable, so the agent could repoint origin; a `*slug*` substring test WRONGLY accepts any URL
+# that merely CONTAINS the slug — file:///…/oso-gato/fedora-bootstrap (no creds needed), or
+# https://evil.tld/oso-gato/fedora-bootstrap — and would then fetch attacker content = arbitrary root.
+# Here every candidate is compared WHOLE-STRING with `=`. The canonical forms are derived from the
+# pinned slug (APPLY_REPO_MATCH, `:-` default so an EMPTY seam falls back to the real slug rather than
+# matching everything). FAIL-CLOSED: an empty/unknown URL matches nothing. Test seam APPLY_ORIGIN_ALLOW
+# (space-separated EXACT URLs; `sudo` env_reset strips every APPLY_* in production — header) lets the mock
+# admit its local bare-repo path without loosening the production anchored match.
+ha_origin_allowed() { # <origin_url>
+  local url="$1" slug="${APPLY_REPO_MATCH:-oso-gato/fedora-bootstrap}" cand
+  [ -n "$url" ] || return 1
+  if [ -n "${APPLY_ORIGIN_ALLOW:-}" ]; then
+    for cand in $APPLY_ORIGIN_ALLOW; do [ "$url" = "$cand" ] && return 0; done
+    return 1
+  fi
+  for cand in "https://github.com/$slug"     "https://github.com/$slug.git" \
+              "git@github.com:$slug"          "git@github.com:$slug.git" \
+              "ssh://git@github.com/$slug"    "ssh://git@github.com/$slug.git"; do
+    [ "$url" = "$cand" ] && return 0
+  done
+  return 1
+}
+
 # ---- the apply, run as ROOT ------------------------------------------------------------------------
 # Test seams (APPLY_*) are read ONLY here; in production `sudo` env_reset strips them (see header), so
 # the agent cannot influence any of these — the executor takes the hardcoded, merge-gated defaults.
@@ -97,7 +123,6 @@ ha_main() {
   local clone="${APPLY_CLONE:-/opt/fedora-bootstrap}"
   local branch="${APPLY_BRANCH:-main}"
   local U="${APPLY_USER:-core}"
-  local repo_match="${APPLY_REPO_MATCH-oso-gato/fedora-bootstrap}"                    # the canonical control repo the origin URL must name
   local state="${APPLY_STATE_DIR:-/var/lib/fedora-bootstrap/host-apply}"             # root-owned: the applied.sha record is unforgeable by the agent
   local applied="$state/applied.sha"
   local gt="${APPLY_GIT_TIMEOUT:-120}"
@@ -108,13 +133,13 @@ ha_main() {
   command -v git >/dev/null 2>&1 || { warn "git not found — cannot apply; refusing"; return 3; }
   [ -d "$clone/.git" ] || { warn "control clone $clone is not a git repo — not provisioned; refusing"; return 3; }
 
-  # ---- REFUSE a repointed origin (the clone is core-writable): its remote URL must name the canonical
-  #      control repo, else the agent could fetch attacker content = arbitrary root. ----
+  # ---- REFUSE a repointed origin (the clone is core-writable): its remote URL must be EXACTLY one of the
+  #      canonical control-repo forms (ANCHORED, not a substring), else the agent could point origin at
+  #      attacker content that merely contains the slug and fetch it = arbitrary root. ----
   local origin_url; origin_url="$(gitc config --get remote.origin.url 2>/dev/null || echo '')"
-  case "$origin_url" in
-    *"$repo_match"*) : ;;
-    *) warn "clone origin '$origin_url' does not name $repo_match — REFUSING (possible repoint); untouched"; return 3 ;;
-  esac
+  if ! ha_origin_allowed "$origin_url"; then
+    warn "clone origin '$origin_url' is not the canonical control repo — REFUSING (possible repoint); untouched"; return 3
+  fi
 
   # ---- fetch merged `main` from origin AS $U (bounded; core's proven credentials). FETCH_HEAD carries
   #      the exact remote sha — set by THIS fetch, so it is not a pre-existing ref the agent could move. ----
@@ -242,6 +267,22 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ] && [ "${1:-}" = "--selftest" ]; then
   d "behind + DIRTY ⇒ refuse-dirty"          A      B       0   1     0        REFUSE-DIRTY
   d "not-ancestor + clean ⇒ diverged"        A      B       1   0     0        REFUSE-DIVERGED
   d "not-ancestor + dirty ⇒ dirty-wins"      A      B       1   1     0        REFUSE-DIRTY
+
+  # ORIGIN-URL anchored allowlist (the #133 blocker): the canonical forms pass; a substring-crafted URL
+  # that merely CONTAINS the slug, a wrong host, or an empty URL is REFUSED. A `*slug*` substring match
+  # would WRONGLY accept the three substring cases — these are the regression guard for exactly that.
+  unset APPLY_REPO_MATCH APPLY_ORIGIN_ALLOW
+  o(){ local r; if ha_origin_allowed "$2"; then r=allow; else r=refuse; fi; [ "$r" = "$3" ] && echo "ok: $1" \
+       || { echo "FAIL: $1 — got '$r' want '$3'"; f=1; }; }
+  o "canonical https"          "https://github.com/oso-gato/fedora-bootstrap"        allow
+  o "canonical https .git"     "https://github.com/oso-gato/fedora-bootstrap.git"    allow
+  o "canonical ssh scp-form"   "git@github.com:oso-gato/fedora-bootstrap.git"        allow
+  o "canonical ssh url-form"   "ssh://git@github.com/oso-gato/fedora-bootstrap.git"  allow
+  o "substring file:// path"   "file:///tmp/evil/oso-gato/fedora-bootstrap"          refuse
+  o "substring wrong host"     "https://evilgithub.com/oso-gato/fedora-bootstrap"    refuse
+  o "substring attacker host"  "https://attacker.tld/oso-gato/fedora-bootstrap"      refuse
+  o "empty origin"             ""                                                     refuse
+
   [ "$f" = 0 ] && echo "ALL HOST-APPLY SELFTESTS PASS" || echo "HOST-APPLY SELFTESTS FAILED"
   exit "$f"
 fi
