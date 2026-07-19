@@ -9,8 +9,11 @@
 # the same disposable build+verdict harness that gates the image repos, reused verbatim.
 FROM registry.fedoraproject.org/fedora:44
 # ShellCheck runs the static gate; git-core (the leaf git package, Build Principle 4) lets
-# validation/host-code-refresh.test.sh drive its REAL git mock-clone inside this disposable build.
-RUN dnf install -y --setopt=install_weak_deps=False ShellCheck git-core && dnf clean all
+# validation/host-code-refresh.test.sh drive its REAL git mock-clone inside this disposable build;
+# python3 lets validation/repo-scope.test.sh drive the REAL live-gate-watch.sh (whose org-wide
+# discovery parses the `gh` JSON with python3 — the watcher's own runtime dep, so the gate that tests
+# it needs it too) inside this build.
+RUN dnf install -y --setopt=install_weak_deps=False ShellCheck git-core python3 && dnf clean all
 COPY . /src
 WORKDIR /src
 

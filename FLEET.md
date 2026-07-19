@@ -39,7 +39,9 @@ the headless `claude -p` bypass; the in-session gate is in-session guidance, the
 ## The dev↔host live-gate loop
 
 The dev↔host loop runs autonomously except the final merge: develop → open PR → label it
-`live-validate` → the host live-gate (Gate B) discovers it org-wide, fetches the PR head, and builds
+`live-validate` → the host live-gate (Gate B) discovers it org-wide (but acts ONLY within the
+maintainer-confirmed OPERATING SCOPE — R16/issue #132; an out-of-scope labelled PR is skipped, no
+build, no verdict), fetches the PR head, and builds
 it **disposably per its in-repo `.live-gate`** (PARSED, never executed) under loopback-only fences,
 posting a GREEN/RED verdict → iterate until green → **Arthur's discrete clickable APPROVE is the only
 human touch** → `fedora-dev` merges. Repos enroll dynamically — just label a PR `live-validate` and
@@ -90,7 +92,7 @@ deploy analogue is the operator re-running `setup.sh` as root.
   `gate-push.sh` lets feature-branch pushes run autonomously but routes any `main`-touching push or
   merge verb to Arthur's clickable `ask`.
 - **live-validate → host verdict** — the PR author / `fedora-dev` labels a PR `live-validate`;
-  `fedora-bootstrap` DISCOVERS it org-wide, builds it disposably, and comments GREEN/RED;
+  `fedora-bootstrap` DISCOVERS it org-wide (gated to the confirmed OPERATING SCOPE — R16), builds it disposably, and comments GREEN/RED;
   `fedora-dev` iterates on RED.
 - **APPROVE → merge** — Arthur clicks; `fedora-dev` merges (sole authority, control-plane included).
   The in-session `gate-push.sh` clickable gate (Arthur's click) gates merge verbs in-session; a

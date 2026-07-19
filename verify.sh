@@ -32,6 +32,12 @@ ck "host-refresh: last tick not BLOCKED/FAILED"    "test -f \"\$HOME/.local/stat
 # a watcher-tick teardown can't kill it. Assert it is enabled (so it starts on boot + is Wants='d by both
 # watchers). Its being "active (exited)"/inactive is normal for a oneshot — enablement is what matters.
 ck "box owner: claudebox-up.service enabled"        "systemctl --user is-enabled claudebox-up.service"
+# R16 OPERATING SCOPE (issue #132): the org-wide host live-gate must gate discovery on the
+# maintainer-confirmed scope set, else it re-opens the #165 leak. Assert the reader + scope.conf are
+# installed AND the gate genuinely discriminates: fedora-desktop is IN-scope but NOT an apparatus repo,
+# so it passes ONLY when scope.conf is present (a missing conf would deny it via the fallback) — that
+# makes a non-scoping or broken gate a LOUD FAIL, not a silent revert to org-wide.
+ck "live-gate: R16 scope gate functional"           "test -r \"\$HOME/.config/live-gate/scope.conf\" && \"\$HOME/.local/bin/repo-scope.sh\" check fedora-desktop && ! \"\$HOME/.local/bin/repo-scope.sh\" check definitely-not-a-scoped-repo"
 # host self-update — dnf-automatic on the monthly cadence
 ck "host: dnf-automatic timer enabled"             "systemctl is-enabled dnf5-automatic.timer"
 # v1.2.39: fail2ban removed fleet-wide — the public ssh door is key-only (no password to brute-force),

@@ -71,6 +71,7 @@ warn() { printf '[host-code-refresh] %s\n' "$*" >&2; }
 hcr_manifest() {
     local bin="${HCR_BIN_DIR:-$HOME/.local/bin}"
     local unit="${HCR_UNIT_DIR:-$HOME/.config/systemd/user}"
+    local data="${HCR_DATA_DIR:-$HOME/.config/live-gate}"
     local s
     # autonomous-machinery scripts (mode 0755 → bin)
     for s in \
@@ -81,6 +82,7 @@ hcr_manifest() {
         throwaway-sweep.sh \
         live-gate-run.sh \
         live-gate-watch.sh \
+        repo-scope.sh \
         fleet-halt.sh \
         host-agent-watch.sh \
         gh-app-auth.sh \
@@ -89,6 +91,10 @@ hcr_manifest() {
     do
         printf '0755\t%s\t%s\n' "$s" "$bin/$s"
     done
+    # managed data files (mode 0644 → data dir). policy/scope.conf is the R16 OPERATING SCOPE set the
+    # host live-gate honours (issue #132) — control-plane SECURITY config that MUST be kept byte-current
+    # automatically, so it rides the F16 absorber's install + fail-closed read-back like the scripts.
+    printf '0644\t%s\t%s\n' "policy/scope.conf" "$data/scope.conf"
     # systemd --user units (mode 0644 → unit dir); DEST basename strips the systemd-units/ prefix
     for s in \
         workload-refresh@.service \

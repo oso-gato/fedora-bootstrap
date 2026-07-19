@@ -17,15 +17,33 @@
 # (flock) so two timer firings never overlap; per-(repo,SHA) `.done` marker so each commit is gated
 # exactly once.
 #
+# R16 OPERATING SCOPE (issue #132): discovery is org-wide, so each candidate repo is checked against
+# the maintainer-confirmed scope set (repo-scope.sh + policy/scope.conf) BEFORE any per-PR work — an
+# out-of-scope labelled PR is skipped with one loud line, no build, no verdict (see scope_ok below).
+#
 # Optional safety/testing filter: set LIVE_GATE_WORKLOADS (space-separated bare repo names) to
-# RESTRICT discovery to those repos. Unset (the DEFAULT) = org-wide, no list.
+# RESTRICT discovery to those repos. Unset (the DEFAULT) = org-wide (still scope-gated).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RUNNER="$HOME/.local/bin/live-gate-run.sh"; [ -x "$RUNNER" ] || RUNNER="$HERE/live-gate-run.sh"
+SCOPE="$HOME/.local/bin/repo-scope.sh"; [ -x "$SCOPE" ] || SCOPE="$HERE/repo-scope.sh"
 STATE="$HOME/.local/state/live-gate"; mkdir -p "$STATE"
 ORG="${LIVE_GATE_ORG:-oso-gato}"
 LABEL="${LIVE_GATE_LABEL:-live-validate}"
+# The unreadable-config / missing-reader fallback set — the apparatus's OWN two repos (R16 rule 4).
+SCOPE_OWN="${SCOPE_OWN:-fedora-dev fedora-bootstrap}"
+
+# scope_ok <repo> — the R16 gate. rc 0 = act; nonzero = out of scope (skip). Delegates to the reader
+# (which itself falls back to $SCOPE_OWN when policy/scope.conf is unreadable). If the READER is
+# missing/not-executable it cannot answer, so fail CLOSED here to $SCOPE_OWN — the host can still gate
+# its own two repos but never wanders (issue #132).
+scope_ok(){
+  local r="$1" w
+  if [ -x "$SCOPE" ]; then "$SCOPE" check "$r" >/dev/null 2>&1; return; fi
+  for w in $SCOPE_OWN; do [ "$w" = "$r" ] && return 0; done
+  return 1
+}
 
 # Optional allowlist FILTER (default: empty = org-wide). When set, discovery is restricted to it.
 declare -A ALLOW=(); ALLOW_ON=0
@@ -87,6 +105,13 @@ fi
 for row in "${PRS[@]}"; do
   repo="${row%% *}"; num="${row##* }"
   [ -n "$repo" ] && [ -n "$num" ] || continue
+  # R16-SCOPE-GATE (issue #132): honour the confirmed OPERATING SCOPE before ANY per-PR API call,
+  # build or verdict. An out-of-scope repo (the #165 leak from the host end) is skipped here — the
+  # host never touches a repo the maintainer did not confirm.
+  if ! scope_ok "$repo"; then
+    echo "[live-gate-watch] R16 OUT-OF-SCOPE: $repo#$num not in the confirmed scope set (policy/scope.conf) — no build, no verdict; skip"
+    continue
+  fi
   if [ "$ALLOW_ON" = 1 ] && [ -z "${ALLOW[$repo]:-}" ]; then
     echo "[live-gate-watch] $repo#$num: not in LIVE_GATE_WORKLOADS allowlist; skip"; continue
   fi
