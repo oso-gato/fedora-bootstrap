@@ -28,6 +28,13 @@ ck "box-update: claudebox-rebuild command present"  "test -x ~/.local/bin/claude
 ck "host-refresh: absorber timer enabled"          "systemctl --user is-enabled host-code-refresh.timer"
 ck "host-refresh: control clone core-writable"     "test -w \"\${HCR_CLONE:-/opt/fedora-bootstrap}\" && test -w \"\${HCR_CLONE:-/opt/fedora-bootstrap}/.git\""
 ck "host-refresh: last tick not BLOCKED/FAILED"    "test -f \"\$HOME/.local/state/host-code-refresh/status\" && ! grep -qE '^[0-9]+ (BLOCKED|FAILED)' \"\$HOME/.local/state/host-code-refresh/status\""
+# host self-APPLY (#133): the SYSTEM-layer analogue of the F16 absorber — the apply-bootstrap host-agent
+# verb makes merged `main` live on erebus (setup.sh re-run) with no human. Assert the capability is WIRED:
+# the root-owned executor is installed AND the agent holds the pinned NOPASSWD grant to trigger it. A
+# missing executor or a mis-stamped sudoers grant means self-apply silently cannot fire — a LOUD FAIL.
+ck "host-apply: self-apply executor installed"     "test -x /usr/local/sbin/host-apply"
+ck "host-apply: apply unit present"                "test -f \"\$HOME/.config/systemd/user/host-apply.service\""
+ck "host-apply: agent holds pinned sudo grant"     "sudo -n -l /usr/local/sbin/host-apply"
 # box owner (incident 2026-07-11): claudebox-up.service holds the box's conmon in an independent scope so
 # a watcher-tick teardown can't kill it. Assert it is enabled (so it starts on boot + is Wants='d by both
 # watchers). Its being "active (exited)"/inactive is normal for a oneshot — enablement is what matters.
