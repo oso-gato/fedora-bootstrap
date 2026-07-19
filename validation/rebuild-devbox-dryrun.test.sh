@@ -37,7 +37,16 @@ BIN="$ROOT/bin"; mkdir -p "$BIN"
 cat > "$BIN/gh" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
-  api)   printf '%s' "${FAKE_PERM:-admin}" ;;                       # collaborators/<login>/permission
+  api)
+    url="$2"                                                        # gh api <URL> … — the URL is always arg 2
+    case "$url" in
+      *"/timeline"*) printf '%s' "${FAKE_TIMELINE:-}" ;;            # `approved`-label events, API order (oldest-first), "event\tactor" lines
+      *"/collaborators/"*)                                          # per-login role: FAKE_PERM_<login> overrides, else FAKE_PERM (default admin)
+        login="${url#*collaborators/}"; login="${login%%/*}"        # NB ${*#…} would strip EACH positional arg — use the scalar url
+        pvar="FAKE_PERM_${login}"
+        printf '%s' "${!pvar:-${FAKE_PERM:-admin}}" ;;
+      *) : ;;
+    esac ;;
   issue)
     case "$2" in
       list) echo "${FAKE_ISSUE:-1}" ;;                              # discovery → one fake issue
@@ -115,12 +124,43 @@ if grep -qF 'start --no-block workload-rebuild@fedora-dev.service' "$HOME/system
    && ! has 'issue close'; then ok "authorized+valid → rebuild FIRED, marker written, ticket open"
 else no "authorized+valid → rebuild FIRED" "expected workload-rebuild@ start + .rebuild marker + NO close"; fi
 
-echo "== authorization: a NON-maintainer author is REFUSED before any rebuild (destructive-verb gate) =="
-newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=random FAKE_PERM=read
+echo "== R17 APPROVAL GATE: a bot-authored ticket with NO approval ⇒ PENDING (open, unconsumed, ONE ask) =="
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read; unset FAKE_TIMELINE FAKE_PERM_arthur 2>/dev/null
 tick
-if has 'REFUSED' && has 'lacks admin|maintain' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log" \
-   && [ ! -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" ]; then ok "author lacks maintain → REFUSED, no rebuild"
-else no "author gate" "expected REFUSED + no workload-rebuild@ start + no marker"; fi
+if has 'AWAITING APPROVAL' && ! has 'issue close' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log" \
+   && [ ! -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" ] \
+   && [ ! -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.done" ]; then ok "unapproved bot ticket → PENDING: ask posted, nothing fired, ticket open + unconsumed"
+else no "pending path" "expected AWAITING APPROVAL comment + no rebuild + no close + no .done"; fi
+tick   # marker-gated: a SECOND tick re-checks the approval but does NOT re-ask
+if [ "$(grep -cF 'AWAITING APPROVAL' "$GH_LOG")" = 1 ]; then ok "second tick re-checks without re-asking (marker-gated)"
+else no "re-ask gate" "expected exactly ONE awaiting-approval comment across two ticks"; fi
+
+echo "== R17 APPROVAL GATE: the ONE-TAP maintainer-applied 'approved' label FIRES the rebuild =="
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_PERM_arthur=admin FAKE_TIMELINE=$'labeled\tarthur'; unset SCEN_UNIT_STATE
+SCEN_NEWID=OLDID tick
+if grep -qF 'start --no-block workload-rebuild@fedora-dev.service' "$HOME/systemctl.log" \
+   && [ -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" ] && ! has 'issue close'; then ok "maintainer tap → FIRED, marker written, ticket open (the one-tap path)"
+else no "approve fires" "expected workload-rebuild@ start + .rebuild marker + no close"; fi
+
+echo "== R17 APPROVAL GATE trust boundary: App label INERT; a maintainer UN-label UN-approves =="
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_TIMELINE=$'labeled\tsomebot'; unset FAKE_PERM_arthur 2>/dev/null   # somebot resolves read ⇒ inert
+tick
+A1=ok; { has 'AWAITING APPROVAL' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; } || A1=no
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_PERM_arthur=admin FAKE_TIMELINE=$'labeled\tarthur\nunlabeled\tarthur'   # newest = un-label
+tick
+A2=ok; { ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; } || A2=no
+if [ "$A1$A2" = okok ]; then ok "App-applied label authorizes NOTHING + maintainer un-label un-approves (both PENDING)"
+else no "label trust boundary" "A1=$A1 (App label must not fire) A2=$A2 (un-label must not fire)"; fi
+
+echo "== M4: neutralize approved_by_maintainer ⇒ the one-tap approval no longer fires (the gate bites) =="
+MUT4="$ROOT/watch-m4.sh"; sed 's/elif approved_by_maintainer "$issue"; then/elif false; then/' "$WATCH" > "$MUT4"
+if cmp -s "$WATCH" "$MUT4"; then no "M4 vacuous" "sed did not change the copy"; else
+  newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_PERM_arthur=admin FAKE_TIMELINE=$'labeled\tarthur'
+  tick_on "$MUT4"
+  if ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log" && has 'AWAITING APPROVAL'; then ok "M4: mutant ignores the tap ⇒ the approve-fires row discriminates"
+  else no "M4" "mutant fired or did not ask — the approval row would not bite"; fi
+fi
+unset FAKE_TIMELINE FAKE_PERM_arthur 2>/dev/null
 
 echo "== manifest: a malformed / missing manifest is REFUSED before any rebuild =="
 newhome; export FAKE_BODY=$'host-op: rebuild-devbox fedora-dev\n%%DEVBOX-MANIFEST-BEGIN%%\nrun rm -rf /\n%%DEVBOX-MANIFEST-END%%' FAKE_AUTHOR=arthur FAKE_PERM=admin

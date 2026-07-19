@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.68 (live-gate CAT-04 fix: a transient PR-head FETCH FAILURE in live-gate-run.sh now exits 2 (infra non-verdict, re-gate next poll) instead of 3 (SKIPPED). rc 3 is DEDUPED by live-gate-watch.sh as a delivered skip, but the fetch-failure posts NO comment — so it buried the sha forever with nothing on the PR, and the dev poller then read host=NONE and NOOPed indefinitely. This is the likely ROOT CAUSE of the kd#23 six-hour silent stall. rc 3 now means ONLY a genuinely-delivered structural skip. Mutation-proven by validation/live-gate-fetchfail.test.sh. audit 2026-07-18 CAT-04.)
+# Version: 1.2.69 (R17 APPROVAL GATE — rebuild-devbox now fires on EITHER a maintainer-authored ticket (unchanged) OR a maintainer-APPLIED `approved` label on a bot-filed ticket: the ONE-TAP mobile authorization. Timeline-bound + role-checked (App label inert, un-label un-approves, unresolvable actor fail-closed); an unapproved bot ticket is PENDING (open, unconsumed, one marker-gated awaiting-approval comment @mention) — never refused. Covered by --selftest approval_fold rows + 5 new dryrun rows + mutation M4.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
