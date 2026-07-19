@@ -87,10 +87,15 @@ case "$a" in
     mk="${a##*test -e }"; mk="${mk%%[[:space:]]*}"
     { [ "${SCEN_WORKED:-yes}" = yes ] && grep -qF -- "touch $mk" "${RESUME_LOG:-/dev/null}" 2>/dev/null; } && exit 0 || exit 1 ;;
   *" test -d "*)        [ "${SCEN_CWD_OK:-yes}" = yes ] && exit 0 || exit 1 ;;
-  *"tmux new-session"*) [ "${SCEN_TMUX_NEW_OK:-yes}" = yes ] && exit 0 || exit 1 ;;
+  *"tmux has-session"*) printf 'has-session %s\n' "$a" >> "${TMUX_LOG:-/dev/null}"
+                        [ "${SCEN_MAIN_EXISTS:-no}" = yes ] && exit 0 || exit 1 ;; # does the 'main' base session exist yet?
+  *"tmux new-session"*) printf 'new-session %s\n' "$a" >> "${TMUX_LOG:-/dev/null}"
+                        [ "${SCEN_TMUX_NEW_OK:-yes}" = yes ] && exit 0 || exit 1 ;;
+  *"tmux new-window"*)  printf 'new-window %s\n' "$a" >> "${TMUX_LOG:-/dev/null}"
+                        [ "${SCEN_TMUX_NEW_OK:-yes}" = yes ] && exit 0 || exit 1 ;;
   *"tmux list-panes"*)  echo "${SCEN_PANE:-claude}" ;;                            # bare shell name ⇒ session_active=idle
   *"tmux send-keys"*)   printf '%s\n' "$a" >> "${RESUME_LOG:-/dev/null}"; exit 0 ;; # capture resume + nudge keystrokes
-  *"tmux "*)            exit 0 ;;                                                  # kill-session etc.
+  *"tmux "*)            printf '%s\n' "$a" >> "${TMUX_LOG:-/dev/null}"; exit 0 ;;  # kill-window / kill-session etc.
   *"is-active"*)        [ "${SCEN_POLLER_ACTIVE:-yes}" = yes ] && exit 0 || exit 1 ;;  # poller active?
   *"journalctl"*)       [ -n "${SCEN_POLLER_LOG-x}" ] && echo "${SCEN_POLLER_LOG:-sweep}" ; exit 0 ;;
   *) exit 0 ;;
@@ -102,7 +107,9 @@ pass=0; fail=0
 newhome(){ HOME="$ROOT/home-$RANDOM$RANDOM"; export HOME; mkdir -p "$HOME";
   export GH_LOG="$HOME/gh.log";              : > "$GH_LOG"
   export SYSTEMCTL_LOG="$HOME/systemctl.log"; : > "$SYSTEMCTL_LOG"
-  export RESUME_LOG="$HOME/resume.log";       : > "$RESUME_LOG"; }
+  export RESUME_LOG="$HOME/resume.log";       : > "$RESUME_LOG"
+  export TMUX_LOG="$HOME/tmux.log";           : > "$TMUX_LOG"; }
+tmux_has(){ grep -qF -- "$1" "$TMUX_LOG"; }
 # fast windows so the nudge/marker poll + settles don't stall the suite
 tick_on(){ PATH="$BIN:$PATH" DEVBOX_RESUME_SETTLE=1 DEVBOX_POLLER_WINDOW=1 DEVBOX_WORK_WINDOW=1 DEVBOX_NUDGE_TRIES=1 DEVBOX_WORK_POLL=1 bash "$1" >/dev/null 2>&1 || true; }
 tick(){ tick_on "$WATCH"; }
@@ -208,6 +215,23 @@ SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCE
 if resume_has "touch /home/core/.local/state/rebuild-resumed/$SID" && resume_has 'Enter'; then ok "nudge submitted (literal touch <marker> + a discrete Enter)"
 else no "nudge submit" "expected send-keys of 'touch <marker>' and an Enter — got: $(tr '\n' '|' <"$RESUME_LOG")"; fi
 
+echo "== #1 FIX: the session is restored into a WINDOW of the shared 'main' group, not a standalone session =="
+# Incident 2026-07-19: the executor restored each session as a STANDALONE 'tmux new-session -s <name>'. But every
+# interactive login joins the 'main' GROUP ('tmux new-session -t main -s c\$\$' with 'destroy-unattached on'), and a
+# grouped client sees only 'main's WINDOW set — so a standalone session is INVISIBLE to the operator's reconnect
+# (proven on a throwaway: PROOF-1 a window added to 'main' is seen; PROOF-2 a standalone session is not). The
+# restore now ensures the 'main' base then adds the session as a WINDOW of it ('new-window -t main:'), and the
+# resume + nudge + active-probe all target 'main:<name>' — so a reconnecting login lands on the resumed window.
+newhome; export FAKE_BODY="$MF"; seed_v2   # SCEN_MAIN_EXISTS defaults 'no' ⇒ the base 'main' is created first
+SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweep tick
+r1=ok
+tmux_has 'new-window -d -t main: -n dev134'          || r1='no(window-not-in-main)'
+tmux_has 'new-session -d -s main'                    || r1='no(main-base-not-ensured)'
+tmux_has 'new-session -d -s dev134'                  && r1='no(restored-STANDALONE-the-bug)'
+resume_has '-t main:dev134'                          || r1='no(resume-not-targeting-main-window)'
+if [ "$r1" = ok ]; then ok "restored as a WINDOW of 'main' (base ensured, no standalone session, resume targets main:dev134)"
+else no "restore-into-main" "$r1 — tmux: $(tr '\n' '|' <"$TMUX_LOG") | resume: $(tr '\n' '|' <"$RESUME_LOG")"; fi
+
 echo "== RESUME-TO-ACTIVE: claude UP but NOT handshake-confirmed ⇒ honestly up-but-unconfirmed (not working) =="
 newhome; export FAKE_BODY="$MF"; seed_v2
 SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=no SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweep tick
@@ -226,11 +250,25 @@ SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=no SCEN_PANE=claude SCEN
 if has 'host-agent: FAILED' && has 'verification FAILED' && ! has 'host-agent: DONE'; then ok "old container alive → FAILED (kill-by-ID GHOST)"
 else no "ghost" "expected FAILED + 'verification FAILED', never DONE"; fi
 
-echo "== BITE: poller NOT observably sweeping in the new box ⇒ FAILED =="
+echo "== #2 FIX: poller NOT yet sweeping but EVERY session confirmed (ok==total) ⇒ DONE-WITH-A-NOTE, never FAILED =="
+# Incident 2026-07-19: a proven 2/2 handshake-confirmed resume reported FAILED because a COLD poller-service
+# had not swept at check time (a fresh box reassembles the claudebox before poller-service can launch, so the
+# poller warms up AFTER the sessions). Sessions are the rebuild's success criterion; a not-yet-sweeping poller
+# is DONE-with-a-note (surfaced honestly, independently watched by the #173 poller-liveness watchdog), not a
+# false FAILED. ok==total is the gate; the poller is verified best-effort and reported, never a merge blocker.
 newhome; export FAKE_BODY="$MF"; seed_v2
 SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=no tick
-if has 'host-agent: FAILED' && has 'poller=down' && ! has 'host-agent: DONE'; then ok "poller silent → FAILED (not a PID — observable sweep required)"
-else no "poller down" "expected FAILED + poller=down, never DONE"; fi
+if has 'host-agent: DONE' && has 'ACTIVELY CONTINUING 1/1' && has 'NOT yet observably sweeping' \
+   && ! has 'poller SWEEPING' && ! has 'host-agent: FAILED' && has 'issue close'; then ok "poller cold but sessions 1/1 → DONE-with-a-poller-NOTE (no false FAILED)"
+else no "poller cold DONE-with-note" "expected DONE + ACTIVELY CONTINUING 1/1 + 'NOT yet observably sweeping' NOTE + close, never FAILED/poller SWEEPING"; fi
+
+echo "== #2 GUARD: a genuine SESSION failure (ok<total) still FAILS even when the poller is also down =="
+# The #2 fix relaxes ONLY the poller check; a session that did not come up ACTIVELY CONTINUING must still FAIL
+# loudly (poller-down does not mask, nor is it masked by, a real session loss). ok<total dominates.
+newhome; export FAKE_BODY="$MF"; seed_v2
+SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=no SCEN_POLLER_ACTIVE=no tick
+if has 'host-agent: FAILED' && has 'actively-continuing 0/1' && ! has 'host-agent: DONE'; then ok "session lost + poller down → FAILED (session failure dominates, never a false DONE)"
+else no "session-loss dominates" "expected FAILED + 'actively-continuing 0/1', never DONE"; fi
 
 echo "== BITE: a health-gate FAILURE (rolled back) surfaces as FAILED, never a half-built success =="
 newhome; export FAKE_BODY="$MF"; seed_v2
@@ -268,6 +306,24 @@ if cmp -s "$WATCH" "$MUT3"; then no "M3 vacuous" "sed did not change nudge_sessi
   SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweep tick_on "$MUT3"
   if has 'actively-continuing 0/1' && ! has 'host-agent: DONE'; then ok "M3: no nudge ⇒ handshake never confirms ⇒ DONE unreachable — the nudge is what drives it"
   else no "M3" "mutant with a no-op nudge should never reach DONE (handshake unconfirmed)"; fi
+fi
+# M5 (#1) — revert the RESTORE to a STANDALONE session (the pre-fix bug): the session lands OUTSIDE the shared
+# 'main' group where a reconnecting login can't see it. The #1 window-in-main check must then observe the standalone.
+MUT5="$ROOT/mut-standalone.sh"; sed 's/tmux new-window -d -t main: -n "$name"/tmux new-session -d -s "$name"/' "$WATCH" > "$MUT5"
+if cmp -s "$WATCH" "$MUT5"; then no "M5 vacuous" "sed did not change the restore target"; else
+  newhome; export FAKE_BODY="$MF"; seed_v2
+  SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweep tick_on "$MUT5"
+  if tmux_has 'new-session -d -s dev134'; then ok "M5: reverted restore makes a STANDALONE session (invisible to the 'main' login) — the #1 window-in-main check bites"
+  else no "M5" "mutant reverting to 'new-session -s <name>' should restore a standalone session"; fi
+fi
+# M6 (#2) — re-require the poller for a DONE (the pre-fix gate: ok==total AND poller==sweeping): the incident
+# state (poller cold, sessions 1/1) then falls to FAILED. The #2 no-false-FAILED row must observe the regression.
+MUT6="$ROOT/mut-pollerreq.sh"; sed 's/if \[ "$ok" = "$total" \]; then/if [ "$ok" = "$total" ] \&\& [ "$poller" = sweeping ]; then/' "$WATCH" > "$MUT6"
+if cmp -s "$WATCH" "$MUT6"; then no "M6 vacuous" "sed did not change the verdict gate"; else
+  newhome; export FAKE_BODY="$MF"; seed_v2
+  SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=no tick_on "$MUT6"
+  if has 'host-agent: FAILED' && ! has 'host-agent: DONE'; then ok "M6: re-requiring the poller FAILS a proven 1/1 resume on a cold poller — the #2 no-false-FAILED row bites"
+  else no "M6" "mutant re-requiring poller==sweeping should FAIL the cold-poller-but-sessions-OK case"; fi
 fi
 
 echo

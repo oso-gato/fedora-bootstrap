@@ -379,11 +379,24 @@ restore_session(){ # <cid> <name> <cwd> [<sid>]
   # to a strict UUID (hex-only, 8-4-4-4-12) so it is safe as a literal send-keys keystroke — never eval'd.
   local resume_cmd; if [ -n "$sid" ]; then resume_cmd="claude --resume $sid"; else resume_cmd="$DEVBOX_RESUME_CMD"; fi
   pexec "$cid" test -d "$cwd" 2>/dev/null || { log "restore: cwd '$cwd' absent in $cid — cannot restore '$name'"; return 1; }
-  pexec "$cid" tmux kill-session -t "$name" >/dev/null 2>&1 || true
-  pexec "$cid" tmux new-session -d -s "$name" -c "$cwd" >/dev/null 2>&1 \
-    || { log "restore: tmux new-session '$name' failed in $cid"; return 1; }
-  pexec "$cid" tmux send-keys -t "$name" "$resume_cmd" Enter >/dev/null 2>&1 \
-    || { log "restore: resume send-keys '$name' failed in $cid"; return 1; }
+  # RESTORE INTO THE 'main' GROUP THE OPERATOR'S LOGIN JOINS (incident 2026-07-19 — the resume-presentation
+  # bug that forced a MANUAL re-resume). The fedora-dev image's /etc/profile.d/zz-tmux-attach.sh makes every
+  # interactive login a session GROUPED with 'main' (`tmux new-session -t main -s c$$`), so a login sees
+  # 'main's WINDOWS. The old code restored into a STANDALONE `s-<sid>` session the login NEVER joins, so a
+  # reconnecting operator saw fresh shells and had to `claude --resume` by hand — the resume "succeeded" its
+  # internal handshake yet delivered nothing to the human. PROVEN on a throwaway (fedora-toolbox tmux): a
+  # grouped login SEES a window added to 'main', and does NOT see a standalone session. So: ensure the
+  # 'main' base session exists, then (re)create THIS session as a WINDOW of 'main' — a reconnecting login
+  # LANDS in the resumed claude with zero manual steps. The window NAME stays the manifest name (unique
+  # per sid), so `main:<name>` is the stable target for the nudge + the active-probe.
+  pexec "$cid" tmux has-session -t main 2>/dev/null \
+    || pexec "$cid" tmux new-session -d -s main -c "$cwd" >/dev/null 2>&1 \
+    || { log "restore: could not ensure the 'main' tmux base session in $cid"; return 1; }
+  pexec "$cid" tmux kill-window -t "main:$name" >/dev/null 2>&1 || true   # drop a stale same-name window (idempotent)
+  pexec "$cid" tmux new-window -d -t main: -n "$name" -c "$cwd" >/dev/null 2>&1 \
+    || { log "restore: tmux new-window '$name' in 'main' failed in $cid"; return 1; }
+  pexec "$cid" tmux send-keys -t "main:$name" "$resume_cmd" Enter >/dev/null 2>&1 \
+    || { log "restore: resume send-keys 'main:$name' failed in $cid"; return 1; }
   return 0
 }
 
@@ -408,10 +421,10 @@ box_ready(){ # <cid>
 # DISCRETE `send-keys Enter` submits it (a separate key event — an inline return is swallowed by the TUI's
 # bracketed paste). Best-effort each call; the caller (re)submits across the work window for TUI-readiness
 # timing. $1=cid $2=name $3=marker-path.
-nudge_session(){ # <cid> <name> <marker>
+nudge_session(){ # <cid> <name> <marker>  — targets the restored WINDOW in 'main' (restore_session)
   local cid="$1" name="$2" marker="$3" text="${DEVBOX_RESUME_NUDGE//%MARKER%/$3}"
-  pexec "$cid" tmux send-keys -t "$name" -l "$text" >/dev/null 2>&1 || return 1
-  pexec "$cid" tmux send-keys -t "$name" Enter >/dev/null 2>&1 || return 1
+  pexec "$cid" tmux send-keys -t "main:$name" -l "$text" >/dev/null 2>&1 || return 1
+  pexec "$cid" tmux send-keys -t "main:$name" Enter >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -427,9 +440,9 @@ session_working(){ # <cid> <marker>
 # shell is IDLE = a FAILURE (R17). ONE check; the caller settles ONCE for ALL sessions, so total FINISH
 # time is bounded by a SINGLE DEVBOX_RESUME_SETTLE, not N×settle (an adversarial N-idle manifest can't
 # blow the 300s host-agent tick). $1 = the VERIFIED CONTAINER ID (never the name — R17 req 6).
-session_active(){ # <cid> <name>
+session_active(){ # <cid> <name>  — the restored WINDOW in 'main' (restore_session)
   local cid="$1" name="$2" cmd
-  cmd="$(pexec "$cid" tmux list-panes -t "$name" -F '#{pane_current_command}' 2>/dev/null | head -n1)"
+  cmd="$(pexec "$cid" tmux list-panes -t "main:$name" -F '#{pane_current_command}' 2>/dev/null | head -n1)"
   case "$cmd" in
     ''|bash|-bash|sh|-sh|zsh|-zsh|fish|-fish) log "resume: session '$name' still idle ('${cmd:-none}') — NOT resuming"; return 1;;
     *) return 0;;
@@ -565,9 +578,24 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
     # VERIFY the entrypoint-supervised poller is OBSERVABLY sweeping in the NEW container (by $newid).
     local poller=down; wait_poller_sweeping "$newid" && poller=sweeping
 
-    if [ "$ok" = "$total" ] && [ "$poller" = sweeping ]; then
+    # SESSION RESTORE is the rebuild's SUCCESS CRITERION — not the poller (incident 2026-07-19: a proven
+    # 2/2 handshake-confirmed resume reported FAILED because the poller had not yet swept at check time). A
+    # FRESH rebuild REASSEMBLES the claudebox (minutes) before poller-service can even launch, so the poller
+    # commonly comes up AFTER the sessions are already actively-continuing — its warm-up must NOT false-FAIL
+    # a resume that demonstrably succeeded and alarm the human ("resume failed!") when their work is back.
+    # So: ok==total ⇒ DONE. The poller is verified best-effort and REPORTED honestly, but a not-yet-sweeping
+    # poller (when EVERY session is confirmed) is DONE-WITH-A-NOTE, never FAILED — the poller is
+    # entrypoint-supervised + self-restarting, and a GENUINELY-dead poller is caught independently by the
+    # dev-side poller-liveness watchdog (#173 lock-liveness + the apparatus-deadman), not by this window.
+    # A SESSION failure (ok<total: any up-unconfirmed or bare-shell idle) still FAILS loudly, unchanged —
+    # "silence never means restored" still holds for the sessions, which is what "restored" actually means.
+    if [ "$ok" = "$total" ]; then
       st=done
-      detail="rebuild-devbox '$wl' COMPLETE — KILLED old ${oldid:0:12} (zero survivors), rebuilt to ${newid:0:12} (health-gated), RESTORED + RESUMED + ACTIVELY CONTINUING $ok/$total sessions (handshake-confirmed), poller SWEEPING in the new container."
+      if [ "$poller" = sweeping ]; then
+        detail="rebuild-devbox '$wl' COMPLETE — KILLED old ${oldid:0:12} (zero survivors), rebuilt to ${newid:0:12} (health-gated), RESTORED + RESUMED + ACTIVELY CONTINUING $ok/$total sessions (handshake-confirmed), poller SWEEPING in the new container."
+      else
+        detail="rebuild-devbox '$wl' COMPLETE — KILLED old ${oldid:0:12} (zero survivors), rebuilt to ${newid:0:12} (health-gated), RESTORED + RESUMED + ACTIVELY CONTINUING $ok/$total sessions (handshake-confirmed). NOTE: the merge-poller was NOT yet observably sweeping within ${DEVBOX_POLLER_WINDOW}s — a fresh box reassembles the claudebox before poller-service launches, so it warms up after the sessions; it is entrypoint-supervised + self-restarting, and a genuinely-dead poller is surfaced by the independent poller-liveness watchdog. Sessions are the success criterion and they are back; box up on the new image."
+      fi
     else
       local upnote=''; [ "$up" -gt 0 ] && upnote=", claude-up-but-unconfirmed $up"
       st=failed
