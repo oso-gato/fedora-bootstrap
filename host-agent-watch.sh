@@ -40,9 +40,18 @@
 #
 # DESTRUCTIVE-VERB AUTHORIZATION (host-agent header's own standing requirement; R16 scope law): the
 #   `host-task` label is NOT sufficient authorization for a verb that destroys running work. `redeploy`
-#   is reversible/bounded (label-authorized). `rebuild-devbox` additionally requires the ISSUE AUTHOR to
-#   hold admin|maintain on the control repo (is_authorized_author, fail-closed) — an App identity or a
-#   mere label authorizes NOTHING.
+#   is reversible/bounded (label-authorized). `rebuild-devbox` requires a MAINTAINER'S EXPLICIT ACT, in
+#   EITHER of two equivalent forms (the R17 APPROVAL GATE, maintainer-confirmed 2026-07-19):
+#     (a) the ISSUE AUTHOR holds admin|maintain (is_authorized_author — authorship IS approval; the
+#         original path, unchanged), OR
+#     (b) a MAINTAINER has APPLIED the `approved` LABEL to the ticket (approved_by_maintainer) — the
+#         ONE-TAP path: the APPARATUS files the ticket (manifest + all), the human authorizes with a
+#         single label tap on mobile. TIMELINE-BOUND, never presence-bound (the fleet-halt applier
+#         discipline): the label's own labeled/unlabeled events are walked NEWEST-FIRST and the first
+#         event whose actor is role-checked admin|maintain decides — an App identity or mere label
+#         presence authorizes NOTHING, and an unresolvable actor is fail-closed NOT-approved.
+#   A bot-authored ticket with NEITHER is PENDING, not refused: left OPEN + UNCONSUMED (no .done), one
+#   marker-gated "awaiting approval" comment posted, re-checked every tick — the tap can come anytime.
 #   * OUTCOME = the `host-agent: DONE|FAILED — <detail>` COMMENT (the authoritative signal the dev
 #     side waits on) + the `host-done`/`host-failed` label (best-effort, created-on-use) + the issue
 #     CLOSED.
@@ -125,6 +134,7 @@ DEVBOX_WORK_POLL="${DEVBOX_WORK_POLL:-5}"                 # s: marker-poll inter
 DEVBOX_ASSEMBLED_MARKER="${DEVBOX_ASSEMBLED_MARKER:-/home/core/.local/state/claudebox/.assembled}"          # box-ready signal the `claude` wrapper itself gates on
 DEVBOX_ASSEMBLE_FAILED_MARKER="${DEVBOX_ASSEMBLE_FAILED_MARKER:-/home/core/.local/state/claudebox/.assemble-failed}"  # a half-assembled box (overrides a stale .assembled)
 DEVBOX_BOX_NAME="${DEVBOX_BOX_NAME:-claudebox}"           # the in-container distrobox `claude` runs inside (for the enterable probe)
+DEVBOX_APPROVER_MENTION="${DEVBOX_APPROVER_MENTION:-@oso-gato}"   # @mentioned on the awaiting-approval comment (mobile push); the AUTHORIZATION is role-checked, never this string
 TICKET_BODY=''   # set per-ticket in the discovery loop; rebuild-devbox parses its manifest from it
 
 log(){ echo "[$(date -u +%FT%TZ 2>/dev/null || date)] host-agent: $*" >&2; }   # → journald (no file)
@@ -178,6 +188,28 @@ kill_verified(){ # <oldid> <newid> <gone|alive>
   echo ok; return 0
 }
 
+# approval_fold: PURE core of the R17 approval gate — rows "event<TAB>maint" NEWEST-FIRST (event ∈
+# labeled|unlabeled for the `approved` label; maint ∈ 1 = actor role-checked admin|maintain, 0 =
+# confirmed non-maintainer/App, U = role could not be resolved) → APPROVED|NO on stdout. The FIRST
+# maintainer event decides (labeled ⇒ APPROVED, unlabeled ⇒ NO — a maintainer REMOVING the label is an
+# un-approval); a non-maintainer/App event is INERT both directions (label presence proves nothing —
+# every fleet App holds the triage needed to add a label); an UNRESOLVABLE actor is fail-closed NO
+# outright (it might be a maintainer's un-approval; a DESTRUCTIVE verb never guesses past it — the
+# pending state re-checks next tick, so a transient API blip costs seconds, never correctness).
+# Defined ABOVE the selftest gate (pure, no deps) so --selftest can exercise it.
+approval_fold(){
+  local event maint
+  while IFS=$'\t' read -r event maint; do
+    [ -n "$event" ] || continue
+    case "$maint" in
+      1) [ "$event" = labeled ] && echo APPROVED || echo NO; return 0;;
+      U) echo NO; return 0;;
+      *) : ;;                       # inert: keep walking to the next-older event
+    esac
+  done
+  echo NO; return 0                 # no maintainer event at all (incl. zero rows) ⇒ not approved
+}
+
 if [ "${1:-}" = "--selftest" ]; then
   f=0; ck(){ local g; g="$(printf '%s' "$2" | parse_op)"; [ "$g" = "$3" ] && echo "ok: $1" || { echo "FAIL: $1 — got '$g' want '$3'"; f=1; }; }
   ck "plain"        $'host-op: redeploy fedora-dev\nplease deploy'   'redeploy fedora-dev'
@@ -220,6 +252,14 @@ if [ "${1:-}" = "--selftest" ]; then
   ckv "same id"     AAAA AAAA gone  SAMEID
   is_rebuildable_workload fedora-dev     && echo "ok: fedora-dev rebuildable"          || { echo "FAIL: fedora-dev not rebuildable"; f=1; }
   is_rebuildable_workload fedora-desktop && { echo "FAIL: desktop rebuildable"; f=1; } || echo "ok: desktop NOT rebuildable (narrow allowlist)"
+  # ---- approval_fold (R17 approval gate, pure) — rows NEWEST-FIRST "event<TAB>maint" → APPROVED|NO ----
+  caf(){ local g; g="$(printf '%b' "$2" | approval_fold)"; [ "$g" = "$3" ] && echo "ok: af $1" || { echo "FAIL: af $1 — got '$g' want '$3'"; f=1; }; }
+  caf "maintainer labeled"            'labeled\t1\n'                             APPROVED
+  caf "maintainer UN-labeled newest"  'unlabeled\t1\nlabeled\t1\n'               NO         # un-approval wins over an older approval
+  caf "app labeled only"              'labeled\t0\n'                             NO         # label presence proves nothing
+  caf "app noise over maint approval" 'labeled\t0\nunlabeled\t0\nlabeled\t1\n'   APPROVED   # App events inert; the maintainer's decides
+  caf "unresolvable newest"           'labeled\tU\nlabeled\t1\n'                 NO         # fail-closed: never guess past a U
+  caf "no events"                     ''                                          NO
   [ "$f" = 0 ] && echo "ALL HOST-AGENT SELFTESTS PASS" || echo "HOST-AGENT SELFTESTS FAILED"; exit "$f"
 fi
 
@@ -287,6 +327,35 @@ is_authorized_author(){ # <login>
   # role_name (falling back only if the API omits it). A 404 for a non-collaborator/App is `gh api` rc≠0.
   role="$(gh api "repos/$ORG/$REPO/collaborators/$login/permission" -q '.role_name // .permission' 2>/dev/null)" || return 1
   case "$role" in admin|maintain) return 0;; *) return 1;; esac
+}
+
+# approved_by_maintainer: has a MAINTAINER applied the `approved` label to <issue>? Resolves the label's
+# own timeline events (oldest-first from the API → reversed to newest-first), role-checks each actor
+# (`.role_name` — `.permission` collapses maintain→"write"; a definitive 404 = non-collaborator/App ⇒ 0;
+# an API error ⇒ U), and folds via approval_fold. FAIL-CLOSED: an unreadable timeline ⇒ NOT approved.
+approved_by_maintainer(){ # <issue>
+  local issue="$1" rows out='' event actor role m
+  rows="$(gh api "repos/$ORG/$REPO/issues/$issue/timeline" --paginate \
+          -q '.[] | select((.event=="labeled" or .event=="unlabeled") and .label.name=="approved") | "\(.event)\t\(.actor.login)"' 2>/dev/null)" \
+    || return 1
+  [ -n "$rows" ] || return 1
+  local line
+  while IFS=$'\t' read -r event actor; do
+    [ -n "$event" ] && [ -n "$actor" ] || continue
+    if role="$(gh api "repos/$ORG/$REPO/collaborators/$actor/permission" -q '.role_name // .permission' 2>/dev/null)"; then
+      # App/bot actors answer 200 + role_name:"" (empirically pinned by fleet-halt.sh), so they resolve
+      # DEFINITIVELY to m=0 (inert) — the U path below is only genuine API failure (rate limit / 5xx).
+      case "$role" in admin|maintain) m=1;; *) m=0;; esac
+    else
+      # unresolvable actor ⇒ U: fail-closed (approval_fold answers NO outright, the strictest read —
+      # it MIGHT be a maintainer's un-approval). The pending state re-checks next tick, so a transient
+      # blip costs seconds, never correctness.
+      m=U
+    fi
+    printf -v line '%s\t%s' "$event" "$m"
+    out+="$line"$'\n'
+  done <<< "$rows"
+  [ "$(printf '%s' "$out" | tac | approval_fold)" = APPROVED ]
 }
 
 # REACH BACK IN: podman exec into the FRESH container as the fleet uid (mirrors claudebox-busy-probe).
@@ -503,9 +572,24 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
   fi
 
   # (2) FRESH → AUTHORIZE (destructive) + validate the manifest + capture the old ID + FIRE the rebuild.
+  # AUTHORIZE (R17 approval gate — see the DESTRUCTIVE-VERB AUTHORIZATION header): a maintainer's
+  # explicit act, in either form. Neither ⇒ PENDING (open + unconsumed, re-checked every tick), so the
+  # one-tap `approved` label can arrive any time later — never a refusal that consumes the ticket.
   local author; author="$(gh issue view "$issue" --repo "$ORG/$REPO" --json author -q '.author.login' 2>/dev/null || echo '')"
-  if ! is_authorized_author "$author"; then
-    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — issue author '${author:-?}' lacks admin|maintain on $ORG/$REPO; a verb that kills the dev box + its active sessions needs a maintainer, not the host-task label alone."
+  if is_authorized_author "$author"; then
+    :   # a maintainer AUTHORED the ticket — authorship IS approval (the original path, unchanged)
+  elif approved_by_maintainer "$issue"; then
+    log "$ORG/$repo#$issue: rebuild-devbox APPROVED via the \`approved\` label (applier role-checked admin|maintain) — proceeding"
+  else
+    # PENDING APPROVAL: no .done/.acted is written, so discovery re-dispatches here every tick until a
+    # maintainer taps the label (or authors/closes). ONE marker-gated comment tells the human the tap.
+    local pend="$STATE/${repo}-${issue}.approval-asked"
+    if [ ! -e "$pend" ]; then
+      gh issue comment "$issue" --repo "$ORG/$repo" --body "**host-agent: ⏳ AWAITING APPROVAL** — ${DEVBOX_APPROVER_MENTION} this \`rebuild-devbox $wl\` ticket was filed by the apparatus and needs a maintainer's ONE-TAP authorization: **apply the \`approved\` label to this issue**. It kills + rebuilds the dev box, then restores + resumes every manifest session. The applier is role-checked admin|maintain from the label's own timeline (an App-applied label is inert). The host re-checks every ~10s and fires the moment the label lands. To reject: close this issue." >/dev/null 2>&1 \
+        && : > "$pend" \
+        || log "$ORG/$repo#$issue: awaiting-approval comment failed to post (will retry next tick)"
+    fi
+    log "$ORG/$repo#$issue: rebuild-devbox PENDING maintainer approval (\`approved\` label or maintainer authorship) — ticket left open, re-checking each tick"
     return
   fi
   local manifest rc
