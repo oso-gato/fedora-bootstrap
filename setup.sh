@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.69 (R17 APPROVAL GATE — rebuild-devbox now fires on EITHER a maintainer-authored ticket (unchanged) OR a maintainer-APPLIED `approved` label on a bot-filed ticket: the ONE-TAP mobile authorization. Timeline-bound + role-checked (App label inert, un-label un-approves, unresolvable actor fail-closed); an unapproved bot ticket is PENDING (open, unconsumed, one marker-gated awaiting-approval comment @mention) — never refused. Covered by --selftest approval_fold rows + 5 new dryrun rows + mutation M4.)
+# Version: 1.2.70 (R17 rebuild-devbox: the poller-readiness verdict now DEFERS across ticks up to DEVBOX_POLLER_READY_WINDOW=600s instead of a single 120s in-tick block. A COLD poller-service must wait .assembled + credential + a self-refresh reload before its first sweep — which outlasts one tick — so the 2026-07-19 live rebuild verdicted a FALSE PARTIAL "poller=down" while the poller came up seconds later, with sessions 2/2 actively-continuing. A .restored marker skips restore on the deferred re-entry so the just-resumed sessions are never re-killed. Mutation-proven in validation/rebuild-devbox-dryrun.test.sh.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

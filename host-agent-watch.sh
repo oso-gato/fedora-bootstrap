@@ -109,7 +109,8 @@ DEVBOX_MAX_SESSIONS="${DEVBOX_MAX_SESSIONS:-32}"
 # them (poller unit name, resume verb) without touching this control logic.
 DEVBOX_RESUME_CMD="${DEVBOX_RESUME_CMD:-claude --continue}"     # typed into each restored session (in its cwd)
 DEVBOX_POLLER_UNIT="${DEVBOX_POLLER_UNIT:-poller.service}"      # entrypoint-supervised service to verify sweeping
-DEVBOX_POLLER_WINDOW="${DEVBOX_POLLER_WINDOW:-120}"            # s: poller must LOG within this bound (sweeping, not a PID)
+DEVBOX_POLLER_WINDOW="${DEVBOX_POLLER_WINDOW:-120}"            # s: "sweeping" = the poller LOGGED within this recent lookback (a PID is not enough)
+DEVBOX_POLLER_READY_WINDOW="${DEVBOX_POLLER_READY_WINDOW:-600}" # s: ACROSS-TICKS deadline for the poller to become observably sweeping after the sessions are restored. A COLD poller-service must wait .assembled + the credential + a self-refresh reload before its FIRST sweep — which outlasts a single tick — so we DEFER (the box_ready discipline), not false-FAIL (2026-07-19 live rebuild verdicted a false PARTIAL 'poller=down' while the poller came up seconds later)
 DEVBOX_RESUME_SETTLE="${DEVBOX_RESUME_SETTLE:-20}"            # s: a restored session's TUI settles this long before the first nudge
 # --- RESUME-TO-ACTIVE (R17 option-b, 2026-07-17) — a resumed session must come up ACTIVELY CONTINUING its
 #     prior task, not merely present. Empirically established (fedora-dev, tmux + the real claude TUI):
@@ -436,19 +437,45 @@ session_active(){ # <cid> <name>
   esac
 }
 
-# wait_poller_sweeping: the entrypoint-supervised poller must be OBSERVABLY sweeping — active AND logging
-# within the window (a PID is not enough). Poll up to DEVBOX_POLLER_WINDOW (every 2s).
-# $1 is the VERIFIED CONTAINER ID (never the name — R17 req 6).
-wait_poller_sweeping(){ # <cid>
-  local cid="$1" i n
-  for ((i=0; i<DEVBOX_POLLER_WINDOW; i+=2)); do
-    if pexec "$cid" systemctl --user is-active --quiet "$DEVBOX_POLLER_UNIT" 2>/dev/null; then
-      n="$(pexec "$cid" journalctl --user -u "$DEVBOX_POLLER_UNIT" --since "-${DEVBOX_POLLER_WINDOW}s" -q 2>/dev/null | wc -l)"
-      [ "${n:-0}" -gt 0 ] && return 0
+# poller_sweeping_now: is the entrypoint-supervised poller OBSERVABLY sweeping RIGHT NOW — the unit active
+# AND it LOGGED a sweep within DEVBOX_POLLER_WINDOW (a PID is not enough; silence never means restored). A
+# SINGLE-PASS check (no in-tick block) — patience lives ACROSS TICKS in poller_finish, bounded by
+# DEVBOX_POLLER_READY_WINDOW, so the host-agent tick still returns in seconds (300s cap). $1 = VERIFIED
+# CONTAINER ID (never the name — R17 req 6). rc 0 = observably sweeping.
+poller_sweeping_now(){ # <cid>
+  local cid="$1" n
+  pexec "$cid" systemctl --user is-active --quiet "$DEVBOX_POLLER_UNIT" 2>/dev/null || return 1
+  n="$(pexec "$cid" journalctl --user -u "$DEVBOX_POLLER_UNIT" --since "-${DEVBOX_POLLER_WINDOW}s" -q 2>/dev/null | wc -l)"
+  [ "${n:-0}" -gt 0 ]
+}
+
+# poller_finish: the SHARED FINISH verdict. Verify the poller (single-pass), then EITHER deliver the outcome
+# (writes .acted) OR — when every session is actively-continuing but the COLD poller has not been seen
+# sweeping yet — DEFER across ticks up to DEVBOX_POLLER_READY_WINDOW (writes NO .acted, so the next tick
+# re-checks via the .restored re-entry; no re-restore). The caller RETURNS after this in EVERY case: on a
+# commit the next tick short-circuits at the .acted phase; on a defer it re-enters the poller-only path.
+# args: repo issue wl acted rstd oldid newid ok total up failed_names
+poller_finish(){
+  local repo="$1" issue="$2" wl="$3" acted="$4" rstd="$5" oldid="$6" newid="$7" ok="$8" total="$9" up="${10}" failed_names="${11}"
+  local st detail poller=down
+  poller_sweeping_now "$newid" && poller=sweeping
+  if [ "$ok" = "$total" ] && [ "$poller" = down ]; then
+    local page; page=$(( $(date +%s 2>/dev/null || echo 0) - $(stat -c %Y "$rstd" 2>/dev/null || echo 0) ))
+    if [ "$page" -le "$DEVBOX_POLLER_READY_WINDOW" ]; then
+      log "$ORG/$repo#$issue: RESTORED $ok/$total actively-continuing; poller not observed sweeping yet (${page}s/${DEVBOX_POLLER_READY_WINDOW}s) — DEFER, re-checking next tick (no re-restore)"
+      return
     fi
-    sleep 2
-  done
-  return 1
+  fi
+  if [ "$ok" = "$total" ] && [ "$poller" = sweeping ]; then
+    st=done
+    detail="rebuild-devbox '$wl' COMPLETE — KILLED old ${oldid:0:12} (zero survivors), rebuilt to ${newid:0:12} (health-gated), RESTORED + RESUMED + ACTIVELY CONTINUING $ok/$total sessions (handshake-confirmed), poller SWEEPING in the new container."
+  else
+    local upnote=''; [ "${up:-0}" -gt 0 ] && upnote=", claude-up-but-unconfirmed $up"
+    local pnote=''; [ "$ok" = "$total" ] && [ "$poller" = down ] && pnote=" (poller never observed sweeping within ${DEVBOX_POLLER_READY_WINDOW}s)"
+    st=failed
+    detail="rebuild-devbox '$wl' PARTIAL — killed ${oldid:0:12}→${newid:0:12}; actively-continuing $ok/$total${upnote}${failed_names:+ (${failed_names# })}, poller=$poller${pnote}. Surfacing rather than claiming restored (R17); box is up on the new image."
+  fi
+  printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"
 }
 
 # do_rebuild_devbox: a DECOUPLED two-phase state machine (a host-agent tick is meant to take SECONDS —
@@ -459,13 +486,22 @@ wait_poller_sweeping(){ # <cid>
 # session → VERIFY the poller → record + deliver the outcome.
 do_rebuild_devbox(){ # <repo> <issue> <workload>
   local repo="$1" issue="$2" wl="$3"
-  local acted="$STATE/${1}-${2}.acted" rb="$STATE/${1}-${2}.rebuild" st detail
+  local acted="$STATE/${1}-${2}.acted" rb="$STATE/${1}-${2}.rebuild" rstd="$STATE/${1}-${2}.restored" st detail
   is_rebuildable_workload "$wl" || { respond "$repo" "$issue" failed "rebuild-devbox refused: '$wl' is not a rebuildable dev box (allowed: $REBUILD_WORKLOADS)"; return; }
 
   # (0) outcome already recorded by a prior tick → re-DELIVER only, never re-act (the .acted contract).
   if [ -e "$acted" ] && IFS='|' read -r st detail < "$acted" && [ -n "$st" ]; then
     log "$ORG/$repo#$issue: rebuild-devbox outcome already recorded; re-delivering ($st)"
     respond "$repo" "$issue" "$st" "$detail"; return
+  fi
+
+  # (0b) sessions already RESTORED + tallied by a prior tick (the .restored marker) but no .acted yet ⇒ we
+  # deferred waiting on the COLD poller. SKIP restore entirely (re-restoring would KILL the just-resumed
+  # sessions) — only finish the poller verification, deferred across ticks up to DEVBOX_POLLER_READY_WINDOW.
+  if [ -e "$rstd" ]; then
+    local r_newid r_oldid r_ok r_total r_up r_failed
+    IFS='|' read -r r_newid r_oldid r_ok r_total r_up r_failed < "$rstd"
+    poller_finish "$repo" "$issue" "$wl" "$acted" "$rstd" "$r_oldid" "$r_newid" "$r_ok" "$r_total" "$r_up" "$r_failed"; return
   fi
 
   # (1) rebuild already FIRED (marker present) → poll the unit; on completion do KILL-verify + RESTORE.
@@ -562,18 +598,11 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
       else failed_names="$failed_names $name(idle)"; fi
     done
 
-    # VERIFY the entrypoint-supervised poller is OBSERVABLY sweeping in the NEW container (by $newid).
-    local poller=down; wait_poller_sweeping "$newid" && poller=sweeping
-
-    if [ "$ok" = "$total" ] && [ "$poller" = sweeping ]; then
-      st=done
-      detail="rebuild-devbox '$wl' COMPLETE — KILLED old ${oldid:0:12} (zero survivors), rebuilt to ${newid:0:12} (health-gated), RESTORED + RESUMED + ACTIVELY CONTINUING $ok/$total sessions (handshake-confirmed), poller SWEEPING in the new container."
-    else
-      local upnote=''; [ "$up" -gt 0 ] && upnote=", claude-up-but-unconfirmed $up"
-      st=failed
-      detail="rebuild-devbox '$wl' PARTIAL — killed ${oldid:0:12}→${newid:0:12}; actively-continuing $ok/$total${upnote}${failed_names:+ (${failed_names# })}, poller=$poller. Surfacing rather than claiming restored (R17); box is up on the new image."
-    fi
-    printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"; return
+    # RECORD the tally so a deferred re-entry (0b) never re-RESTORES (which would kill the just-resumed
+    # sessions), then FINISH: verify the poller and either deliver the verdict or DEFER across ticks while a
+    # cold poller-service is still starting (poller_finish owns the DONE/PARTIAL/defer decision + delivery).
+    printf '%s|%s|%s|%s|%s|%s\n' "$newid" "$oldid" "$ok" "$total" "$up" "$failed_names" > "$rstd"
+    poller_finish "$repo" "$issue" "$wl" "$acted" "$rstd" "$oldid" "$newid" "$ok" "$total" "$up" "$failed_names"; return
   fi
 
   # (2) FRESH → AUTHORIZE (destructive) + validate the manifest + capture the old ID + FIRE the rebuild.

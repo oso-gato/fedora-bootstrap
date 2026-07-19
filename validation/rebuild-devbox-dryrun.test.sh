@@ -226,11 +226,27 @@ SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=no SCEN_PANE=claude SCEN
 if has 'host-agent: FAILED' && has 'verification FAILED' && ! has 'host-agent: DONE'; then ok "old container alive → FAILED (kill-by-ID GHOST)"
 else no "ghost" "expected FAILED + 'verification FAILED', never DONE"; fi
 
-echo "== BITE: poller NOT observably sweeping in the new box ⇒ FAILED =="
+echo "== POLLER READY-WINDOW: a COLD poller not-yet-sweeping ⇒ DEFER (no false FAILED); sessions restored =="
 newhome; export FAKE_BODY="$MF"; seed_v2
 SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=no tick
-if has 'host-agent: FAILED' && has 'poller=down' && ! has 'host-agent: DONE'; then ok "poller silent → FAILED (not a PID — observable sweep required)"
-else no "poller down" "expected FAILED + poller=down, never DONE"; fi
+RSTD="$HOME/.local/state/host-agent/fedora-bootstrap-1.restored"; ACTED="$HOME/.local/state/host-agent/fedora-bootstrap-1.acted"
+if ! has 'host-agent:' && [ -f "$RSTD" ] && [ ! -f "$ACTED" ] && ! has 'issue close'; then ok "poller down within window → DEFER (sessions restored, .restored written, NO verdict, ticket open)"
+else no "poller defer" "expected no verdict + .restored present + no .acted (2026-07-19 false-FAILED fix)"; fi
+
+echo "== POLLER READY-WINDOW: a deferred re-tick with the poller NOW sweeping ⇒ DONE (restore NOT re-run) =="
+# .restored persists (same $HOME, no newhome); the re-entry MUST skip restore — SCEN_TMUX_NEW_OK=no would
+# make any re-restore FAIL, so a DONE here proves restore did not re-run and re-kill the resumed session.
+SCEN_NEWID=NEWID SCEN_TMUX_NEW_OK=no SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweep tick
+if has 'host-agent: DONE' && has 'ACTIVELY CONTINUING 1/1' && has 'poller SWEEPING'; then ok "deferred re-tick, poller up → DONE 1/1 (no re-restore)"
+else no "poller recover" "expected DONE 1/1 + poller SWEEPING on the deferred re-tick"; fi
+
+echo "== POLLER READY-WINDOW: poller still down PAST the deadline ⇒ terminal FAILED (honest, not silent) =="
+newhome; export FAKE_BODY="$MF"; seed_v2
+SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=no tick   # tick 1: defer + write .restored
+touch -d '2 hours ago' "$HOME/.local/state/host-agent/fedora-bootstrap-1.restored"                                       # age past DEVBOX_POLLER_READY_WINDOW
+SCEN_NEWID=NEWID SCEN_TMUX_NEW_OK=no SCEN_POLLER_ACTIVE=no tick                                                          # tick 2: past deadline → FAILED (no re-restore)
+if has 'host-agent: FAILED' && has 'poller=down' && has 'never observed sweeping' && ! has 'host-agent: DONE'; then ok "poller down past deadline → terminal FAILED (poller never swept)"
+else no "poller deadline" "expected FAILED + poller=down + never-swept note, never DONE"; fi
 
 echo "== BITE: a health-gate FAILURE (rolled back) surfaces as FAILED, never a half-built success =="
 newhome; export FAKE_BODY="$MF"; seed_v2
