@@ -71,6 +71,5 @@ HEALTH_START_<t>   # --health-start-period (default 90s)
 HEALTH_TRIES_<t> HEALTH_SLEEP_<t>   # healthy-wait budget = TRIES × SLEEP s (default 18 × 6)
 ```
 
-A fully commented copy-me reference is `validation/live-gate.sample`; a worked multi-lineage
-example is the shipped host fallback `live-gate-presets/fedora-desktop.env` (xrdp + grd). The
+A fully commented copy-me reference is `validation/live-gate.sample`. The
 single-set `live-gate-presets/fedora-dev.env` is consumed via the implicit `default` target.

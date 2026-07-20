@@ -61,7 +61,7 @@ git pull --ff-only origin main
 | v1.2.50 | Cache/UI knobs simplified (blunt dnf-cache cap, 60s live-gate poll, tmux toggle dropped) | — *(60s poll superseded by v1.2.55 — 10s)* |
 | v1.2.51 | fastfetch installed on the host + login banner for every user | — |
 | v1.2.52 | Release-doc de-ceremony: changelog-table convention; this file collapsed from 51 subsections | — |
-| v1.2.53 | live-gate fix: dnf bind cache mounted `:z` — the v1.2.49 SELinux-enforcing convergence was RED-failing **every** gate build org-wide (EACCES in `/var/cache/libdnf5`; false negatives on fedora-dev#82/#107, fedora-desktop#101). `:z` also relabels the existing cache on first mount, so no manual heal. Re-gate affected PRs by pushing a new head SHA (per-SHA dedup) | — |
+| v1.2.53 | live-gate fix: dnf bind cache mounted `:z` — the v1.2.49 SELinux-enforcing convergence was RED-failing **every** gate build org-wide (EACCES in `/var/cache/libdnf5`; false negatives on fedora-dev#82/#107). `:z` also relabels the existing cache on first mount, so no manual heal. Re-gate affected PRs by pushing a new head SHA (per-SHA dedup) | — |
 | v1.2.54 | live-gate: preset fences now NAME the podman default-cap closure (CHOWN/DAC_OVERRIDE/FOWNER/FSETID/KILL/NET_BIND_SERVICE/SETFCAP/SETGID/SETPCAP/SETUID/SYS_CHROOT) — the launch floor is `--cap-drop=ALL`, so the old 2-cap fences under-capped candidates vs their own run-contract and PID-1 died at first boot (`healthy FAIL(none)`, proven A/B in-box: <1s death → alive). Gate also drops the evidence-destroying `--rm` (EXIT trap already reaps) and posts candidate state + boot-log tail into the verdict on health-FAIL | — |
 | v1.2.55 | live-gate pickup cadence 60s → 10s (`OnBootSec`/`OnUnitActiveSec=10s` **+ `AccuracySec=1s`** — without the accuracy override systemd's default 1-min window coalesces a sub-minute timer back to ~60s). Operator-requested loop latency cut, paired with the dev-side poller's matching 10s sweep (fedora-dev). Work is still bounded by flock + per-SHA `.done` dedup; ~360 label queries/h stays well inside API budgets | — |
 | v1.2.56 | live-gate verdict header now carries the **FULL 40-hex head sha** (`… — <repo> @ <full-sha> (targets: …)`); short sha stays for tags/logs. Lockstep with fedora-dev's #96 merger hardening: dev-side consumers (auto-merge.sh, pr-poller.sh) bind verdicts to the full sha on the comment's first line — a 7-hex prefix is 28 bits and a ground commit-sha collision could inherit a stale GREEN. Until this release is applied on the host, the hardened consumers read host verdicts as NONE (fail-closed: NOOP/REFUSE, never a wrong merge) | — |
@@ -282,7 +282,7 @@ PY
 claudebox-rebuild
 ```
 
-**Verify**: `claudebox-rebuild` completes, and `podman pull quay.io/fedora/fedora-toolbox:44` succeeds. `fedora-dev` and `fedora-desktop` are **unaffected** — their claudeboxes run no restrictive `policy.json` (permissive default), so their rebuilds were never rejected.
+**Verify**: `claudebox-rebuild` completes, and `podman pull quay.io/fedora/fedora-toolbox:44` succeeds. `fedora-dev` is **unaffected** — its claudebox runs no restrictive `policy.json` (permissive default), so its rebuilds were never rejected.
 
 **Rollback** — config only; `git checkout` the prior commit and re-run `setup.sh`. (Removing the scope re-breaks subsequent rebuilds, so only roll back with that understanding.)
 

@@ -2,7 +2,7 @@
 
 ## TL;DR — in plain words
 
-One script that turns a fresh cloud server into your **"mother platform"** — a locked-down host that runs your whole fleet of container apps. Its on-board Claude (the "host claudebox") has **two standing jobs**: it **operates the host** (including starting and removing containers), and — being the only thing that watches the apps run *live* — it **diagnoses them and proposes fixes**. It's one of **three boxes**: this host box **operates + diagnoses**, `fedora-dev` **builds + merges**, the desktop box **builds its own tools**. All three **open PRs; only `fedora-dev` merges** — on your one click.
+One script that turns a fresh cloud server into your **"mother platform"** — a locked-down host that runs your whole fleet of container apps. Its on-board Claude (the "host claudebox") has **two standing jobs**: it **operates the host** (including starting and removing containers), and — being the only thing that watches the apps run *live* — it **diagnoses them and proposes fixes**. It's one of **two boxes**: this host box **operates + diagnoses** and `fedora-dev` **builds + merges**. Both **open PRs; only `fedora-dev` merges** — on your one click.
 
 - 🔑 **How you get in:** key-only SSH/Mosh from anywhere; the admin console (Cockpit) and everything sensitive are reachable only over your private Tailscale network.
 - 🏭 **Maintaining the host:** keeps it minimal and treated-as-immutable; every app runs as a container pulled from your registry, auto-refreshed monthly with **automatic roll-back** if a new version comes up unhealthy. The host claudebox operates the fleet.
@@ -14,13 +14,12 @@ See [UPGRADING.md](UPGRADING.md) for the version history.
 
 ## Where this sits — the fleet
 
-**This repo is the `fedora-bootstrap` box** of a three-box swarm — **the genesis / mother-platform box** that operates the VPS host and live-diagnoses the containers on it; PR-only. Full map: **[FLEET.md](FLEET.md)**.
+**This repo is the `fedora-bootstrap` box** of a two-box swarm — **the genesis / mother-platform box** that operates the VPS host and live-diagnoses the containers on it; PR-only. Full map: **[FLEET.md](FLEET.md)**.
 
 | Box | Role | Builds? | Merges? | Operates host? | Spin up |
 |-----|------|:--:|:--:|:--:|---------|
 | **fedora-dev** | develop · build · **merge** | ✅ nested | ✅ **(sole merger)** | ❌ | `./spin-up.sh` |
 | **fedora-bootstrap** *(this one)* | operate host · live-diagnose → PR | ❌ (CI) | ❌ PR-only | ✅ incl. create/remove | `./day0.sh` (Day-0) |
-| **fedora-desktop** | knowledge-work + own toolset → PR | ❌ (CI) | ❌ PR-only | ❌ | `./spin-up.sh` |
 
 This box **operates the host and proposes fixes (PRs) — it never merges**; `fedora-dev` merges on Arthur's **clickable APPROVE**. The host genesis path is `day0.sh` → `setup.sh` (no `spin-up.sh`/`run.sh` here). See [FLEET.md](FLEET.md) for the handoff + boundaries.
 
@@ -62,7 +61,6 @@ After `setup.sh` (see "Using the bootstrap" below), the VPS:
 
 - **Runs containers from `ghcr.io/oso-gato/*` via podman.** Each major function is its own container; nothing else is installed onto the host beyond a short fixed package list.
 - **Hosts claudebox** — the in-host management agent (Claude Code in a Distrobox). Pulls images, runs containers, writes Quadlets, refreshes them on schedule.
-- **Carries the personal universe and second brain** via the **fedora-desktop** container (XFCE over xrdp + an experimental GNOME/grd lineage). VS Code for projects, Obsidian for the knowledge vault. RDP `KillDisconnected` + tmux give session survival across disconnects.
 
 **Access:**
 
@@ -175,7 +173,7 @@ password, no manually-created token, no expiry to babysit.
 
 As root on a fresh Fedora Cloud instance (take a Hostinger snapshot first — `day0.sh` reboots the host into the automated SELinux convergence).
 
-> **Who runs this & how the host "spins up":** a human operator with host root pastes this block. The in-host claudebox agent has **NO host root** — if *you* are the agent, **surface** this block to the operator, don't run it (policy/CLAUDE.md ROLE). There is **no `spin-up.sh` / `run.sh` / Quadlet** in this repo: unlike the workload repos (`fedora-dev` / `fedora-desktop`, which spin up via `spin-up.sh` → `run.sh`), the HOST genesis path is **`day0.sh` → `setup.sh`**; workloads then come up automatically (below).
+> **Who runs this & how the host "spins up":** a human operator with host root pastes this block. The in-host claudebox agent has **NO host root** — if *you* are the agent, **surface** this block to the operator, don't run it (policy/CLAUDE.md ROLE). There is **no `spin-up.sh` / `run.sh` / Quadlet** in this repo: unlike the workload repo (`fedora-dev`, which spins up via `spin-up.sh` → `run.sh`), the HOST genesis path is **`day0.sh` → `setup.sh`**; workloads then come up automatically (below).
 
 ```sh
 dnf -y upgrade --refresh
@@ -221,7 +219,7 @@ Tailscale join (one-time per host): with `TS_AUTHKEY=tskey-…` set it's unatten
 
 **Create the GitHub App once** — github.com → **Settings → Developer settings → GitHub Apps → New GitHub App** (owned by `oso-gato`): uncheck **Webhook → Active**; **Repository permissions** = Contents **R/W** + Pull requests **R/W** + Workflows **R/W**; **Create** → note the **App ID**; **Generate a private key** (`.pem`); **Install** on your repos → note the **Installation ID**.
 
-> The host's **own** GitHub App (for the host-claudebox's standing auth) and wiring the bundled box's collected Tailscale key into its Quadlet are tracked **follow-ups** (same feature family as the deferred fedora-desktop per-user work).
+> The host's **own** GitHub App (for the host-claudebox's standing auth) and wiring the bundled box's collected Tailscale key into its Quadlet are tracked **follow-ups**.
 
 #### What unfolds after that reboot — boots, stages, and when the workload lands
 
