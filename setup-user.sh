@@ -593,6 +593,25 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     fi
     unset _wl_ts
 
+    # (b5) POLLER ARMING PERSISTENCE (#96 Tier-A / incident #198) — mirrors the (b2) idiom.
+    # The dev-box poller's autonomous-merge arming lives ONLY in the container runtime env, so a
+    # RECREATE (R17 rebuild / monthly workload-refresh / redeploy) DROPS a live `podman exec`
+    # injection and the poller + its deadman (BOTH gated on POLLER_ENABLED in the box entrypoint)
+    # come up dead and SILENT (2026-07-19: 1.5h dark). So persist it in the INSTALLED Quadlet. Only
+    # fedora-dev (the box that runs the poller) and only once its OWN standing App is provisioned
+    # (no dev-box identity ⇒ can't merge ⇒ fail-closed, no arming). The merge-anchor identities
+    # auto-merge.sh checks (empty ⇒ REFUSE): the fleet-constant fitness reviewer + THIS host's
+    # live-gate App (convention oso-gato-<host>-claudebox = the gh_app_host_key identity provisioned
+    # above; a wrong login fails closed, never a bad merge).
+    if [ "$_c" = fedora-dev ] && [ -n "${GH_APP_SECRET:-}" ]; then
+        _q="$HOME/.config/containers/systemd/$_c.container"
+        _lg="oso-gato-$(hostname -s)-claudebox"
+        _arm="Environment=POLLER_ENABLED=1 POLLER_ARMED=1 FITNESS_SAME_IDENTITY=0 FITNESS_LOGIN=oso-gato-fitness-claudebox LG_HOST_LOGIN=${_lg}"
+        sed -i '/Environment=POLLER_ENABLED/d' "$_q"    # idempotent: drop placeholder / a prior run
+        sed -i "/^\[Container\]/a ${_arm}" "$_q"         # insert under [Container] (the right section)
+        echo "  -> ${_c}: poller ARMED for autonomous merge in the deploy spec (host live-gate ${_lg}) — survives recreate (#198)."
+    fi
+
     # (c) Enable the refresh + retry timers. The Quadlet-generated <name>.service
     # is enabled separately by the operator (or by the per-version upgrade
     # subsection). v1.1.9: NO env-file scaffold — workload Quadlets no longer

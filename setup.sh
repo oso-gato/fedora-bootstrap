@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.69 (R17 APPROVAL GATE — rebuild-devbox now fires on EITHER a maintainer-authored ticket (unchanged) OR a maintainer-APPLIED `approved` label on a bot-filed ticket: the ONE-TAP mobile authorization. Timeline-bound + role-checked (App label inert, un-label un-approves, unresolvable actor fail-closed); an unapproved bot ticket is PENDING (open, unconsumed, one marker-gated awaiting-approval comment @mention) — never refused. Covered by --selftest approval_fold rows + 5 new dryrun rows + mutation M4.)
+# Version: 1.2.71 (POLLER ARMING PERSISTENCE, incident #198 — setup-user.sh now persists the dev-box poller's autonomous-merge arming (POLLER_ENABLED/POLLER_ARMED + the fitness + host-live-gate merge-anchor identities) into the INSTALLED fedora-dev Quadlet, mirroring the b2 App-credential idiom, so a container recreate (R17 rebuild / monthly workload-refresh / redeploy) preserves it instead of the poller + its deadman coming up dead and silent. Only fedora-dev, only once its standing App is provisioned (fail-closed); host live-gate login derived from the host-name convention oso-gato-<host>-claudebox. Follows v1.2.70.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
