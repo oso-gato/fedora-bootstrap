@@ -597,10 +597,25 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
     log "$ORG/$repo#$issue: rebuild-devbox PENDING maintainer approval (\`approved\` label or maintainer authorship) — ticket left open, re-checking each tick"
     return
   fi
-  local manifest rc
-  manifest="$(printf '%s' "$TICKET_BODY" | parse_manifest)"; rc=$?
+  # SESSION MANIFEST — captured FRESH from the LIVE dev box, NOT trusted from the ticket body.
+  # The in-box producer CANNOT enumerate all sessions (a claudebox-nested shell reads only its OWN
+  # /proc lineage; the fedora-dev poller's rebuild_request_tick refuses for exactly this reason, and a
+  # base-level filer has no `gh`), so a rebuild ticket legitimately arrives with NO manifest. The HOST
+  # can: `pexec` = `podman exec --user 1000` runs core at the fedora-dev BASE level, which reads EVERY
+  # session's /proc — and it is the FRESHEST snapshot (moments before the kill, so a session started
+  # after the ticket was filed is still restored). `manifest` mode is pure enumeration (no `gh`). Falls
+  # back to any manifest the ticket carried (a maintainer-authored one) only if the live read is empty.
+  local manifest rc producer="${DEVBOX_MANIFEST_PRODUCER:-/home/core/.local/share/fedora-dev/bin/rebuild-request.sh}"
+  manifest="$(pexec "$wl" bash -lc "DEVBOX_MANIFEST_V2=1 bash $producer manifest 2>/dev/null" 2>/dev/null | parse_manifest)"; rc=$?
+  if [ "$rc" != 0 ] || [ -z "$manifest" ]; then                        # parse_manifest emits validated
+    manifest="$(printf '%s' "$TICKET_BODY" | parse_manifest)"; rc=$?    # `name<TAB>cwd[<TAB>sid]` lines, so
+  fi                                                                    # non-empty ⇒ ≥1 session. Fall back to a ticket-carried manifest.
   if [ "$rc" != 0 ]; then
-    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — $( [ "$rc" = 3 ] && echo "no session manifest found" || echo "malformed session manifest" ): expected \`session <name> <cwd> [<sid>]\` lines between $MANIFEST_BEGIN and $MANIFEST_END (names [A-Za-z0-9._-], cwd an absolute path with no spaces/metacharacters, optional session-id a UUID 8-4-4-4-12 hex, ≤$DEVBOX_MAX_SESSIONS sessions)."
+    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — $( [ "$rc" = 3 ] && echo "no session manifest (live dev-box read AND ticket body both empty)" || echo "malformed session manifest" ): expected \`session <name> <cwd> [<sid>]\` lines between $MANIFEST_BEGIN and $MANIFEST_END (names [A-Za-z0-9._-], cwd an absolute path with no spaces/metacharacters, optional session-id a UUID 8-4-4-4-12 hex, ≤$DEVBOX_MAX_SESSIONS sessions)."
+    return
+  fi
+  if [ -z "$manifest" ]; then
+    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — zero sessions captured (live dev-box read + ticket body both empty); a rebuild would KILL the box and restore NOTHING."
     return
   fi
   local oldid; oldid="$(podman container inspect "$wl" -f '{{.Id}}' 2>/dev/null || echo '')"
