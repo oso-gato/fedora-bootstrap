@@ -78,6 +78,7 @@ a="$*"
 case "$a" in
   "container inspect"*"{{.Id}}"*)   echo "${SCEN_NEWID:-NEWID}" ;;                 # id of the (new) container
   "container exists"*)  [ "${SCEN_OLD_GONE:-yes}" = yes ] && exit 1 || exit 0 ;;   # gone→rc1, alive(ghost)→rc0
+  *"rebuild-request.sh manifest"*)  printf '%s' "${SCEN_LIVE_MANIFEST:-}" ;;       # host self-captures the FRESH manifest from the LIVE box (core@base)
   *"mkdir -p"*)         exit 0 ;;                                                  # marker dir create
   *"rm -f "*rebuild-resumed*) exit 0 ;;                                            # stale-marker clear
   *"distrobox enter"*)  [ "${SCEN_BOX_ENTER:-yes}" = yes ] && exit 0 || exit 1 ;;  # box_ready enterable probe
@@ -169,8 +170,29 @@ if has 'malformed session manifest' && ! grep -qF 'workload-rebuild@' "$HOME/sys
 else no "malformed manifest" "expected 'malformed session manifest' + no rebuild"; fi
 newhome; export FAKE_BODY=$'host-op: rebuild-devbox fedora-dev\njust prose no block' FAKE_AUTHOR=arthur FAKE_PERM=admin
 tick
-if has 'no session manifest found' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; then ok "no manifest block → REFUSED, no rebuild"
-else no "no manifest block" "expected 'no session manifest found' + no rebuild"; fi
+if has 'no session manifest' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; then ok "no manifest block (live + ticket both empty) → REFUSED, no rebuild"
+else no "no manifest block" "expected 'no session manifest' + no rebuild"; fi
+
+echo "== HOST SELF-CAPTURE (the arm fix): a BARE ticket (no manifest) + a live dev-box read ⇒ FIRES with the LIVE manifest =="
+newhome; export FAKE_BODY=$'host-op: rebuild-devbox fedora-dev\njust a bare request, no manifest' FAKE_AUTHOR=arthur FAKE_PERM=admin
+SCEN_LIVE_MANIFEST=$'%%DEVBOX-MANIFEST-BEGIN%%\nsession live777 /home/core/repos/live '"$SID"$'\n%%DEVBOX-MANIFEST-END%%' SCEN_NEWID=OLDID tick
+if grep -qF 'start --no-block workload-rebuild@fedora-dev.service' "$HOME/systemctl.log" \
+   && grep -qF 'live777' "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" \
+   && ! has 'issue close'; then ok "bare ticket + live read → host self-captured the manifest and FIRED"
+else no "host self-capture" "expected FIRE + the live session (live777) in the .rebuild marker"; fi
+
+echo "== FRESHNESS: the LIVE read is PREFERRED over a manifest carried in the ticket body =="
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=arthur FAKE_PERM=admin        # ticket carries session dev134
+SCEN_LIVE_MANIFEST=$'%%DEVBOX-MANIFEST-BEGIN%%\nsession live777 /home/core/repos/live '"$SID"$'\n%%DEVBOX-MANIFEST-END%%' SCEN_NEWID=OLDID tick
+if grep -qF 'live777' "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" \
+   && ! grep -qF 'dev134' "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild"; then ok "live manifest (live777) wins over the ticket's stale one (dev134) — freshest snapshot"
+else no "freshness" "expected live777 (not dev134) in the marker"; fi
+
+echo "== FAIL-SAFE: zero sessions (live read empty + ticket body empty) ⇒ REFUSED, box NOT killed =="
+newhome; export FAKE_BODY=$'host-op: rebuild-devbox fedora-dev\n%%DEVBOX-MANIFEST-BEGIN%%\n%%DEVBOX-MANIFEST-END%%' FAKE_AUTHOR=arthur FAKE_PERM=admin
+tick    # SCEN_LIVE_MANIFEST unset ⇒ live read empty; the ticket's empty block ⇒ zero sessions
+if has 'zero sessions captured' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; then ok "zero sessions → REFUSED, no rebuild (never destroy a box with nothing to restore)"
+else no "zero-session fail-safe" "expected 'zero sessions captured' + no rebuild"; fi
 
 echo "== BOX-READY gate: a not-yet-assembled box DEFERS (no verdict, ticket open) — restore next tick =="
 newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=arthur FAKE_PERM=admin; seed_v2

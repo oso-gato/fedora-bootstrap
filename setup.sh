@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.69 (R17 APPROVAL GATE — rebuild-devbox now fires on EITHER a maintainer-authored ticket (unchanged) OR a maintainer-APPLIED `approved` label on a bot-filed ticket: the ONE-TAP mobile authorization. Timeline-bound + role-checked (App label inert, un-label un-approves, unresolvable actor fail-closed); an unapproved bot ticket is PENDING (open, unconsumed, one marker-gated awaiting-approval comment @mention) — never refused. Covered by --selftest approval_fold rows + 5 new dryrun rows + mutation M4.)
+# Version: 1.2.70 (rebuild-devbox self-captures the session manifest from the LIVE dev box — `pexec` = `podman exec --user 1000` = core at the fedora-dev BASE level reads EVERY session's /proc, and the host already has `gh`, so the two capabilities that cannot coexist INSIDE the box (all-sessions /proc access + gh) DO coexist on the host, which orchestrates from outside. do_rebuild_devbox now captures the manifest ITSELF, FRESH, moments before the kill; a rebuild ticket may arrive BARE and the host fills it (ticket-carried manifest is fallback only, live read PREFERRED). Fail-safe kept: zero sessions ⇒ REFUSED, box never killed. Makes the R17 arm work end-to-end. Covered by validation/rebuild-devbox-dryrun.test.sh + 3 new rows.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
