@@ -519,6 +519,7 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     # wizard is part of the fleet contract exactly like the Quadlet below, so enforce it the
     # same way. Announce the delegation so the questions are attributable in the day0 scroll.
     GH_APP_ID=""; GH_APP_INSTALLATION_ID=""; GH_APP_SECRET=""; BOX_HOSTNAME=""
+    GH_APP_FITNESS_ID=""; GH_APP_FITNESS_INSTALLATION_ID=""; GH_APP_FITNESS_SECRET=""; FITNESS_SAME_IDENTITY=""
     if [ ! -x "$HOME/$_c/spin-up.sh" ]; then
         echo "FATAL: $HOME/$_c/spin-up.sh missing or not executable — workload contract violation" >&2
         echo "  (every workload repo must ship an executable spin-up.sh; its questions were NOT asked," >&2
@@ -562,6 +563,26 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
           -e "s|^# *Environment=GH_APP_ID=.*|Environment=GH_APP_ID=${GH_APP_ID} GH_APP_INSTALLATION_ID=${GH_APP_INSTALLATION_ID}|" \
           "$_q"
         echo "  -> ${_c}: standing GitHub App credential wired (podman secret '${GH_APP_SECRET}', App ${GH_APP_ID})."
+    fi
+
+    # (b2-fitness) Activate the FITNESS reviewer App — the DISTINCT THIRD identity the merge-trust
+    # boundary requires (auto-merge.sh refuses a same-identity fitness verdict, so without it the loop
+    # REVIEWS but never MERGES). The workload's spin-up.sh COLLECT_ONLY created podman secret
+    # gh_app_key_fitness (when a PEM was provisioned) and emitted FITNESS_SAME_IDENTITY=0; uncomment the
+    # shipped-commented fitness lines so a recreation keeps BOTH the credential AND strict-SoD. Guarded on
+    # the secret: no fitness App => no-op, the box stays make-it-work (review, do not merge). Idempotent;
+    # the FITNESS_SAME_IDENTITY line no-ops against a Quadlet predating fedora-dev's provisioning PR.
+    if [ -n "${GH_APP_FITNESS_SECRET:-}" ]; then
+        _qc="$HOME/.config/containers/systemd/$_c.container"
+        sed -i \
+          -e "s|^# *Secret=gh_app_key_fitness,type=mount,target=gh_app_key_fitness.*|Secret=${GH_APP_FITNESS_SECRET},type=mount,target=gh_app_key_fitness|" \
+          -e "s|^# *Environment=GH_APP_FITNESS_ID=.*|Environment=GH_APP_FITNESS_ID=${GH_APP_FITNESS_ID} GH_APP_FITNESS_INSTALLATION_ID=${GH_APP_FITNESS_INSTALLATION_ID}|" \
+          -e "s|^# *Environment=FITNESS_SAME_IDENTITY=0.*|Environment=FITNESS_SAME_IDENTITY=${FITNESS_SAME_IDENTITY:-0}|" \
+          "$_qc"
+        echo "  -> ${_c}: FITNESS reviewer App wired (podman secret '${GH_APP_FITNESS_SECRET}', App ${GH_APP_FITNESS_ID}) — strict SoD auto-merge enabled."
+    else
+        echo "  -> ${_c}: NO fitness App credential — the loop will REVIEW but NOT auto-merge (auto-merge refuses a same-identity verdict)." >&2
+        echo "     Provision it to enable autonomous merge: 'cd ~/${_c} && ./spin-up.sh' (paste the fitness PEM), or re-run setup." >&2
     fi
 
     # (b3) Stamp the wizard-collected pairing hostname into the INSTALLED Quadlet, so the
