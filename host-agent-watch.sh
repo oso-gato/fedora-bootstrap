@@ -25,6 +25,23 @@
 #
 # VERBS (allowlist — nothing else executes):
 #   redeploy <workload>       — sanctioned pull+digest+health-gated restart (workload-refresh@). Idempotent.
+#   apply-bootstrap           — HOST SELF-APPLY (#133): make merged control-repo `main` LIVE on erebus with no
+#     human — the F16 absorber closes the USER layer automatically, this closes the SYSTEM layer (the last
+#     routine manual act: the maintainer's `git pull && setup.sh` as root). It fires the host --user oneshot
+#     host-apply.service (ExecStart `sudo /usr/local/sbin/host-apply` — ONE pinned NOPASSWD entry), which
+#     fast-forwards the control clone to merged `main` and re-runs the FULL setup.sh AS ROOT, HEALTH-GATED
+#     with the SAME recovery-before-power discipline as redeploy (fail/unhealthy ⇒ rolled back to the prior
+#     commit + re-converged), REFUSING a dirty/diverged (non-fast-forward) clone (a question, not a
+#     force-pull), IDEMPOTENT (same-sha ⇒ no-op), and only recording SUCCESS after a FAIL-CLOSED live
+#     READBACK proves the on-disk artifacts byte-equal merged main ('applied' = 'proven live', not 'the
+#     script ran'; #133 BLOCKING clause, R17/#179). Long-running (setup.sh is minutes), so like
+#     rebuild-devbox it FIRES `--no-block` + polls across ticks (a blocking start would blow the 300s tick
+#     cap — incident FIX-3). It takes NO arg (it applies pinned, merge-gated `main`, injecting nothing), so
+#     like redeploy it is LABEL-authorized, NOT author-gated: the merge gate (host live-gate + fitness) is
+#     the content-authorization; the ticket only chooses WHEN. (Tighten to author-gated if untrusted
+#     collaborators ever gain host-task filing.) The load-bearing safety is the root-owned executor, which
+#     the agent cannot modify and which runs a PRISTINE `git archive` of the PINNED remote's merged sha —
+#     see host-apply.sh for the full trust chain.
 #   rebuild-devbox <devbox>   — R17 (fedora-dev#174 host half): the DESTRUCTIVE lifecycle verb. KILL the
 #     dev box from OUTSIDE (total teardown; a host podman-level Quadlet restart reaps every process in
 #     the container's PID namespace — the ghost an in-container `distrobox rm -f` cannot, incident
@@ -215,6 +232,7 @@ approval_fold(){
 if [ "${1:-}" = "--selftest" ]; then
   f=0; ck(){ local g; g="$(printf '%s' "$2" | parse_op)"; [ "$g" = "$3" ] && echo "ok: $1" || { echo "FAIL: $1 — got '$g' want '$3'"; f=1; }; }
   ck "plain"        $'host-op: redeploy fedora-dev\nplease deploy'   'redeploy fedora-dev'
+  ck "apply-boot"   $'host-op: apply-bootstrap\nmake merged main live' 'apply-bootstrap'
   ck "blockquote"   $'> host-op: restamp\nprose'                     'restamp'
   ck "leading ws"   $'   host-op:   redeploy fedora-desktop  '       'redeploy fedora-desktop  '
   ck "not-line1"    $'hello\nhost-op: redeploy fedora-dev'           ''
@@ -693,14 +711,63 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
   fi
 }
 
+# ---- apply-bootstrap (#133) — HOST SELF-APPLY: make merged `main` LIVE via the root-owned executor ----
+# DECOUPLED like rebuild-devbox: setup.sh is a MINUTES-long root run, so a blocking `systemctl start`
+# would blow the 300s host-agent tick cap (incident FIX-3, and the box's conmon goes with the timeout
+# kill). So FIRE `--no-block` + poll host-apply.service across ticks; the executor's ExecMainStatus IS
+# the verdict (mapped below). No workload arg (it applies pinned, merge-gated `main`), no author-gate
+# (LABEL-authorized, like redeploy — the merge gate is the content-authorization; see the header).
+do_apply_bootstrap(){ # <repo> <issue>
+  local repo="$1" issue="$2" acted="$STATE/${1}-${2}.acted" fired="$STATE/${1}-${2}.applyfired" st detail scmain
+  local unit="host-apply.service"
+
+  # (0) outcome already recorded by a prior tick → re-DELIVER only, never re-fire (the .acted contract).
+  if [ -e "$acted" ] && IFS='|' read -r st detail < "$acted" && [ -n "$st" ]; then
+    log "$ORG/$repo#$issue: apply-bootstrap outcome already recorded; re-delivering ($st)"
+    respond "$repo" "$issue" "$st" "$detail"; return
+  fi
+
+  # (1) apply already FIRED (marker present) → poll the unit; deliver the verdict on completion.
+  if [ -e "$fired" ]; then
+    local active; active="$(systemctl --user is-active "$unit" 2>/dev/null)"
+    case "$active" in
+      ""|activating|active|reloading|deactivating)
+        # "" = a transient systemctl read; treat as in-progress (never mistake unreadable for done). Open.
+        log "$ORG/$repo#$issue: apply-bootstrap in progress (${active:-unknown}) — verdict on completion"; return ;;
+      *) : ;;   # inactive/failed/dead → the oneshot terminated; read ExecMainStatus for the verdict.
+    esac
+    scmain="$(systemctl --user show -p ExecMainStatus --value "$unit" 2>/dev/null)"
+    case "${scmain:-x}" in
+      0) st=done;   detail="apply-bootstrap: merged \`main\` APPLIED — setup.sh re-run as root, host health-gated (verify.sh), live artifacts readback-verified byte-equal merged main (no-op if already current)." ;;
+      3) st=failed; detail="apply-bootstrap REFUSED — the host control clone is dirty or has DIVERGED from main (non-fast-forward), or main was unfetchable; a diverged host clone is a question, not a force-pull. Host left untouched." ;;
+      1) st=failed; detail="apply-bootstrap FAILED — the forward setup.sh apply failed or the host was UNHEALTHY after; ROLLED BACK + re-converged to the prior commit (best-effort — a config re-run does not uninstall packages a failed forward-apply may have added). Host on prior code; re-file after fixing." ;;
+      2) st=failed; detail="apply-bootstrap FAILED readback — the live host artifacts do NOT all equal merged main (applied != proven-live); success NOT recorded; merged tree intact + git-revertable. Investigate; re-file to retry." ;;
+      *) st=failed; detail="apply-bootstrap FAILED — host-apply executor errored (ExecMainStatus=${scmain:-?}). Host left recoverable (merged tree intact)." ;;
+    esac
+    printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"; return
+  fi
+
+  # (2) FRESH → fire the decoupled apply. The FF-pull/refuse/health-gate/rollback/readback all live in the
+  #     root-owned executor (agent-unmodifiable); this only triggers it + reports.
+  systemctl --user reset-failed "$unit" 2>/dev/null || true
+  if systemctl --user start --no-block "$unit" 2>/dev/null; then
+    : > "$fired"
+    log "$ORG/$repo#$issue: apply-bootstrap FIRED (host-apply.service) — FF-pull + setup.sh + health-gate + readback running; verdict on completion."
+  else
+    st=failed; detail="apply-bootstrap: could not start host-apply.service — unit missing? (the self-apply verb goes live only AFTER the one-time bootstrap manual \`setup.sh\` — it cannot install itself.) Host untouched."
+    printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"
+  fi
+}
+
 dispatch(){ # <repo> <issue> <verb> <args...>
   local repo="$1" issue="$2" verb="$3"; shift 3
   case "$verb" in
-    redeploy)       [ -n "${1:-}" ] && do_redeploy "$repo" "$issue" "$1" \
-                       || respond "$repo" "$issue" failed "redeploy needs a workload name (host-op: redeploy <workload>)";;
-    rebuild-devbox) [ -n "${1:-}" ] && do_rebuild_devbox "$repo" "$issue" "$1" \
-                       || respond "$repo" "$issue" failed "rebuild-devbox needs a dev-box name (host-op: rebuild-devbox <devbox>)";;
-    ""|*)           respond "$repo" "$issue" failed "unsupported or empty host-op '$verb' — allowed verbs: redeploy <workload>, rebuild-devbox <devbox>";;
+    redeploy)        [ -n "${1:-}" ] && do_redeploy "$repo" "$issue" "$1" \
+                        || respond "$repo" "$issue" failed "redeploy needs a workload name (host-op: redeploy <workload>)";;
+    apply-bootstrap) do_apply_bootstrap "$repo" "$issue";;
+    rebuild-devbox)  [ -n "${1:-}" ] && do_rebuild_devbox "$repo" "$issue" "$1" \
+                        || respond "$repo" "$issue" failed "rebuild-devbox needs a dev-box name (host-op: rebuild-devbox <devbox>)";;
+    ""|*)            respond "$repo" "$issue" failed "unsupported or empty host-op '$verb' — allowed verbs: redeploy <workload>, apply-bootstrap, rebuild-devbox <devbox>";;
   esac
 }
 

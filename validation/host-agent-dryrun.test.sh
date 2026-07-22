@@ -39,6 +39,7 @@ cat > "$BIN/systemctl" <<'EOF'
 printf 'SYSTEMCTL %s\n' "$*" >> "$SYSTEMCTL_LOG"
 case "$*" in
   *"show -p ExecMainStatus"*) echo "${FAKE_EXECMAIN:-0}" ;;  # emulate a clean refresh (mainstatus 0)
+  *"is-active"*)              echo "${FAKE_ISACTIVE:-inactive}" ;;  # apply-bootstrap poll (host-apply.service)
 esac
 exit 0
 EOF
@@ -80,6 +81,50 @@ run_case "redeploy with no workload → refused" \
   $'host-op: redeploy' no 'redeploy needs a workload name'
 run_case "host-op NOT on line 1 → refused (line-1-only parse)" \
   $'hello there\nhost-op: redeploy fedora-dev' no 'no valid'
+
+echo "== apply-bootstrap (#133): DECOUPLED fire → poll → deliver (host-apply.service; stubbed) =="
+# apply-bootstrap is long-running, so it FIRES --no-block then polls the unit across ticks. Drive two ticks
+# over ONE persistent HOME (the .applyfired marker carries between them) and assert the box-side contract:
+# tick 1 fires host-apply.service and delivers NOTHING (ticket stays open); tick 2 reads ExecMainStatus and
+# delivers the mapped verdict. This exercises dispatch routing + the decoupled state machine end-to-end.
+ahome="$ROOT/apply-home"; mkdir -p "$ahome"
+ab_tick(){ # <isactive> <execmain>
+  export HOME="$ahome" GH_LOG="$ahome/gh.log" SYSTEMCTL_LOG="$ahome/sc.log"
+  export FAKE_BODY=$'host-op: apply-bootstrap\napply merged main' FAKE_ISSUE=1 FAKE_ISACTIVE="$1" FAKE_EXECMAIN="$2"
+  : > "$GH_LOG"; : > "$SYSTEMCTL_LOG"
+  PATH="$BIN:$PATH" bash "$WATCH" >/dev/null 2>&1 || true
+}
+ab_check(){ # <desc> <cond:0/1> <detail>
+  if [ "$2" = 0 ]; then pass=$((pass+1)); printf '  ok   %s\n' "$1"; else fail=$((fail+1)); printf '  FAIL %s\n       %s\n' "$1" "$3"; fi
+}
+# tick 1: FRESH → fires the unit --no-block, NO delivery.
+ab_tick activating 0
+c=0
+grep -q 'SYSTEMCTL --user start --no-block host-apply.service' "$ahome/sc.log" || { c=1; d1="no --no-block start of host-apply.service"; }
+grep -q 'host-agent:' "$ahome/gh.log" && { c=1; d1="delivered a comment on the FIRE tick (should stay open)"; }
+[ -e "$ahome/.local/state/host-agent/fedora-bootstrap-1.applyfired" ] || { c=1; d1="no .applyfired marker after firing"; }
+ab_check "tick 1 fires host-apply.service --no-block, delivers nothing, marks .applyfired" "$c" "${d1:-}"
+# tick 2: unit still activating → in-progress, still no delivery, no re-fire.
+ab_tick activating 0
+c=0
+grep -q 'start --no-block host-apply.service' "$ahome/sc.log" && { c=1; d2="re-fired the unit while in progress (should only poll)"; }
+grep -q 'host-agent:' "$ahome/gh.log" && { c=1; d2="delivered while still activating"; }
+ab_check "tick 2 (still activating) polls only — no re-fire, no delivery" "$c" "${d2:-}"
+# tick 3: unit terminal (inactive) + ExecMainStatus 0 → deliver DONE.
+ab_tick inactive 0
+grep -q 'host-agent: DONE' "$ahome/gh.log" && c=0 || { c=1; d3="no DONE on terminal+ExecMainStatus=0: $(tr '\n' ' ' <"$ahome/gh.log")"; }
+ab_check "tick 3 (inactive, ExecMainStatus=0) delivers DONE" "$c" "${d3:-}"
+
+echo "== apply-bootstrap verdict mapping: ExecMainStatus 3 (diverged) → FAILED 'REFUSED' =="
+rhome="$ROOT/apply-refuse"; mkdir -p "$rhome/.local/state/host-agent"
+: > "$rhome/.local/state/host-agent/fedora-bootstrap-1.applyfired"   # pretend already fired
+export HOME="$rhome" GH_LOG="$rhome/gh.log" SYSTEMCTL_LOG="$rhome/sc.log"
+export FAKE_BODY=$'host-op: apply-bootstrap' FAKE_ISSUE=1 FAKE_ISACTIVE=failed FAKE_EXECMAIN=3
+: > "$GH_LOG"; : > "$SYSTEMCTL_LOG"
+PATH="$BIN:$PATH" bash "$WATCH" >/dev/null 2>&1 || true
+{ grep -q 'host-agent: FAILED' "$rhome/gh.log" && grep -qi 'REFUSED' "$rhome/gh.log"; } \
+  && { pass=$((pass+1)); printf '  ok   ExecMainStatus=3 → FAILED REFUSED (diverged/dirty, a question)\n'; } \
+  || { fail=$((fail+1)); printf '  FAIL ExecMainStatus=3 mapping\n       gh.log: %s\n' "$(tr '\n' ' ' <"$rhome/gh.log")"; }
 
 echo
 echo "host-agent-dryrun: $pass passed, $fail failed"

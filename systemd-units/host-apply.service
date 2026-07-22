@@ -1,0 +1,26 @@
+[Unit]
+Description=Host self-apply — fast-forward the control clone to merged `main` + re-run setup.sh AS ROOT, health-gated with rollback + a fail-closed live readback (apparatus F16b; issue #133)
+Documentation=https://github.com/oso-gato/fedora-bootstrap
+# Needs the network for the pinned `git fetch`; a fetch failure is a fail-closed REFUSE (exit 3), never a hang.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs DIRECTLY on the host as a --user oneshot (NOT via `distrobox enter`): the box-resident host agent
+# has NO host root, so it TRIGGERS this unit (systemctl --user start --no-block) and reads the verdict from
+# ExecMainStatus. The unit escalates to root through ONE pinned, argument-free NOPASSWD entry
+# (policy/sudoers.claudebox → /usr/local/sbin/host-apply). `sudo` env_reset drops the caller's environment,
+# so the executor's APPLY_* test seams are UNREACHABLE here — it runs merge-gated defaults only. The
+# executor materialises a PRISTINE `git archive` of the PINNED remote's merged sha and runs THAT, so the
+# core-writable control clone can inject nothing (full trust chain in host-apply.sh).
+#
+# Never apply during a claudebox rebuild: a mid-rebuild setup.sh run would re-arm stood-down timers and
+# re-open the distrobox-init race (same guard the watchers use). ExecCondition cleanly SKIPS this firing
+# (unit NOT marked failed) while a rebuild is active; the host agent re-fires next tick.
+ExecCondition=/usr/bin/bash -c '! systemctl --user is-active --quiet claudebox-rebuild-run.service'
+ExecStart=/usr/bin/sudo /usr/local/sbin/host-apply
+# A full idempotent setup.sh re-run (both privilege layers) is minutes, not seconds — but this is fired
+# `--no-block` and polled across ticks by the host agent, so it never wedges the 300s host-agent tick. The
+# executor wraps its own git/setup calls; 1800s (matching workload-refresh@) is a generous hang ceiling.
+TimeoutStartSec=1800
