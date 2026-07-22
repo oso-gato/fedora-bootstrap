@@ -406,20 +406,29 @@ restore_session(){ # <cid> <name> <cwd> [<sid>]
   # bare shell and re-resumed → duplicates). `main` is created WITHOUT destroy-unattached (install.sh:132) so it
   # persists detached; a group shares ONE window set (N grouped SESSIONS collapse), so N WINDOWS keep N tenants
   # DISTINCT and all visible.
-  pexec "$cid" tmux has-session -t main 2>/dev/null \
-    || pexec "$cid" tmux new-session -d -s main >/dev/null 2>&1 \
-    || { log "restore: could not ensure the 'main' session in $cid"; return 1; }
-  # IDEMPOTENT (G5): a re-entered FINISH tick must NOT yank a session the user may already be using. If the window
-  # exists and is running claude, leave it untouched; else (re)create it fresh.
-  if pexec "$cid" tmux list-panes -t "main:$name" -F '#{pane_current_command}' 2>/dev/null | grep -qx claude; then
+  # IDEMPOTENT (G5): a re-entered FINISH tick (or a session the user is already in) must NOT be yanked. If a
+  # window for this tenant already exists AND is running claude, leave it untouched.
+  if pexec "$cid" tmux has-session -t main 2>/dev/null \
+     && pexec "$cid" tmux list-panes -t "main:$name" -F '#{pane_current_command}' 2>/dev/null | grep -qx claude; then
     log "restore: window 'main:$name' already running claude in $cid — leaving idempotently"; return 0
   fi
-  pexec "$cid" tmux kill-window -t "main:$name" >/dev/null 2>&1 || true
-  pexec "$cid" tmux new-window -d -t main: -n "$name" -c "$cwd" >/dev/null 2>&1 \
-    || { log "restore: tmux new-window 'main:$name' failed in $cid"; return 1; }
+  # WINDOW 0 = the FIRST restored tenant — no leftover bash window. If `main` does not exist yet (the host
+  # restored before any login), CREATE it WITH this tenant as its INITIAL window (window 0), rather than an empty
+  # `main` (bash window 0) + a separate tenant window that pushed the sessions to 1,2. If `main` already exists —
+  # a subsequent tenant, OR a bash window an EARLY login minted before the host restored (which we must NOT
+  # hijack: the user may be typing in it) — add this tenant as a NEW window after whatever `main` holds. Either
+  # way the tenant is a named window IN `main`, visible to every mosh/ssh login (G2).
+  if pexec "$cid" tmux has-session -t main 2>/dev/null; then
+    pexec "$cid" tmux kill-window -t "main:$name" >/dev/null 2>&1 || true   # drop a stale same-name window
+    pexec "$cid" tmux new-window -d -t main: -n "$name" -c "$cwd" >/dev/null 2>&1 \
+      || { log "restore: tmux new-window 'main:$name' failed in $cid"; return 1; }
+  else
+    pexec "$cid" tmux new-session -d -s main -n "$name" -c "$cwd" >/dev/null 2>&1 \
+      || { log "restore: tmux new-session 'main' (window 0 = '$name') failed in $cid"; return 1; }
+  fi
   pexec "$cid" tmux send-keys -t "main:$name" "$resume_cmd" Enter >/dev/null 2>&1 \
     || { log "restore: resume send-keys 'main:$name' failed in $cid"; return 1; }
-  pexec "$cid" tmux select-window -t "main:$name" >/dev/null 2>&1 || true   # make the tenant the group's CURRENT window so the login lands ON it, not window-0 bash
+  pexec "$cid" tmux select-window -t "main:$name" >/dev/null 2>&1 || true   # make the tenant the CURRENT window so the login lands ON it
   return 0
 }
 

@@ -91,8 +91,9 @@ case "$a" in
     { [ "${SCEN_WORKED:-yes}" = yes ] && grep -qF -- "touch $mk" "${RESUME_LOG:-/dev/null}" 2>/dev/null; } && exit 0 || exit 1 ;;
   *" test -d "*)        [ "${SCEN_CWD_OK:-yes}" = yes ] && exit 0 || exit 1 ;;
   *"stat -c %Y"*poller.log*)  [ "${SCEN_POLLER_ACTIVE:-yes}" = yes ] && date +%s || true ;; # G1 heartbeat: FRESH mtime ⇒ sweeping; empty ⇒ down
-  *"tmux has-session"*) exit 0 ;;                                                 # `main` already exists (skip new-session -d -s main)
-  *"tmux new-window"*)  nm="${a##*-n }"; nm="${nm%%[[:space:]]*}"; printf '%s\n' "$nm" >> "${WINDOWS_LOG:-/dev/null}"; [ "${SCEN_TMUX_NEW_OK:-yes}" = yes ] && exit 0 || exit 1 ;;  # record the window ⇒ a later list-panes "sees" it (G2 window-in-main)
+  *"tmux has-session"*) [ -e "${MAIN_FLAG:-/nonexistent}" ] && exit 0 || exit 1 ;;  # `main` exists ONLY after a new-session made it (models a fresh post-rebuild box)
+  *"tmux new-session"*) printf '%s\n' "$a" >> "${TMUX_LOG:-/dev/null}"; : > "${MAIN_FLAG:-/dev/null}"; nm="${a##*-n }"; nm="${nm%%[[:space:]]*}"; [ "$nm" != "$a" ] && printf '%s\n' "$nm" >> "${WINDOWS_LOG:-/dev/null}"; [ "${SCEN_TMUX_NEW_OK:-yes}" = yes ] && exit 0 || exit 1 ;;  # creates `main`; `-n <name>` ⇒ window 0 IS that tenant (the win0 fix)
+  *"tmux new-window"*)  printf '%s\n' "$a" >> "${TMUX_LOG:-/dev/null}"; nm="${a##*-n }"; nm="${nm%%[[:space:]]*}"; printf '%s\n' "$nm" >> "${WINDOWS_LOG:-/dev/null}"; [ "${SCEN_TMUX_NEW_OK:-yes}" = yes ] && exit 0 || exit 1 ;;  # a subsequent tenant ⇒ a new window (G2 window-in-main)
   *"tmux list-panes"*)  tgt="${a##*-t }"; tgt="${tgt%%[[:space:]]*}"; grep -qxF -- "${tgt#main:}" "${WINDOWS_LOG:-/dev/null}" 2>/dev/null && echo "${SCEN_PANE:-claude}" || true ;; # EMPTY until the window is created (so restore_session's idempotency pre-check PROCEEDS), then SCEN_PANE
   *"tmux send-keys"*)   printf '%s\n' "$a" >> "${RESUME_LOG:-/dev/null}"; exit 0 ;; # capture resume + nudge keystrokes
   *"tmux "*)            exit 0 ;;                                                  # kill-window / select-window / new-session -d -s main
@@ -106,7 +107,9 @@ newhome(){ HOME="$ROOT/home-$RANDOM$RANDOM"; export HOME; mkdir -p "$HOME";
   export GH_LOG="$HOME/gh.log";              : > "$GH_LOG"
   export SYSTEMCTL_LOG="$HOME/systemctl.log"; : > "$SYSTEMCTL_LOG"
   export RESUME_LOG="$HOME/resume.log";       : > "$RESUME_LOG"
-  export WINDOWS_LOG="$HOME/windows.log";     : > "$WINDOWS_LOG"; }
+  export WINDOWS_LOG="$HOME/windows.log";     : > "$WINDOWS_LOG"
+  export TMUX_LOG="$HOME/tmux.log";           : > "$TMUX_LOG"
+  export MAIN_FLAG="$HOME/main.exists";       rm -f "$MAIN_FLAG"; }
 # fast windows so the nudge/marker poll + settles don't stall the suite (RENUDGE_INTERVAL=1 keeps the slice small)
 tick_on(){ PATH="$BIN:$PATH" DEVBOX_RESUME_SETTLE=1 DEVBOX_POLLER_WINDOW=1 DEVBOX_WORK_WINDOW=1 DEVBOX_NUDGE_TRIES=1 DEVBOX_WORK_POLL=1 DEVBOX_RENUDGE_INTERVAL=1 bash "$1" >/dev/null 2>&1 || true; }
 tick(){ tick_on "$WATCH"; }
@@ -161,7 +164,7 @@ else no "label trust boundary" "A1=$A1 (App label must not fire) A2=$A2 (un-labe
 
 echo "== M4: neutralize approved_by_maintainer ⇒ the one-tap approval no longer fires (the gate bites) =="
 MUT4="$ROOT/watch-m4.sh"; sed 's/elif approved_by_maintainer "$issue"; then/elif false; then/' "$WATCH" > "$MUT4"
-if cmp -s "$WATCH" "$MUT4"; then no "M4 vacuous" "sed did not change the copy"; else
+if [ "$(sha256sum <"$WATCH")" = "$(sha256sum <"$MUT4")" ]; then no "M4 vacuous" "sed did not change the copy"; else   # sha256sum, not cmp: the live-gate image has no diffutils
   newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_PERM_arthur=admin FAKE_TIMELINE=$'labeled\tarthur'
   tick_on "$MUT4"
   if ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log" && has 'AWAITING APPROVAL'; then ok "M4: mutant ignores the tap ⇒ the approve-fires row discriminates"
@@ -217,6 +220,13 @@ newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=arthur FAKE_PERM=admin; seed_v2
 SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweeping tick
 if has 'host-agent: DONE' && has 'ACTIVELY CONTINUING 1/1' && has 'handshake-confirmed' && has 'poller SWEEPING' && has 'issue close'; then ok "all-green → DONE (killed + restored + actively continuing + sweeping)"
 else no "all-green DONE" "expected DONE + ACTIVELY CONTINUING 1/1 + handshake-confirmed + poller SWEEPING + close"; fi
+
+echo "== WINDOW-0 (polish): on a fresh box the FIRST restored session IS window 0 — no leftover bash window =="
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=arthur FAKE_PERM=admin; seed_v2   # MAIN_FLAG unset ⇒ `main` does NOT exist ⇒ host creates it WITH the tenant
+SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=yes tick
+if grep -q 'new-session -d -s main -n dev134' "$HOME/tmux.log" && ! grep -qE 'new-session -d -s main$' "$HOME/tmux.log"; then
+  ok "1st session created AS window 0 (new-session -n dev134); no empty bash-only 'new-session -d -s main'"
+else no "window-0" "expected 'new-session -d -s main -n dev134' in tmux.log AND no empty 'new-session -d -s main' — got: $(tr '\n' '|' <"$HOME/tmux.log")"; fi
 
 echo "== RESUME cmd (D4/#191): a v1 manifest (no sid) resumes cwd-scoped with 'claude --continue' =="
 newhome; export FAKE_BODY="$MF"; seed_marker OLDID 'dev134\t/home/core/repos/a'
@@ -275,7 +285,7 @@ else no "in-progress wait" "expected NO verdict comment + NO close while activat
 echo "== MUTATIONS (each sed MUST change the file; each proves a real guard bites) =="
 # M1 — neutralize the BOX-READY gate: a not-ready box is (wrongly) RESTORED instead of deferring.
 MUT1="$ROOT/mut-boxready.sh"; sed 's/^box_ready(){ # <cid>/box_ready(){ return 0 # <cid>/' "$WATCH" > "$MUT1"
-if cmp -s "$WATCH" "$MUT1"; then no "M1 vacuous" "sed did not change box_ready"; else
+if [ "$(sha256sum <"$WATCH")" = "$(sha256sum <"$MUT1")" ]; then no "M1 vacuous" "sed did not change box_ready"; else
   newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=arthur FAKE_PERM=admin; seed_v2
   SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_ASSEMBLED=no SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweep tick_on "$MUT1"
   if has 'host-agent:'; then ok "M1: neutralized box-ready gate RESTORES a not-ready box (real script DEFERS) — gate bites"
@@ -283,7 +293,7 @@ if cmp -s "$WATCH" "$MUT1"; then no "M1 vacuous" "sed did not change box_ready";
 fi
 # M2 — neutralize session_working: an IDLE (bare-shell) session is (wrongly) claimed working.
 MUT2="$ROOT/mut-working.sh"; sed 's/^session_working(){ # <cid> <marker>/session_working(){ return 0 # <cid> <marker>/' "$WATCH" > "$MUT2"
-if cmp -s "$WATCH" "$MUT2"; then no "M2 vacuous" "sed did not change session_working"; else
+if [ "$(sha256sum <"$WATCH")" = "$(sha256sum <"$MUT2")" ]; then no "M2 vacuous" "sed did not change session_working"; else
   newhome; export FAKE_BODY="$MF"; seed_v2
   SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=bash SCEN_WORKED=no SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweep tick_on "$MUT2"
   if has 'ACTIVELY CONTINUING 1/1' || has 'host-agent: DONE'; then ok "M2: forced session_working claims an idle session works — handshake verify bites"
@@ -291,7 +301,7 @@ if cmp -s "$WATCH" "$MUT2"; then no "M2 vacuous" "sed did not change session_wor
 fi
 # M3 — neutralize the NUDGE: with no nudge sent, the handshake marker never confirms → DONE unreachable.
 MUT3="$ROOT/mut-nudge.sh"; sed 's/^nudge_session(){ # <cid> <name> <marker>/nudge_session(){ return 0 # <cid> <name> <marker>/' "$WATCH" > "$MUT3"
-if cmp -s "$WATCH" "$MUT3"; then no "M3 vacuous" "sed did not change nudge_session"; else
+if [ "$(sha256sum <"$WATCH")" = "$(sha256sum <"$MUT3")" ]; then no "M3 vacuous" "sed did not change nudge_session"; else
   newhome; export FAKE_BODY="$MF"; seed_v2
   SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=yes SCEN_POLLER_LOG=sweep tick_on "$MUT3"
   if has 'actively-continuing 0/1' && ! has 'host-agent: DONE'; then ok "M3: no nudge ⇒ handshake never confirms ⇒ DONE unreachable — the nudge is what drives it"
