@@ -57,9 +57,18 @@
 #
 # DESTRUCTIVE-VERB AUTHORIZATION (host-agent header's own standing requirement; R16 scope law): the
 #   `host-task` label is NOT sufficient authorization for a verb that destroys running work. `redeploy`
-#   is reversible/bounded (label-authorized). `rebuild-devbox` additionally requires the ISSUE AUTHOR to
-#   hold admin|maintain on the control repo (is_authorized_author, fail-closed) — an App identity or a
-#   mere label authorizes NOTHING.
+#   is reversible/bounded (label-authorized). `rebuild-devbox` requires a MAINTAINER'S EXPLICIT ACT, in
+#   EITHER of two equivalent forms (the R17 APPROVAL GATE, maintainer-confirmed 2026-07-19):
+#     (a) the ISSUE AUTHOR holds admin|maintain (is_authorized_author — authorship IS approval; the
+#         original path, unchanged), OR
+#     (b) a MAINTAINER has APPLIED the `approved` LABEL to the ticket (approved_by_maintainer) — the
+#         ONE-TAP path: the APPARATUS files the ticket (manifest + all), the human authorizes with a
+#         single label tap on mobile. TIMELINE-BOUND, never presence-bound (the fleet-halt applier
+#         discipline): the label's own labeled/unlabeled events are walked NEWEST-FIRST and the first
+#         event whose actor is role-checked admin|maintain decides — an App identity or mere label
+#         presence authorizes NOTHING, and an unresolvable actor is fail-closed NOT-approved.
+#   A bot-authored ticket with NEITHER is PENDING, not refused: left OPEN + UNCONSUMED (no .done), one
+#   marker-gated "awaiting approval" comment posted, re-checked every tick — the tap can come anytime.
 #   * OUTCOME = the `host-agent: DONE|FAILED — <detail>` COMMENT (the authoritative signal the dev
 #     side waits on) + the `host-done`/`host-failed` label (best-effort, created-on-use) + the issue
 #     CLOSED.
@@ -116,8 +125,9 @@ DEVBOX_MAX_SESSIONS="${DEVBOX_MAX_SESSIONS:-32}"
 # manifest NEVER supplies executable content). Overridable so the host operator / dev side can tune
 # them (poller unit name, resume verb) without touching this control logic.
 DEVBOX_RESUME_CMD="${DEVBOX_RESUME_CMD:-claude --continue}"     # typed into each restored session (in its cwd)
-DEVBOX_POLLER_UNIT="${DEVBOX_POLLER_UNIT:-poller.service}"      # entrypoint-supervised service to verify sweeping
-DEVBOX_POLLER_WINDOW="${DEVBOX_POLLER_WINDOW:-120}"            # s: poller must LOG within this bound (sweeping, not a PID)
+DEVBOX_POLLER_LOG="${DEVBOX_POLLER_LOG:-/home/core/.local/state/pr-poller/poller.log}"   # the poller's per-sweep HEARTBEAT (pr-poller.sh writes a `sweep:` line every POLL_INTERVAL); this box has NO systemd, so a base-visible mtime is the only true liveness signal
+DEVBOX_POLLER_FRESH="${DEVBOX_POLLER_FRESH:-90}"             # s: SWEEPING only if the heartbeat was written within this window (poller sweeps ~30s); a present-but-STALE log is a wedged/dead poller, never sweeping
+DEVBOX_POLLER_WINDOW="${DEVBOX_POLLER_WINDOW:-120}"            # s: keep polling the heartbeat up to this bound before concluding down
 DEVBOX_RESUME_SETTLE="${DEVBOX_RESUME_SETTLE:-20}"            # s: a restored session's TUI settles this long before the first nudge
 # --- RESUME-TO-ACTIVE (R17 option-b, 2026-07-17) — a resumed session must come up ACTIVELY CONTINUING its
 #     prior task, not merely present. Empirically established (fedora-dev, tmux + the real claude TUI):
@@ -137,11 +147,13 @@ DEVBOX_RESUME_MARKER_DIR="${DEVBOX_RESUME_MARKER_DIR:-/home/core/.local/state/re
 DEVBOX_RESUME_NUDGE="${DEVBOX_RESUME_NUDGE:-[auto-resume] Your dev box was rebuilt and this session was restored. FIRST, acknowledge you are active by running exactly:  touch %MARKER%  — then review your recent messages and CONTINUE the task you were working on, exactly where you left off.}"
 DEVBOX_BOX_READY_WINDOW="${DEVBOX_BOX_READY_WINDOW:-900}"   # s: DEADLINE for the fresh box's claudebox to become assembled+enterable (checked ACROSS ticks, not blocked in one) before we give up
 DEVBOX_WORK_WINDOW="${DEVBOX_WORK_WINDOW:-120}"            # s: after nudging, a session must touch its marker within this to count ACTIVELY WORKING
-DEVBOX_NUDGE_TRIES="${DEVBOX_NUDGE_TRIES:-5}"             # (re)submit the nudge up to this many times across the work window (TUI-readiness timing)
+DEVBOX_NUDGE_TRIES="${DEVBOX_NUDGE_TRIES:-3}"             # (re)submit the nudge up to this many times across the work window (TUI-readiness timing); 3×40s slice = the 120s window
+DEVBOX_RENUDGE_INTERVAL="${DEVBOX_RENUDGE_INTERVAL:-40}"  # s: the re-nudge SLICE is floored here — a received nudge touches its marker in seconds, so a slice this long lets it CONFIRM before a second nudge fires (never double-nudge a busy claude mid-task), while a genuinely lost nudge is still retried (G8)
 DEVBOX_WORK_POLL="${DEVBOX_WORK_POLL:-5}"                 # s: marker-poll interval within the work window (lowered by the dry-run test)
 DEVBOX_ASSEMBLED_MARKER="${DEVBOX_ASSEMBLED_MARKER:-/home/core/.local/state/claudebox/.assembled}"          # box-ready signal the `claude` wrapper itself gates on
 DEVBOX_ASSEMBLE_FAILED_MARKER="${DEVBOX_ASSEMBLE_FAILED_MARKER:-/home/core/.local/state/claudebox/.assemble-failed}"  # a half-assembled box (overrides a stale .assembled)
 DEVBOX_BOX_NAME="${DEVBOX_BOX_NAME:-claudebox}"           # the in-container distrobox `claude` runs inside (for the enterable probe)
+DEVBOX_APPROVER_MENTION="${DEVBOX_APPROVER_MENTION:-@oso-gato}"   # @mentioned on the awaiting-approval comment (mobile push); the AUTHORIZATION is role-checked, never this string
 TICKET_BODY=''   # set per-ticket in the discovery loop; rebuild-devbox parses its manifest from it
 
 log(){ echo "[$(date -u +%FT%TZ 2>/dev/null || date)] host-agent: $*" >&2; }   # → journald (no file)
@@ -195,6 +207,28 @@ kill_verified(){ # <oldid> <newid> <gone|alive>
   echo ok; return 0
 }
 
+# approval_fold: PURE core of the R17 approval gate — rows "event<TAB>maint" NEWEST-FIRST (event ∈
+# labeled|unlabeled for the `approved` label; maint ∈ 1 = actor role-checked admin|maintain, 0 =
+# confirmed non-maintainer/App, U = role could not be resolved) → APPROVED|NO on stdout. The FIRST
+# maintainer event decides (labeled ⇒ APPROVED, unlabeled ⇒ NO — a maintainer REMOVING the label is an
+# un-approval); a non-maintainer/App event is INERT both directions (label presence proves nothing —
+# every fleet App holds the triage needed to add a label); an UNRESOLVABLE actor is fail-closed NO
+# outright (it might be a maintainer's un-approval; a DESTRUCTIVE verb never guesses past it — the
+# pending state re-checks next tick, so a transient API blip costs seconds, never correctness).
+# Defined ABOVE the selftest gate (pure, no deps) so --selftest can exercise it.
+approval_fold(){
+  local event maint
+  while IFS=$'\t' read -r event maint; do
+    [ -n "$event" ] || continue
+    case "$maint" in
+      1) [ "$event" = labeled ] && echo APPROVED || echo NO; return 0;;
+      U) echo NO; return 0;;
+      *) : ;;                       # inert: keep walking to the next-older event
+    esac
+  done
+  echo NO; return 0                 # no maintainer event at all (incl. zero rows) ⇒ not approved
+}
+
 if [ "${1:-}" = "--selftest" ]; then
   f=0; ck(){ local g; g="$(printf '%s' "$2" | parse_op)"; [ "$g" = "$3" ] && echo "ok: $1" || { echo "FAIL: $1 — got '$g' want '$3'"; f=1; }; }
   ck "plain"        $'host-op: redeploy fedora-dev\nplease deploy'   'redeploy fedora-dev'
@@ -238,6 +272,14 @@ if [ "${1:-}" = "--selftest" ]; then
   ckv "same id"     AAAA AAAA gone  SAMEID
   is_rebuildable_workload fedora-dev     && echo "ok: fedora-dev rebuildable"          || { echo "FAIL: fedora-dev not rebuildable"; f=1; }
   is_rebuildable_workload fedora-desktop && { echo "FAIL: desktop rebuildable"; f=1; } || echo "ok: desktop NOT rebuildable (narrow allowlist)"
+  # ---- approval_fold (R17 approval gate, pure) — rows NEWEST-FIRST "event<TAB>maint" → APPROVED|NO ----
+  caf(){ local g; g="$(printf '%b' "$2" | approval_fold)"; [ "$g" = "$3" ] && echo "ok: af $1" || { echo "FAIL: af $1 — got '$g' want '$3'"; f=1; }; }
+  caf "maintainer labeled"            'labeled\t1\n'                             APPROVED
+  caf "maintainer UN-labeled newest"  'unlabeled\t1\nlabeled\t1\n'               NO         # un-approval wins over an older approval
+  caf "app labeled only"              'labeled\t0\n'                             NO         # label presence proves nothing
+  caf "app noise over maint approval" 'labeled\t0\nunlabeled\t0\nlabeled\t1\n'   APPROVED   # App events inert; the maintainer's decides
+  caf "unresolvable newest"           'labeled\tU\nlabeled\t1\n'                 NO         # fail-closed: never guess past a U
+  caf "no events"                     ''                                          NO
   [ "$f" = 0 ] && echo "ALL HOST-AGENT SELFTESTS PASS" || echo "HOST-AGENT SELFTESTS FAILED"; exit "$f"
 fi
 
@@ -307,6 +349,40 @@ is_authorized_author(){ # <login>
   case "$role" in admin|maintain) return 0;; *) return 1;; esac
 }
 
+# approved_by_maintainer: has a MAINTAINER applied the `approved` label to <issue>? Resolves the label's
+# own timeline events (oldest-first from the API → reversed to newest-first), role-checks each actor
+# (`.role_name` — `.permission` collapses maintain→"write"; a 200 answer maps role → 1/0; ANY failed
+# lookup ⇒ U — `gh api` exits rc≠0 on a 404 and on a rate-limit/5xx alike, and this function does NOT
+# tell them apart), and folds via approval_fold. FAIL-CLOSED: an unreadable timeline ⇒ NOT approved.
+approved_by_maintainer(){ # <issue>
+  local issue="$1" rows out='' event actor role m
+  rows="$(gh api "repos/$ORG/$REPO/issues/$issue/timeline" --paginate \
+          -q '.[] | select((.event=="labeled" or .event=="unlabeled") and .label.name=="approved") | "\(.event)\t\(.actor.login)"' 2>/dev/null)" \
+    || return 1
+  [ -n "$rows" ] || return 1
+  local line
+  while IFS=$'\t' read -r event actor; do
+    [ -n "$event" ] && [ -n "$actor" ] || continue
+    if role="$(gh api "repos/$ORG/$REPO/collaborators/$actor/permission" -q '.role_name // .permission' 2>/dev/null)"; then
+      # App/bot actors answer 200 + role_name:"" (empirically pinned by fleet-halt.sh), so they resolve
+      # DEFINITIVELY to m=0 (inert). NB: a non-collaborator login (e.g. a departed one) 404s, and
+      # `gh api` exits rc≠0 on that just like on a rate-limit/5xx — so a 404 lands in the U branch
+      # below, NOT here (unlike fleet-halt.sh's 3-way check, which parses stderr for HTTP 404).
+      case "$role" in admin|maintain) m=1;; *) m=0;; esac
+    else
+      # unresolvable actor ⇒ U: fail-closed (approval_fold answers NO outright, the strictest read —
+      # it MIGHT be a maintainer's un-approval). A transient blip costs one tick (the pending state
+      # re-checks); a PERSISTENT failure — e.g. a departed collaborator's old event 404ing — answers
+      # NO even over an older maintainer approval, and recovery is a maintainer RE-TAP: their fresh
+      # label event becomes newest and decides.
+      m=U
+    fi
+    printf -v line '%s\t%s' "$event" "$m"
+    out+="$line"$'\n'
+  done <<< "$rows"
+  [ "$(printf '%s' "$out" | tac | approval_fold)" = APPROVED ]
+}
+
 # REACH BACK IN: podman exec into the FRESH container as the fleet uid (mirrors claudebox-busy-probe).
 pexec(){ podman exec --user 1000:1000 "$@"; }
 
@@ -323,11 +399,27 @@ restore_session(){ # <cid> <name> <cwd> [<sid>]
   # to a strict UUID (hex-only, 8-4-4-4-12) so it is safe as a literal send-keys keystroke — never eval'd.
   local resume_cmd; if [ -n "$sid" ]; then resume_cmd="claude --resume $sid"; else resume_cmd="$DEVBOX_RESUME_CMD"; fi
   pexec "$cid" test -d "$cwd" 2>/dev/null || { log "restore: cwd '$cwd' absent in $cid — cannot restore '$name'"; return 1; }
-  pexec "$cid" tmux kill-session -t "$name" >/dev/null 2>&1 || true
-  pexec "$cid" tmux new-session -d -s "$name" -c "$cwd" >/dev/null 2>&1 \
-    || { log "restore: tmux new-session '$name' failed in $cid"; return 1; }
-  pexec "$cid" tmux send-keys -t "$name" "$resume_cmd" Enter >/dev/null 2>&1 \
-    || { log "restore: resume send-keys '$name' failed in $cid"; return 1; }
+  # VISIBILITY (G2): land the tenant as a NAMED WINDOW inside the shared `main` session — the SAME session every
+  # mosh/ssh login joins (`/etc/profile.d/zz-tmux-attach.sh`: `new-session -t main -s c$$`). A standalone `-s $name`
+  # session sits on the same tmux server but OUTSIDE `main`'s window set, so the login never sees it (the
+  # invisible-restore incident, 2026-07-21: sessions were live + handshake-confirmed yet the user moshed into a
+  # bare shell and re-resumed → duplicates). `main` is created WITHOUT destroy-unattached (install.sh:132) so it
+  # persists detached; a group shares ONE window set (N grouped SESSIONS collapse), so N WINDOWS keep N tenants
+  # DISTINCT and all visible.
+  pexec "$cid" tmux has-session -t main 2>/dev/null \
+    || pexec "$cid" tmux new-session -d -s main >/dev/null 2>&1 \
+    || { log "restore: could not ensure the 'main' session in $cid"; return 1; }
+  # IDEMPOTENT (G5): a re-entered FINISH tick must NOT yank a session the user may already be using. If the window
+  # exists and is running claude, leave it untouched; else (re)create it fresh.
+  if pexec "$cid" tmux list-panes -t "main:$name" -F '#{pane_current_command}' 2>/dev/null | grep -qx claude; then
+    log "restore: window 'main:$name' already running claude in $cid — leaving idempotently"; return 0
+  fi
+  pexec "$cid" tmux kill-window -t "main:$name" >/dev/null 2>&1 || true
+  pexec "$cid" tmux new-window -d -t main: -n "$name" -c "$cwd" >/dev/null 2>&1 \
+    || { log "restore: tmux new-window 'main:$name' failed in $cid"; return 1; }
+  pexec "$cid" tmux send-keys -t "main:$name" "$resume_cmd" Enter >/dev/null 2>&1 \
+    || { log "restore: resume send-keys 'main:$name' failed in $cid"; return 1; }
+  pexec "$cid" tmux select-window -t "main:$name" >/dev/null 2>&1 || true   # make the tenant the group's CURRENT window so the login lands ON it, not window-0 bash
   return 0
 }
 
@@ -354,8 +446,8 @@ box_ready(){ # <cid>
 # timing. $1=cid $2=name $3=marker-path.
 nudge_session(){ # <cid> <name> <marker>
   local cid="$1" name="$2" marker="$3" text="${DEVBOX_RESUME_NUDGE//%MARKER%/$3}"
-  pexec "$cid" tmux send-keys -t "$name" -l "$text" >/dev/null 2>&1 || return 1
-  pexec "$cid" tmux send-keys -t "$name" Enter >/dev/null 2>&1 || return 1
+  pexec "$cid" tmux send-keys -t "main:$name" -l "$text" >/dev/null 2>&1 || return 1
+  pexec "$cid" tmux send-keys -t "main:$name" Enter >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -373,7 +465,7 @@ session_working(){ # <cid> <marker>
 # blow the 300s host-agent tick). $1 = the VERIFIED CONTAINER ID (never the name — R17 req 6).
 session_active(){ # <cid> <name>
   local cid="$1" name="$2" cmd
-  cmd="$(pexec "$cid" tmux list-panes -t "$name" -F '#{pane_current_command}' 2>/dev/null | head -n1)"
+  cmd="$(pexec "$cid" tmux list-panes -t "main:$name" -F '#{pane_current_command}' 2>/dev/null | head -n1)"
   case "$cmd" in
     ''|bash|-bash|sh|-sh|zsh|-zsh|fish|-fish) log "resume: session '$name' still idle ('${cmd:-none}') — NOT resuming"; return 1;;
     *) return 0;;
@@ -384,11 +476,19 @@ session_active(){ # <cid> <name>
 # within the window (a PID is not enough). Poll up to DEVBOX_POLLER_WINDOW (every 2s).
 # $1 is the VERIFIED CONTAINER ID (never the name — R17 req 6).
 wait_poller_sweeping(){ # <cid>
-  local cid="$1" i n
+  local cid="$1" i mtime now age
+  # HEARTBEAT, not systemd (G1): this dev box has NO systemd (PID 1 is a bash init; the poller is an
+  # entrypoint-supervised background loop, never a `systemd --user` unit). The old `systemctl --user is-active`
+  # / `journalctl --user` probe could NEVER succeed here (no user bus, no journald) — it read poller=down on
+  # EVERY rebuild regardless of reality (the false-FAILED incident, 2026-07-21). The true, base-visible signal
+  # is the poller's own sweep log: pr-poller.sh writes a `sweep:` line every POLL_INTERVAL to $DEVBOX_POLLER_LOG
+  # on the shared home volume. SWEEPING ⇒ its mtime is FRESH; a present-but-stale log is a wedged/dead poller.
   for ((i=0; i<DEVBOX_POLLER_WINDOW; i+=2)); do
-    if pexec "$cid" systemctl --user is-active --quiet "$DEVBOX_POLLER_UNIT" 2>/dev/null; then
-      n="$(pexec "$cid" journalctl --user -u "$DEVBOX_POLLER_UNIT" --since "-${DEVBOX_POLLER_WINDOW}s" -q 2>/dev/null | wc -l)"
-      [ "${n:-0}" -gt 0 ] && return 0
+    mtime="$(pexec "$cid" stat -c %Y "$DEVBOX_POLLER_LOG" 2>/dev/null || echo '')"
+    if [ -n "$mtime" ]; then
+      now="$(date +%s 2>/dev/null || echo 0)"     # host + container share one kernel clock, so the mtime epoch is directly comparable
+      age=$(( now - mtime ))
+      [ "$age" -ge 0 ] && [ "$age" -le "$DEVBOX_POLLER_FRESH" ] && return 0
     fi
     sleep 2
   done
@@ -399,8 +499,11 @@ wait_poller_sweeping(){ # <cid>
 # host-agent-watch.service caps ExecStart at 300s — while a health-gated rebuild can take minutes, so we
 # FIRE the rebuild --no-block and POLL it across ticks; a `.rebuild` marker guards re-firing so FORCE
 # never loops). Phase FIRE: authorize + validate manifest + capture old container ID + start
-# workload-rebuild@. Phase FINISH (marker present, unit done): KILL-verify by ID → RESTORE+RESUME every
-# session → VERIFY the poller → record + deliver the outcome.
+# workload-rebuild@. Phase FINISH (marker present, unit done): KILL-verify by ID → (G6) `.assembling`-clocked
+# BOX-READY gate (DEFERs across ticks until assembled) → RESTORE + RESUME every session IDEMPOTENTLY (G5: a
+# re-entered tick leaves a live session alone) into a WINDOW of `main` (G2: visible to the login) → CONFIRM the
+# filesystem handshake with (G8) slice-floored re-nudge → (G1) VERIFY the poller HEARTBEAT (not systemd) →
+# (G4) deliver a MULTI-DIMENSIONAL verdict (sessions = the deliverable; poller-down ⇒ DEGRADED, not FAILED).
 do_rebuild_devbox(){ # <repo> <issue> <workload>
   local repo="$1" issue="$2" wl="$3"
   local acted="$STATE/${1}-${2}.acted" rb="$STATE/${1}-${2}.rebuild" st detail
@@ -439,26 +542,36 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
       printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"; return
     }
 
+    # G6 — the assemble DEADLINE clock starts at rebuild-COMPLETE, not FIRE. `.rebuild` is stamped at FIRE
+    # (before workload-rebuild@ even runs), so timing box-ready from it charges the whole health-gated rebuild
+    # (pull + gate + any rollback) against the assemble budget → a slow-but-successful rebuild would
+    # premature-FAIL with zero sessions restored. Stamp `.assembling` on the FIRST tick that observes the
+    # rebuild complete, and time the box-ready deadline from THAT.
+    local asm="$STATE/${repo}-${issue}.assembling"
+    [ -e "$asm" ] || : > "$asm"
+
     # BOX-READY GATE (resume-to-active): the recreated box first-boot ASSEMBLES its claudebox (minutes);
     # restoring before it can run claude is the 0/N-idle race (the launch falls back to a bare shell). Checked
-    # SINGLE-SHOT and re-tried ACROSS ticks — RETURN (ticket + .rebuild marker stay) until ready, so no one
-    # 300s tick blocks. Bounded by DEVBOX_BOX_READY_WINDOW measured from the marker's OWN mtime: a box that
-    # NEVER assembles surfaces FAILED, it does not loop forever.
+    # SINGLE-SHOT and re-tried ACROSS ticks — RETURN (ticket + markers stay) until ready, so no one 300s tick
+    # blocks. Bounded by DEVBOX_BOX_READY_WINDOW from `.assembling`'s mtime (G6): a box that NEVER assembles
+    # surfaces FAILED, it does not loop forever.
     if ! box_ready "$newid"; then
-      local rbage; rbage=$(( $(date +%s 2>/dev/null || echo 0) - $(stat -c %Y "$rb" 2>/dev/null || echo 0) ))
-      if [ "$rbage" -gt "$DEVBOX_BOX_READY_WINDOW" ]; then
+      local asmage; asmage=$(( $(date +%s 2>/dev/null || echo 0) - $(stat -c %Y "$asm" 2>/dev/null || echo 0) ))
+      if [ "$asmage" -gt "$DEVBOX_BOX_READY_WINDOW" ]; then
         st=failed
-        detail="rebuild-devbox '$wl': box recreated (${oldid:0:12}→${newid:0:12}) but its claudebox never became ready within ${DEVBOX_BOX_READY_WINDOW}s — NO sessions restored (they would fall back to idle shells). Re-file to retry."
+        detail="rebuild-devbox '$wl': box recreated (${oldid:0:12}→${newid:0:12}) but its claudebox never became ready within ${DEVBOX_BOX_READY_WINDOW}s of the rebuild completing — NO sessions restored (they would fall back to idle shells). Re-file to retry."
         printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"; return
       fi
-      log "$ORG/$repo#$issue: box recreated (${newid:0:12}) but its claudebox not ready yet (${rbage}s elapsed) — will restore next tick"; return
+      log "$ORG/$repo#$issue: box recreated (${newid:0:12}) but its claudebox not ready yet (${asmage}s since assemble-start) — will restore next tick"; return
     fi
 
-    # RESTORE every manifest session (create tmux at its cwd + dispatch `claude --resume <sid>`), BY VERIFIED
-    # CONTAINER ID ($newid — never the name; R17 req 6). Track name+sid packed as 'name:sid' (name is
-    # [A-Za-z0-9._-] and the sid a UUID — neither holds ':', so the split is clean; empty sid ⇒ 'name:').
-    # `set -f` is on, so word-splitting $created on spaces is safe.
-    local total=0 ok=0 up=0 name cwd sid marker failed_names='' created=''
+    # RESTORE every manifest session (create a WINDOW in `main` at its cwd + dispatch the resume), BY VERIFIED
+    # CONTAINER ID ($newid — never the name; R17 req 6). restore_session is IDEMPOTENT (G5): a re-entered tick
+    # (a rare >300s overrun that got SIGKILLed with no `.acted`) leaves a live session alone rather than
+    # kill+recreate it — the destructive re-kill is dead by construction. Track name+sid packed 'name:sid' (name
+    # [A-Za-z0-9._-], sid a UUID — neither holds ':', clean split; empty sid ⇒ 'name:'). `set -f` is on, so
+    # word-splitting $created on spaces is safe.
+    local total=0 ok=0 up=0 name cwd sid marker failed_names='' created='' entry
     pexec "$newid" mkdir -p "$DEVBOX_RESUME_MARKER_DIR" >/dev/null 2>&1 || true
     while IFS=$'\t' read -r name cwd sid; do
       [ -n "$name" ] || continue
@@ -468,14 +581,18 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
     done <<< "$manifest"
     [ -n "$created" ] && sleep "$DEVBOX_RESUME_SETTLE"      # one bounded settle for ALL TUIs to come up before the first nudge
 
-    # RESUME-TO-ACTIVE: SUBMIT the continue-nudge to each restored session and CONFIRM it actually resumed
-    # working via the filesystem handshake (the per-sid marker it was asked to touch). Bounded + SHARED across
-    # all sessions (ONE work window, not N×) so the FINISH tick stays under the 300s cap; (re)nudge up to
-    # DEVBOX_NUDGE_TRIES times to cover TUI-readiness timing (a nudge to a not-yet-ready TUI is lost).
+    # RESUME-TO-ACTIVE: SUBMIT the continue-nudge to each restored session and CONFIRM it actually resumed working
+    # via the filesystem handshake (the per-sid marker it was asked to touch). SHARED across all sessions (ONE work
+    # window, not N×); with the poller heartbeat now fast (G1), the whole FINISH stays well under the 300s tick cap.
+    # (re)nudge no more often than one slice, and the slice is FLOORED at DEVBOX_RENUDGE_INTERVAL (G8) — a received
+    # nudge touches its marker in seconds, so a slice that long lets it CONFIRM before a second nudge is ever sent
+    # (never double-nudge a busy claude mid-task), while a genuinely lost nudge is still retried.
     local -A worked=()
     local poll="$DEVBOX_WORK_POLL"; [ "$poll" -ge 1 ] || poll=1
-    local slice=$(( DEVBOX_WORK_WINDOW / DEVBOX_NUDGE_TRIES )); [ "$slice" -ge "$poll" ] || slice=$poll
-    local t j entry
+    local slice=$(( DEVBOX_WORK_WINDOW / DEVBOX_NUDGE_TRIES ))
+    [ "$slice" -ge "$DEVBOX_RENUDGE_INTERVAL" ] || slice=$DEVBOX_RENUDGE_INTERVAL
+    [ "$slice" -ge "$poll" ] || slice=$poll
+    local t j
     for ((t=1; t<=DEVBOX_NUDGE_TRIES; t++)); do
       local remaining=0
       for entry in $created; do
@@ -496,9 +613,9 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
       done
     done
 
-    # TALLY (honest, three-way): handshake-confirmed = ACTIVELY CONTINUING; of the rest, distinguish a
-    # claude that is UP but did not confirm (resumed + nudged, activity unproven — NOT claimed working) from a
-    # bare-shell IDLE failure (claude never launched). NFR: no silent degradation — each is named.
+    # TALLY (honest, three-way): handshake-confirmed = ACTIVELY CONTINUING; of the rest, a claude UP-but-unconfirmed
+    # (resumed + nudged, activity unproven — NOT claimed working) is named distinctly from a bare-shell IDLE (claude
+    # never launched). NFR: no silent degradation — each is named.
     for entry in $created; do
       name="${entry%%:*}"
       if [ -n "${worked[$name]:-}" ]; then ok=$((ok+1))
@@ -509,27 +626,69 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
     # VERIFY the entrypoint-supervised poller is OBSERVABLY sweeping in the NEW container (by $newid).
     local poller=down; wait_poller_sweeping "$newid" && poller=sweeping
 
-    if [ "$ok" = "$total" ] && [ "$poller" = sweeping ]; then
+    # VERDICT (G4) — MULTI-DIMENSIONAL: sessions are the user-facing DELIVERABLE; poller liveness is an ORTHOGONAL
+    # sub-status. DONE the moment every session is actively continuing (ok==total), REGARDLESS of the poller — a
+    # poller-down run is DEGRADED (restart the poller), NEVER a FAILED that routes the maintainer to a destructive
+    # re-rebuild of a box whose sessions are healthy. FAILED only when the sessions themselves did not all resume.
+    if [ "$ok" = "$total" ]; then
       st=done
-      detail="rebuild-devbox '$wl' COMPLETE — KILLED old ${oldid:0:12} (zero survivors), rebuilt to ${newid:0:12} (health-gated), RESTORED + RESUMED + ACTIVELY CONTINUING $ok/$total sessions (handshake-confirmed), poller SWEEPING in the new container."
+      if [ "$poller" = sweeping ]; then
+        detail="rebuild-devbox '$wl' COMPLETE — KILLED old ${oldid:0:12} (zero survivors), rebuilt to ${newid:0:12} (health-gated), RESTORED + RESUMED + ACTIVELY CONTINUING $ok/$total sessions (handshake-confirmed), poller SWEEPING in the new container."
+      else
+        detail="rebuild-devbox '$wl' COMPLETE (sessions) — KILLED ${oldid:0:12}→${newid:0:12} (health-gated), RESTORED + RESUMED + ACTIVELY CONTINUING $ok/$total sessions (handshake-confirmed). ⚠️ DEGRADED: the poller is NOT observably sweeping in the new container — RESTART THE POLLER (do NOT re-rebuild: the sessions are healthy and a re-rebuild would destroy them)."
+      fi
     else
       local upnote=''; [ "$up" -gt 0 ] && upnote=", claude-up-but-unconfirmed $up"
       st=failed
       detail="rebuild-devbox '$wl' PARTIAL — killed ${oldid:0:12}→${newid:0:12}; actively-continuing $ok/$total${upnote}${failed_names:+ (${failed_names# })}, poller=$poller. Surfacing rather than claiming restored (R17); box is up on the new image."
     fi
+    rm -f "$asm" 2>/dev/null || true
     printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"; return
   fi
 
   # (2) FRESH → AUTHORIZE (destructive) + validate the manifest + capture the old ID + FIRE the rebuild.
+  # AUTHORIZE (R17 approval gate — see the DESTRUCTIVE-VERB AUTHORIZATION header): a maintainer's
+  # explicit act, in either form. Neither ⇒ PENDING (open + unconsumed, re-checked every tick), so the
+  # one-tap `approved` label can arrive any time later — never a refusal that consumes the ticket.
   local author; author="$(gh issue view "$issue" --repo "$ORG/$REPO" --json author -q '.author.login' 2>/dev/null || echo '')"
-  if ! is_authorized_author "$author"; then
-    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — issue author '${author:-?}' lacks admin|maintain on $ORG/$REPO; a verb that kills the dev box + its active sessions needs a maintainer, not the host-task label alone."
+  if is_authorized_author "$author"; then
+    :   # a maintainer AUTHORED the ticket — authorship IS approval (the original path, unchanged)
+  elif approved_by_maintainer "$issue"; then
+    log "$ORG/$repo#$issue: rebuild-devbox APPROVED via the \`approved\` label (applier role-checked admin|maintain) — proceeding"
+  else
+    # PENDING APPROVAL: no .done/.acted is written, so discovery re-dispatches here every tick until a
+    # maintainer taps the label (or authors/closes). ONE marker-gated comment tells the human the tap.
+    local pend="$STATE/${repo}-${issue}.approval-asked"
+    if [ ! -e "$pend" ]; then
+      gh issue comment "$issue" --repo "$ORG/$repo" --body "**host-agent: ⏳ AWAITING APPROVAL** — ${DEVBOX_APPROVER_MENTION} this \`rebuild-devbox $wl\` ticket was filed by the apparatus and needs a maintainer's ONE-TAP authorization: **apply the \`approved\` label to this issue**. It kills + rebuilds the dev box, then restores + resumes every manifest session. The applier is role-checked admin|maintain from the label's own timeline (an App-applied label is inert). The host re-checks every ~10s and fires the moment the label lands. To reject: close this issue." >/dev/null 2>&1 \
+        && : > "$pend" \
+        || log "$ORG/$repo#$issue: awaiting-approval comment failed to post (will retry next tick)"
+    fi
+    log "$ORG/$repo#$issue: rebuild-devbox PENDING maintainer approval (\`approved\` label or maintainer authorship) — ticket left open, re-checking each tick"
     return
   fi
-  local manifest rc
-  manifest="$(printf '%s' "$TICKET_BODY" | parse_manifest)"; rc=$?
+  # SESSION MANIFEST — captured FRESH from the LIVE dev box, NOT trusted from the ticket body.
+  # The in-box producer CANNOT enumerate all sessions (a claudebox-nested shell reads only its OWN
+  # /proc lineage; the fedora-dev poller's rebuild_request_tick refuses for exactly this reason, and a
+  # base-level filer has no `gh`), so a rebuild ticket legitimately arrives with NO manifest. The HOST
+  # can: `pexec` = `podman exec --user 1000` runs core at the fedora-dev BASE level, which reads EVERY
+  # session's /proc — and it is captured HERE, at FIRE (fresher than the ticket body, so a session started
+  # between filing and now is still caught). G9 HONEST LIMIT: the kill happens seconds-to-minutes LATER
+  # inside workload-rebuild@, so a session the user starts DURING the rebuild is not in this snapshot and is
+  # not restored (accepted MVP limitation; the fix, if closed, is a pre-kill re-sample inside container-refresh
+  # — deliberately NOT claimed as "moments before the kill"). `manifest` mode is pure enumeration (no `gh`).
+  # Falls back to any manifest the ticket carried (a maintainer-authored one) only if the live read is empty.
+  local manifest rc producer="${DEVBOX_MANIFEST_PRODUCER:-/home/core/.local/share/fedora-dev/bin/rebuild-request.sh}"
+  manifest="$(pexec "$wl" bash -lc "DEVBOX_MANIFEST_V2=1 bash $producer manifest 2>/dev/null" 2>/dev/null | parse_manifest)"; rc=$?
+  if [ "$rc" != 0 ] || [ -z "$manifest" ]; then                        # parse_manifest emits validated
+    manifest="$(printf '%s' "$TICKET_BODY" | parse_manifest)"; rc=$?    # `name<TAB>cwd[<TAB>sid]` lines, so
+  fi                                                                    # non-empty ⇒ ≥1 session. Fall back to a ticket-carried manifest.
   if [ "$rc" != 0 ]; then
-    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — $( [ "$rc" = 3 ] && echo "no session manifest found" || echo "malformed session manifest" ): expected \`session <name> <cwd> [<sid>]\` lines between $MANIFEST_BEGIN and $MANIFEST_END (names [A-Za-z0-9._-], cwd an absolute path with no spaces/metacharacters, optional session-id a UUID 8-4-4-4-12 hex, ≤$DEVBOX_MAX_SESSIONS sessions)."
+    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — $( [ "$rc" = 3 ] && echo "no session manifest (live dev-box read AND ticket body both empty)" || echo "malformed session manifest" ): expected \`session <name> <cwd> [<sid>]\` lines between $MANIFEST_BEGIN and $MANIFEST_END (names [A-Za-z0-9._-], cwd an absolute path with no spaces/metacharacters, optional session-id a UUID 8-4-4-4-12 hex, ≤$DEVBOX_MAX_SESSIONS sessions)."
+    return
+  fi
+  if [ -z "$manifest" ]; then
+    respond "$repo" "$issue" failed "rebuild-devbox REFUSED — zero sessions captured (live dev-box read + ticket body both empty); a rebuild would KILL the box and restore NOTHING."
     return
   fi
   local oldid; oldid="$(podman container inspect "$wl" -f '{{.Id}}' 2>/dev/null || echo '')"

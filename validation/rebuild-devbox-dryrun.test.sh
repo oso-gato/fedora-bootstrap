@@ -13,7 +13,9 @@
 #   * RESUME-TO-ACTIVE (option-b): a session that CONFIRMS via the filesystem handshake (touched its
 #     per-sid marker) ⇒ ACTIVELY CONTINUING; a claude that is UP but did not confirm ⇒ honestly reported
 #     up-but-unconfirmed (NOT claimed working); a bare-shell claude ⇒ idle FAILURE;
-#   * the poller not observably sweeping in the NEW container ⇒ FAILED (log activity, not a PID);
+#   * (G1) the poller HEARTBEAT (~/.local/state/pr-poller/poller.log mtime, NOT systemd — the box has none)
+#     stale/absent ⇒ poller=down; and (G4) a poller-down run whose sessions ALL restored is DONE+DEGRADED
+#     (sessions are the deliverable), never a FAILED that would route the maintainer to a destructive re-rebuild;
 #   * a failed/rolled-back rebuild ⇒ FAILED, surfaced (never a half-built box reported as done);
 #   * a DESTRUCTIVE verb from a non-maintainer author ⇒ REFUSED, no rebuild fired;
 #   * a malformed / missing session manifest ⇒ REFUSED, no rebuild fired;
@@ -37,7 +39,16 @@ BIN="$ROOT/bin"; mkdir -p "$BIN"
 cat > "$BIN/gh" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
-  api)   printf '%s' "${FAKE_PERM:-admin}" ;;                       # collaborators/<login>/permission
+  api)
+    url="$2"                                                        # gh api <URL> … — the URL is always arg 2
+    case "$url" in
+      *"/timeline"*) printf '%s' "${FAKE_TIMELINE:-}" ;;            # `approved`-label events, API order (oldest-first), "event\tactor" lines
+      *"/collaborators/"*)                                          # per-login role: FAKE_PERM_<login> overrides, else FAKE_PERM (default admin)
+        login="${url#*collaborators/}"; login="${login%%/*}"        # NB ${*#…} would strip EACH positional arg — use the scalar url
+        pvar="FAKE_PERM_${login}"
+        printf '%s' "${!pvar:-${FAKE_PERM:-admin}}" ;;
+      *) : ;;
+    esac ;;
   issue)
     case "$2" in
       list) echo "${FAKE_ISSUE:-1}" ;;                              # discovery → one fake issue
@@ -69,6 +80,7 @@ a="$*"
 case "$a" in
   "container inspect"*"{{.Id}}"*)   echo "${SCEN_NEWID:-NEWID}" ;;                 # id of the (new) container
   "container exists"*)  [ "${SCEN_OLD_GONE:-yes}" = yes ] && exit 1 || exit 0 ;;   # gone→rc1, alive(ghost)→rc0
+  *"rebuild-request.sh manifest"*)  printf '%s' "${SCEN_LIVE_MANIFEST:-}" ;;       # host self-captures the FRESH manifest from the LIVE box (core@base)
   *"mkdir -p"*)         exit 0 ;;                                                  # marker dir create
   *"rm -f "*rebuild-resumed*) exit 0 ;;                                            # stale-marker clear
   *"distrobox enter"*)  [ "${SCEN_BOX_ENTER:-yes}" = yes ] && exit 0 || exit 1 ;;  # box_ready enterable probe
@@ -78,12 +90,12 @@ case "$a" in
     mk="${a##*test -e }"; mk="${mk%%[[:space:]]*}"
     { [ "${SCEN_WORKED:-yes}" = yes ] && grep -qF -- "touch $mk" "${RESUME_LOG:-/dev/null}" 2>/dev/null; } && exit 0 || exit 1 ;;
   *" test -d "*)        [ "${SCEN_CWD_OK:-yes}" = yes ] && exit 0 || exit 1 ;;
-  *"tmux new-session"*) [ "${SCEN_TMUX_NEW_OK:-yes}" = yes ] && exit 0 || exit 1 ;;
-  *"tmux list-panes"*)  echo "${SCEN_PANE:-claude}" ;;                            # bare shell name ⇒ session_active=idle
+  *"stat -c %Y"*poller.log*)  [ "${SCEN_POLLER_ACTIVE:-yes}" = yes ] && date +%s || true ;; # G1 heartbeat: FRESH mtime ⇒ sweeping; empty ⇒ down
+  *"tmux has-session"*) exit 0 ;;                                                 # `main` already exists (skip new-session -d -s main)
+  *"tmux new-window"*)  nm="${a##*-n }"; nm="${nm%%[[:space:]]*}"; printf '%s\n' "$nm" >> "${WINDOWS_LOG:-/dev/null}"; [ "${SCEN_TMUX_NEW_OK:-yes}" = yes ] && exit 0 || exit 1 ;;  # record the window ⇒ a later list-panes "sees" it (G2 window-in-main)
+  *"tmux list-panes"*)  tgt="${a##*-t }"; tgt="${tgt%%[[:space:]]*}"; grep -qxF -- "${tgt#main:}" "${WINDOWS_LOG:-/dev/null}" 2>/dev/null && echo "${SCEN_PANE:-claude}" || true ;; # EMPTY until the window is created (so restore_session's idempotency pre-check PROCEEDS), then SCEN_PANE
   *"tmux send-keys"*)   printf '%s\n' "$a" >> "${RESUME_LOG:-/dev/null}"; exit 0 ;; # capture resume + nudge keystrokes
-  *"tmux "*)            exit 0 ;;                                                  # kill-session etc.
-  *"is-active"*)        [ "${SCEN_POLLER_ACTIVE:-yes}" = yes ] && exit 0 || exit 1 ;;  # poller active?
-  *"journalctl"*)       [ -n "${SCEN_POLLER_LOG-x}" ] && echo "${SCEN_POLLER_LOG:-sweep}" ; exit 0 ;;
+  *"tmux "*)            exit 0 ;;                                                  # kill-window / select-window / new-session -d -s main
   *) exit 0 ;;
 esac
 EOF
@@ -93,12 +105,16 @@ pass=0; fail=0
 newhome(){ HOME="$ROOT/home-$RANDOM$RANDOM"; export HOME; mkdir -p "$HOME";
   export GH_LOG="$HOME/gh.log";              : > "$GH_LOG"
   export SYSTEMCTL_LOG="$HOME/systemctl.log"; : > "$SYSTEMCTL_LOG"
-  export RESUME_LOG="$HOME/resume.log";       : > "$RESUME_LOG"; }
-# fast windows so the nudge/marker poll + settles don't stall the suite
-tick_on(){ PATH="$BIN:$PATH" DEVBOX_RESUME_SETTLE=1 DEVBOX_POLLER_WINDOW=1 DEVBOX_WORK_WINDOW=1 DEVBOX_NUDGE_TRIES=1 DEVBOX_WORK_POLL=1 bash "$1" >/dev/null 2>&1 || true; }
+  export RESUME_LOG="$HOME/resume.log";       : > "$RESUME_LOG"
+  export WINDOWS_LOG="$HOME/windows.log";     : > "$WINDOWS_LOG"; }
+# fast windows so the nudge/marker poll + settles don't stall the suite (RENUDGE_INTERVAL=1 keeps the slice small)
+tick_on(){ PATH="$BIN:$PATH" DEVBOX_RESUME_SETTLE=1 DEVBOX_POLLER_WINDOW=1 DEVBOX_WORK_WINDOW=1 DEVBOX_NUDGE_TRIES=1 DEVBOX_WORK_POLL=1 DEVBOX_RENUDGE_INTERVAL=1 bash "$1" >/dev/null 2>&1 || true; }
 tick(){ tick_on "$WATCH"; }
 seed_marker(){ mkdir -p "$HOME/.local/state/host-agent"; printf '%s\n%b\n' "$1" "$2" > "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild"; }
 age_rebuild(){ touch -d '2 hours ago' "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild"; }
+# G6: the box-ready DEADLINE now times from `.assembling` (stamped at rebuild-COMPLETE), not `.rebuild` (FIRE).
+# Pre-seed it OLD so the deadline is already exceeded on the tick that reaches the box-ready gate.
+seed_assembling_old(){ mkdir -p "$HOME/.local/state/host-agent"; : > "$HOME/.local/state/host-agent/fedora-bootstrap-1.assembling"; touch -d '2 hours ago' "$HOME/.local/state/host-agent/fedora-bootstrap-1.assembling"; }
 ok(){ pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 no(){ fail=$((fail+1)); printf '  FAIL %s\n       %s\n       gh:  %s\n' "$1" "$2" "$(tr '\n' '|' <"$GH_LOG")"; }
 has(){ grep -qF "$1" "$GH_LOG"; }
@@ -115,12 +131,43 @@ if grep -qF 'start --no-block workload-rebuild@fedora-dev.service' "$HOME/system
    && ! has 'issue close'; then ok "authorized+valid → rebuild FIRED, marker written, ticket open"
 else no "authorized+valid → rebuild FIRED" "expected workload-rebuild@ start + .rebuild marker + NO close"; fi
 
-echo "== authorization: a NON-maintainer author is REFUSED before any rebuild (destructive-verb gate) =="
-newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=random FAKE_PERM=read
+echo "== R17 APPROVAL GATE: a bot-authored ticket with NO approval ⇒ PENDING (open, unconsumed, ONE ask) =="
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read; unset FAKE_TIMELINE FAKE_PERM_arthur 2>/dev/null
 tick
-if has 'REFUSED' && has 'lacks admin|maintain' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log" \
-   && [ ! -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" ]; then ok "author lacks maintain → REFUSED, no rebuild"
-else no "author gate" "expected REFUSED + no workload-rebuild@ start + no marker"; fi
+if has 'AWAITING APPROVAL' && ! has 'issue close' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log" \
+   && [ ! -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" ] \
+   && [ ! -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.done" ]; then ok "unapproved bot ticket → PENDING: ask posted, nothing fired, ticket open + unconsumed"
+else no "pending path" "expected AWAITING APPROVAL comment + no rebuild + no close + no .done"; fi
+tick   # marker-gated: a SECOND tick re-checks the approval but does NOT re-ask
+if [ "$(grep -cF 'AWAITING APPROVAL' "$GH_LOG")" = 1 ]; then ok "second tick re-checks without re-asking (marker-gated)"
+else no "re-ask gate" "expected exactly ONE awaiting-approval comment across two ticks"; fi
+
+echo "== R17 APPROVAL GATE: the ONE-TAP maintainer-applied 'approved' label FIRES the rebuild =="
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_PERM_arthur=admin FAKE_TIMELINE=$'labeled\tarthur'; unset SCEN_UNIT_STATE
+SCEN_NEWID=OLDID tick
+if grep -qF 'start --no-block workload-rebuild@fedora-dev.service' "$HOME/systemctl.log" \
+   && [ -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" ] && ! has 'issue close'; then ok "maintainer tap → FIRED, marker written, ticket open (the one-tap path)"
+else no "approve fires" "expected workload-rebuild@ start + .rebuild marker + no close"; fi
+
+echo "== R17 APPROVAL GATE trust boundary: App label INERT; a maintainer UN-label UN-approves =="
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_TIMELINE=$'labeled\tsomebot'; unset FAKE_PERM_arthur 2>/dev/null   # somebot resolves read ⇒ inert
+tick
+A1=ok; { has 'AWAITING APPROVAL' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; } || A1=no
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_PERM_arthur=admin FAKE_TIMELINE=$'labeled\tarthur\nunlabeled\tarthur'   # newest = un-label
+tick
+A2=ok; { ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; } || A2=no
+if [ "$A1$A2" = okok ]; then ok "App-applied label authorizes NOTHING + maintainer un-label un-approves (both PENDING)"
+else no "label trust boundary" "A1=$A1 (App label must not fire) A2=$A2 (un-label must not fire)"; fi
+
+echo "== M4: neutralize approved_by_maintainer ⇒ the one-tap approval no longer fires (the gate bites) =="
+MUT4="$ROOT/watch-m4.sh"; sed 's/elif approved_by_maintainer "$issue"; then/elif false; then/' "$WATCH" > "$MUT4"
+if cmp -s "$WATCH" "$MUT4"; then no "M4 vacuous" "sed did not change the copy"; else
+  newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_PERM_arthur=admin FAKE_TIMELINE=$'labeled\tarthur'
+  tick_on "$MUT4"
+  if ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log" && has 'AWAITING APPROVAL'; then ok "M4: mutant ignores the tap ⇒ the approve-fires row discriminates"
+  else no "M4" "mutant fired or did not ask — the approval row would not bite"; fi
+fi
+unset FAKE_TIMELINE FAKE_PERM_arthur 2>/dev/null
 
 echo "== manifest: a malformed / missing manifest is REFUSED before any rebuild =="
 newhome; export FAKE_BODY=$'host-op: rebuild-devbox fedora-dev\n%%DEVBOX-MANIFEST-BEGIN%%\nrun rm -rf /\n%%DEVBOX-MANIFEST-END%%' FAKE_AUTHOR=arthur FAKE_PERM=admin
@@ -129,8 +176,29 @@ if has 'malformed session manifest' && ! grep -qF 'workload-rebuild@' "$HOME/sys
 else no "malformed manifest" "expected 'malformed session manifest' + no rebuild"; fi
 newhome; export FAKE_BODY=$'host-op: rebuild-devbox fedora-dev\njust prose no block' FAKE_AUTHOR=arthur FAKE_PERM=admin
 tick
-if has 'no session manifest found' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; then ok "no manifest block → REFUSED, no rebuild"
-else no "no manifest block" "expected 'no session manifest found' + no rebuild"; fi
+if has 'no session manifest' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; then ok "no manifest block (live + ticket both empty) → REFUSED, no rebuild"
+else no "no manifest block" "expected 'no session manifest' + no rebuild"; fi
+
+echo "== HOST SELF-CAPTURE (the arm fix): a BARE ticket (no manifest) + a live dev-box read ⇒ FIRES with the LIVE manifest =="
+newhome; export FAKE_BODY=$'host-op: rebuild-devbox fedora-dev\njust a bare request, no manifest' FAKE_AUTHOR=arthur FAKE_PERM=admin
+SCEN_LIVE_MANIFEST=$'%%DEVBOX-MANIFEST-BEGIN%%\nsession live777 /home/core/repos/live '"$SID"$'\n%%DEVBOX-MANIFEST-END%%' SCEN_NEWID=OLDID tick
+if grep -qF 'start --no-block workload-rebuild@fedora-dev.service' "$HOME/systemctl.log" \
+   && grep -qF 'live777' "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" \
+   && ! has 'issue close'; then ok "bare ticket + live read → host self-captured the manifest and FIRED"
+else no "host self-capture" "expected FIRE + the live session (live777) in the .rebuild marker"; fi
+
+echo "== FRESHNESS: the LIVE read is PREFERRED over a manifest carried in the ticket body =="
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=arthur FAKE_PERM=admin        # ticket carries session dev134
+SCEN_LIVE_MANIFEST=$'%%DEVBOX-MANIFEST-BEGIN%%\nsession live777 /home/core/repos/live '"$SID"$'\n%%DEVBOX-MANIFEST-END%%' SCEN_NEWID=OLDID tick
+if grep -qF 'live777' "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" \
+   && ! grep -qF 'dev134' "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild"; then ok "live manifest (live777) wins over the ticket's stale one (dev134) — freshest snapshot"
+else no "freshness" "expected live777 (not dev134) in the marker"; fi
+
+echo "== FAIL-SAFE: zero sessions (live read empty + ticket body empty) ⇒ REFUSED, box NOT killed =="
+newhome; export FAKE_BODY=$'host-op: rebuild-devbox fedora-dev\n%%DEVBOX-MANIFEST-BEGIN%%\n%%DEVBOX-MANIFEST-END%%' FAKE_AUTHOR=arthur FAKE_PERM=admin
+tick    # SCEN_LIVE_MANIFEST unset ⇒ live read empty; the ticket's empty block ⇒ zero sessions
+if has 'zero sessions captured' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; then ok "zero sessions → REFUSED, no rebuild (never destroy a box with nothing to restore)"
+else no "zero-session fail-safe" "expected 'zero sessions captured' + no rebuild"; fi
 
 echo "== BOX-READY gate: a not-yet-assembled box DEFERS (no verdict, ticket open) — restore next tick =="
 newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=arthur FAKE_PERM=admin; seed_v2
@@ -139,7 +207,7 @@ if ! has 'host-agent:' && ! has 'issue close'; then ok "box not ready (fresh) �
 else no "box-ready defer" "expected NO verdict + NO close while the box is not ready"; fi
 
 echo "== BOX-READY gate: a box that NEVER becomes ready (past the deadline) ⇒ FAILED, never a restore =="
-newhome; export FAKE_BODY="$MF"; seed_v2; age_rebuild
+newhome; export FAKE_BODY="$MF"; seed_v2; seed_assembling_old
 SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_ASSEMBLED=no tick
 if has 'host-agent: FAILED' && has 'never became ready' && ! has 'host-agent: DONE'; then ok "box never ready past deadline → FAILED (no idle-shell restore)"
 else no "box never ready" "expected FAILED + 'never became ready'"; fi
@@ -186,11 +254,11 @@ SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=no SCEN_PANE=claude SCEN
 if has 'host-agent: FAILED' && has 'verification FAILED' && ! has 'host-agent: DONE'; then ok "old container alive → FAILED (kill-by-ID GHOST)"
 else no "ghost" "expected FAILED + 'verification FAILED', never DONE"; fi
 
-echo "== BITE: poller NOT observably sweeping in the new box ⇒ FAILED =="
+echo "== G4: poller down but sessions ALL restored ⇒ DONE + DEGRADED (never FAILED → never a destructive re-rebuild) =="
 newhome; export FAKE_BODY="$MF"; seed_v2
 SCEN_UNIT_STATE=inactive SCEN_NEWID=NEWID SCEN_OLD_GONE=yes SCEN_PANE=claude SCEN_WORKED=yes SCEN_POLLER_ACTIVE=no tick
-if has 'host-agent: FAILED' && has 'poller=down' && ! has 'host-agent: DONE'; then ok "poller silent → FAILED (not a PID — observable sweep required)"
-else no "poller down" "expected FAILED + poller=down, never DONE"; fi
+if has 'host-agent: DONE' && has 'DEGRADED' && has 'RESTART THE POLLER' && has 'ACTIVELY CONTINUING 1/1' && ! has 'host-agent: FAILED'; then ok "poller down + sessions live → DONE+DEGRADED (sessions are the deliverable; poller is a sub-status — do NOT re-rebuild)"
+else no "poller-down DEGRADED" "expected DONE + DEGRADED + 'RESTART THE POLLER' + ACTIVELY CONTINUING 1/1, never FAILED"; fi
 
 echo "== BITE: a health-gate FAILURE (rolled back) surfaces as FAILED, never a half-built success =="
 newhome; export FAKE_BODY="$MF"; seed_v2

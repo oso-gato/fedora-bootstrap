@@ -21,8 +21,12 @@ RUN set -u; rc=0; \
       shellcheck --severity=error --external-sources "$f" || { echo "FAIL shellcheck: $f"; rc=1; }; \
     done; [ "$rc" = 0 ] || { echo "== SHELL LINT: RED =="; exit 1; }; echo "== SHELL LINT: GREEN =="
 
-# BEHAVIOURAL — every script exposing a --selftest handler (pure, podman-free).
-RUN set -eu; for s in *.sh; do if grep -q -- '--selftest' "$s"; then echo "== selftest: $s =="; bash "$s" --selftest; fi; done
+# BEHAVIOURAL — every script exposing a --selftest HANDLER (pure, podman-free). Detection matches the
+# dispatch shape (`= "--selftest"` comparison or a `--selftest)` case-arm), NOT any substring mention:
+# a bare mention in a comment/changelog line would otherwise EXECUTE the script for real with an
+# argument it ignores (setup.sh's v1.2.69 header line did exactly that — ran root provisioning in the
+# build and died at hostnamectl). A missed exotic handler shape fails LOUD next edit, not silent.
+RUN set -eu; for s in *.sh; do if grep -Eq -- '= *"--selftest"|--selftest\)' "$s"; then echo "== selftest: $s =="; bash "$s" --selftest; fi; done
 
 # BEHAVIOURAL — every validation/*.test.sh, in podman-free mode (FENCE_CHECK_ONLY) so it runs in the build.
 RUN set -eu; for t in validation/*.test.sh; do if [ -f "$t" ]; then echo "== test: $t =="; FENCE_CHECK_ONLY=1 bash "$t"; fi; done

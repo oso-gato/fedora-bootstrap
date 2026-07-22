@@ -340,6 +340,19 @@ install -m 0644 "$HERE/live-gate-presets/"*.env "$HOME/.config/live-gate/" 2>/de
 # hcr_install_from — they are in the F16 managed manifest; only the paste PROVISIONING is here.)
 if podman secret exists gh_app_host_key 2>/dev/null && [ -r "$HOME/.config/gh-app-host.env" ]; then
     echo "[host-gh] standing HOST App credential already provisioned (secret gh_app_host_key) — keeping it."
+elif [ -n "${GH_APP_HOST_ID:-}" ] && podman secret exists gh_app_host_key 2>/dev/null; then
+    # HEADLESS env path (gap 4a) — symmetric with the workload's: a scripted/no-tty commission
+    # PRE-CREATES the gh_app_host_key podman secret out-of-band and supplies the PUBLIC ids via env,
+    # so the host live-gate identity is provisioned WITHOUT a paste. Without this a no-tty run forced a
+    # decline and shipped with NO host App (verify.sh now FAILs loud on that). The host token minter
+    # reads the secret at the FIXED name gh_app_host_key (not a container mount), so that IS the name.
+    _um="$(umask)"; umask 077
+    printf 'GH_APP_ID=%s\nGH_APP_INSTALLATION_ID=%s\n' "$GH_APP_HOST_ID" "${GH_APP_HOST_INST:-${GH_APP_HOST_INSTALLATION_ID:-}}" \
+        > "$HOME/.config/gh-app-host.env"   # PUBLIC integers only; the PEM stays in the secret
+    umask "$_um"
+    "$HOME/.local/bin/host-gh-refresh.sh" \
+        || { echo "FATAL: initial HOST token mint failed (scripted env path — bad App id or gh_app_host_key secret?)" >&2; exit 1; }
+    echo "[host-gh] HOST App credential provisioned via env (scripted; secret gh_app_host_key, App $GH_APP_HOST_ID)."
 else
     . "$HERE/gh-app-provision.sh"
     GHA_TTY="${SPINUP_TTY:-/dev/tty}"; GHA_IN="$GHA_TTY"
@@ -486,6 +499,14 @@ fi
 
 systemctl --user daemon-reload
 
+# Capture the SCRIPTED dev-App creds setup.sh ferried via `su` (GH_APP_*) BEFORE the per-iteration blank
+# below clobbers them. The documented NO-TTY fallback (setup.sh: "pastes are impossible unless GH_APP_*
+# env is set") relies on those reaching a workload's COLLECT_ONLY spin-up, but the blank ran first, so a
+# fully-scripted commission FATALed with no tty and no creds. The ferry carries ONE App set (for the
+# first workload); it is passed to that workload's collect and then CONSUMED. An interactive run leaves
+# these empty and each wizard prompts over the ferried tty exactly as before.
+_ferry_gh_app_id="${GH_APP_ID:-}"; _ferry_gh_app_inst="${GH_APP_INSTALLATION_ID:-}"; _ferry_gh_app_secret="${GH_APP_SECRET:-}"
+
 # ---- per-container provisioning ----
 for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     # (a) Clone the container's repo (idempotent). NO `|| true` on the pull
@@ -519,6 +540,7 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     # wizard is part of the fleet contract exactly like the Quadlet below, so enforce it the
     # same way. Announce the delegation so the questions are attributable in the day0 scroll.
     GH_APP_ID=""; GH_APP_INSTALLATION_ID=""; GH_APP_SECRET=""; BOX_HOSTNAME=""
+    GH_APP_FITNESS_ID=""; GH_APP_FITNESS_INSTALLATION_ID=""; GH_APP_FITNESS_SECRET=""; FITNESS_SAME_IDENTITY=""
     if [ ! -x "$HOME/$_c/spin-up.sh" ]; then
         echo "FATAL: $HOME/$_c/spin-up.sh missing or not executable — workload contract violation" >&2
         echo "  (every workload repo must ship an executable spin-up.sh; its questions were NOT asked," >&2
@@ -526,8 +548,15 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
         exit 1
     fi
     echo ">> ${_c}: asking its setup questions (delegated to its own spin-up.sh) ..."
-    _collected="$(cd "$HOME/$_c" && COLLECT_ONLY=1 ./spin-up.sh)" \
+    # Pass the ferried scripted dev-App creds (empty on an interactive run ⇒ the wizard prompts) as a
+    # command-prefix env, then CONSUME them so a second workload never reuses the first's App.
+    _collected="$(cd "$HOME/$_c" && env \
+            GH_APP_ID="$_ferry_gh_app_id" \
+            GH_APP_INSTALLATION_ID="$_ferry_gh_app_inst" \
+            GH_APP_SECRET="$_ferry_gh_app_secret" \
+            COLLECT_ONLY=1 ./spin-up.sh)" \
         || { echo "FATAL: $_c spin-up.sh collect failed" >&2; exit 1; }
+    _ferry_gh_app_id=""; _ferry_gh_app_inst=""; _ferry_gh_app_secret=""
     # The eval sets the WORKLOAD's answers (incl. ITS TS_AUTHKEY); the host's own TS_AUTHKEY
     # is saved/restored around it — but the workload's key must be CAPTURED first, or it is
     # silently DROPPED (verified live: the operator pasted nox's key and the box still fell
@@ -562,6 +591,26 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
           -e "s|^# *Environment=GH_APP_ID=.*|Environment=GH_APP_ID=${GH_APP_ID} GH_APP_INSTALLATION_ID=${GH_APP_INSTALLATION_ID}|" \
           "$_q"
         echo "  -> ${_c}: standing GitHub App credential wired (podman secret '${GH_APP_SECRET}', App ${GH_APP_ID})."
+    fi
+
+    # (b2-fitness) Activate the FITNESS reviewer App — the DISTINCT THIRD identity the merge-trust
+    # boundary requires (auto-merge.sh refuses a same-identity fitness verdict, so without it the loop
+    # REVIEWS but never MERGES). The workload's spin-up.sh COLLECT_ONLY created podman secret
+    # gh_app_key_fitness (when a PEM was provisioned) and emitted FITNESS_SAME_IDENTITY=0; uncomment the
+    # shipped-commented fitness lines so a recreation keeps BOTH the credential AND strict-SoD. Guarded on
+    # the secret: no fitness App => no-op, the box stays make-it-work (review, do not merge). Idempotent;
+    # the FITNESS_SAME_IDENTITY line no-ops against a Quadlet predating fedora-dev's provisioning PR.
+    if [ -n "${GH_APP_FITNESS_SECRET:-}" ]; then
+        _qc="$HOME/.config/containers/systemd/$_c.container"
+        sed -i \
+          -e "s|^# *Secret=gh_app_key_fitness,type=mount,target=gh_app_key_fitness.*|Secret=${GH_APP_FITNESS_SECRET},type=mount,target=gh_app_key_fitness|" \
+          -e "s|^# *Environment=GH_APP_FITNESS_ID=.*|Environment=GH_APP_FITNESS_ID=${GH_APP_FITNESS_ID} GH_APP_FITNESS_INSTALLATION_ID=${GH_APP_FITNESS_INSTALLATION_ID}|" \
+          -e "s|^# *Environment=FITNESS_SAME_IDENTITY=0.*|Environment=FITNESS_SAME_IDENTITY=${FITNESS_SAME_IDENTITY:-0}|" \
+          "$_qc"
+        echo "  -> ${_c}: FITNESS reviewer App wired (podman secret '${GH_APP_FITNESS_SECRET}', App ${GH_APP_FITNESS_ID}) — strict SoD auto-merge enabled."
+    else
+        echo "  -> ${_c}: NO fitness App credential — the loop will REVIEW but NOT auto-merge (auto-merge refuses a same-identity verdict)." >&2
+        echo "     Provision it to enable autonomous merge: 'cd ~/${_c} && ./spin-up.sh' (paste the fitness PEM), or re-run setup." >&2
     fi
 
     # (b3) Stamp the wizard-collected pairing hostname into the INSTALLED Quadlet, so the
