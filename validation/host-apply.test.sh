@@ -219,6 +219,22 @@ run_apply c8 APPLY_QUADLET_DIR="$ROOT/c8/quadlets" QUADLET_WRITE=SAME-ENV
   && ok "unchanged Quadlet → empty signal written (no spurious recreate)" \
   || bad "quadlet-nochange-signal" "rc=$RC signal-exists?=$( [ -f "$ROOT/c8/state/quadlet-changed" ] && echo yes||echo no) signal='$(cat "$ROOT/c8/state/quadlet-changed" 2>/dev/null)'"
 
+echo "== CASE 9 (increment 2, fitness #237 regression): UPTODATE no-op with a deployed Quadlet → EMPTY signal =="
+# The bug fitness caught: UPTODATE passed before='' to ha_write_changed, so ha_changed_quadlets diffed
+# EVERY deployed Quadlet as "new" → the idempotent same-sha no-op wrote a signal listing ALL workloads →
+# spurious approval-gated recreate tickets. A no-op changed NOTHING, so the signal must be EMPTY even when
+# ~core/.config/containers/systemd/*.container exist. (CASE 7/8 only drove the FF path, hiding this.)
+build_repo c9   # no advance → work == origin (UPTODATE)
+head="$(git -C "$C_WORK" rev-parse HEAD)"
+mkdir -p "$ROOT/c9/state" "$ROOT/c9/quadlets"
+printf '%s\n' "$head" > "$ROOT/c9/state/applied.sha"           # applied.sha == head ⇒ UPTODATE
+printf 'DEPLOYED-ENV\n' > "$ROOT/c9/quadlets/fedora-dev.container"   # a real deployed Quadlet is present
+run_apply c9 APPLY_QUADLET_DIR="$ROOT/c9/quadlets"
+{ [ "$RC" = 0 ] && grep -qi 'no-op' "$ROOT/c9.out" \
+  && [ -f "$ROOT/c9/state/quadlet-changed" ] && [ ! -s "$ROOT/c9/state/quadlet-changed" ]; } \
+  && ok "UPTODATE no-op writes an EMPTY signal even with a deployed Quadlet (no spurious recreate)" \
+  || bad "uptodate-signal" "rc=$RC signal='$(cat "$ROOT/c9/state/quadlet-changed" 2>/dev/null)' (bug: lists every workload)"
+
 echo
 echo "host-apply: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

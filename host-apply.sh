@@ -212,7 +212,7 @@ ha_main() {
   decision="$(ha_decide "$head" "$fetched" "$anc" "$dirty" "$appl_match")"
   local short; short="$(printf '%s' "$fetched" | cut -c1-12)"
   case "$decision" in
-    UPTODATE)       ha_write_changed '' "$qdir" "$changed_signal" "$state"; log "already at merged main $short and readback-verified — no-op"; return 0 ;;
+    UPTODATE)       ha_write_changed "$(ha_quadlet_shas "$qdir")" "$qdir" "$changed_signal" "$state"; log "already at merged main $short and readback-verified — no-op"; return 0 ;;   # before==after ⇒ empty signal (a no-op changed nothing; passing before='' would diff EVERY quadlet as "new")
     REFUSE-DIRTY)   warn "control clone has UNCOMMITTED changes — REFUSING (a dirty host clone is a question, not a force-pull); untouched"; return 3 ;;
     REFUSE-DIVERGED)warn "origin main $short does NOT fast-forward HEAD (diverged/force-push?) — REFUSING (untouched)"; return 3 ;;
     FF)             log "fast-forward available: $(printf '%s' "$head" | cut -c1-12) -> $short — applying merged main" ;;
