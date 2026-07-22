@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.72 (re-commission provisioning correctness: setup-user.sh provisions the FITNESS reviewer App at commission (gap 1) + passes the ferried scripted dev-App creds to the workload COLLECT_ONLY so a no-tty commission works (gap 3); verify.sh gains a LOUD host-App-identity check so a run shipping without the live-gate identity FAILs instead of passing GREEN (gap 4b), waivable via ~/.config/gh-app-host.manual-waiver.)
+# Version: 1.2.72 (re-commission provisioning correctness: setup-user.sh provisions the FITNESS reviewer App at commission (gap 1) + passes the ferried scripted dev-App creds to the workload COLLECT_ONLY so a no-tty commission works (gap 3); the host-App block gains a headless env path (scripted commission, gap 4a) + verify.sh a LOUD host-App-identity check that FAILs a run shipping without the live-gate identity (gap 4b), waivable via ~/.config/gh-app-host.manual-waiver.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

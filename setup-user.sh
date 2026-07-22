@@ -340,6 +340,19 @@ install -m 0644 "$HERE/live-gate-presets/"*.env "$HOME/.config/live-gate/" 2>/de
 # hcr_install_from — they are in the F16 managed manifest; only the paste PROVISIONING is here.)
 if podman secret exists gh_app_host_key 2>/dev/null && [ -r "$HOME/.config/gh-app-host.env" ]; then
     echo "[host-gh] standing HOST App credential already provisioned (secret gh_app_host_key) — keeping it."
+elif [ -n "${GH_APP_HOST_ID:-}" ] && podman secret exists gh_app_host_key 2>/dev/null; then
+    # HEADLESS env path (gap 4a) — symmetric with the workload's: a scripted/no-tty commission
+    # PRE-CREATES the gh_app_host_key podman secret out-of-band and supplies the PUBLIC ids via env,
+    # so the host live-gate identity is provisioned WITHOUT a paste. Without this a no-tty run forced a
+    # decline and shipped with NO host App (verify.sh now FAILs loud on that). The host token minter
+    # reads the secret at the FIXED name gh_app_host_key (not a container mount), so that IS the name.
+    _um="$(umask)"; umask 077
+    printf 'GH_APP_ID=%s\nGH_APP_INSTALLATION_ID=%s\n' "$GH_APP_HOST_ID" "${GH_APP_HOST_INST:-${GH_APP_HOST_INSTALLATION_ID:-}}" \
+        > "$HOME/.config/gh-app-host.env"   # PUBLIC integers only; the PEM stays in the secret
+    umask "$_um"
+    "$HOME/.local/bin/host-gh-refresh.sh" \
+        || { echo "FATAL: initial HOST token mint failed (scripted env path — bad App id or gh_app_host_key secret?)" >&2; exit 1; }
+    echo "[host-gh] HOST App credential provisioned via env (scripted; secret gh_app_host_key, App $GH_APP_HOST_ID)."
 else
     . "$HERE/gh-app-provision.sh"
     GHA_TTY="${SPINUP_TTY:-/dev/tty}"; GHA_IN="$GHA_TTY"
