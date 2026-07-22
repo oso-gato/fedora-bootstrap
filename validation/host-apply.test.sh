@@ -55,6 +55,11 @@ case "${MUTATE:-}" in
   sbin) printf 'STALE-INJECTED' >> "$APPLY_SBIN_DIR/host-apply";;        # a stale SYSTEM-layer artifact (the host-apply seam)
   user) printf 'STALE-INJECTED' >> "$APPLY_BIN_DIR/host-agent-watch.sh";; # a stale USER-layer artifact
 esac
+# increment 2: simulate setup.sh (re)writing a deployed workload Quadlet (the fitness-lines-uncommented case).
+if [ -n "${QUADLET_WRITE:-}" ]; then
+  mkdir -p "${APPLY_QUADLET_DIR:?}"
+  printf '%s\n' "$QUADLET_WRITE" > "$APPLY_QUADLET_DIR/fedora-dev.container"
+fi
 exit 0
 EOF
 STUB_VERIFY="$ROOT/stub-verify.sh"
@@ -192,6 +197,27 @@ else
     && ok "neutralised readback WRONGLY records success on a stale artifact — the real readback IS the guard" \
     || bad "mutation" "neutralised executor did not wrongly-pass (rc=$mrc applied?=$( [ -f "$A_STATE/applied.sha" ] && echo yes||echo no)) — CASE 6 may be passing for the wrong reason"
 fi
+
+echo "== CASE 7 (increment 2): apply CHANGES a deployed workload Quadlet → the changed-quadlet signal lists it =="
+# The recreate TRIGGER: setup.sh rewrites ~core/.config/containers/systemd/fedora-dev.container (the fitness
+# lines uncommented). host-apply.sh sha's it BEFORE vs AFTER and records the changed workload to the signal
+# the host agent reads to file an approved-gated recreate. Pre-seed the OLD Quadlet; the stub writes the NEW.
+build_repo c7; advance_origin seven
+mkdir -p "$ROOT/c7/state" "$ROOT/c7/quadlets"; printf 'OLD-ENV\n' > "$ROOT/c7/quadlets/fedora-dev.container"
+run_apply c7 APPLY_QUADLET_DIR="$ROOT/c7/quadlets" QUADLET_WRITE=NEW-ENV
+{ [ "$RC" = 0 ] && [ "$(cat "$ROOT/c7/state/quadlet-changed" 2>/dev/null)" = "fedora-dev" ]; } \
+  && ok "changed Quadlet → signal lists 'fedora-dev' (the approved-gated recreate trigger)" \
+  || bad "quadlet-change-signal" "rc=$RC signal='$(cat "$ROOT/c7/state/quadlet-changed" 2>/dev/null)'; out: $(tr '\n' '|' <"$ROOT/c7.out")"
+
+echo "== CASE 8 (increment 2): an apply that does NOT change the Quadlet → EMPTY signal (no spurious recreate) =="
+# A merged change that re-runs setup.sh but leaves the Quadlet byte-identical must NOT trigger a recreate
+# (a session-dropping act). Pre-seed SAME-ENV; the stub rewrites the identical content → sha unchanged.
+build_repo c8; advance_origin eight
+mkdir -p "$ROOT/c8/state" "$ROOT/c8/quadlets"; printf 'SAME-ENV\n' > "$ROOT/c8/quadlets/fedora-dev.container"
+run_apply c8 APPLY_QUADLET_DIR="$ROOT/c8/quadlets" QUADLET_WRITE=SAME-ENV
+{ [ "$RC" = 0 ] && [ -f "$ROOT/c8/state/quadlet-changed" ] && [ ! -s "$ROOT/c8/state/quadlet-changed" ]; } \
+  && ok "unchanged Quadlet → empty signal written (no spurious recreate)" \
+  || bad "quadlet-nochange-signal" "rc=$RC signal-exists?=$( [ -f "$ROOT/c8/state/quadlet-changed" ] && echo yes||echo no) signal='$(cat "$ROOT/c8/state/quadlet-changed" 2>/dev/null)'"
 
 echo
 echo "host-apply: $pass passed, $fail failed"
