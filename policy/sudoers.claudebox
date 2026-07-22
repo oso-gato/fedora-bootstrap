@@ -21,6 +21,16 @@
 # or any command that can spawn a shell or run arbitrary programs.
 #
 # __USER__ is replaced with the operating user (default: core) at install time by setup-host.sh.
+#
+# HOST SELF-APPLY (#133) — the ONE deliberate exception to "the host-apply gate stays with the operator".
+# /usr/local/sbin/host-apply is a ROOT-OWNED, argument-free, no-wildcard executor: it applies ONLY
+# merge-gated `main` (fetched from a PINNED canonical URL, run from a pristine `git archive` of the exact
+# fetched sha — never the core-writable clone's working tree), fast-forward-only, health-gated with
+# rollback + a fail-closed readback. So the agent can trigger the apply but can INJECT NOTHING it runs —
+# this grants "apply the already-approved code", NOT arbitrary root (the merge gate is the real boundary;
+# recovery is automatic, not a click). It is exactly ONE fixed command with NO argument and NO wildcard,
+# honouring the no-wildcard/no-shell-spawn discipline above (host-apply owns its own inputs; the sudoers
+# surface exposes none). Grown by review here, like every entry. Full trust chain: host-apply.sh header.
 
 Cmnd_Alias CLAUDEBOX_HOST = /usr/bin/tailscale serve --bg --https=443 http\://127.0.0.1\:9090, \
                             /usr/bin/tailscale serve status, \
@@ -28,4 +38,6 @@ Cmnd_Alias CLAUDEBOX_HOST = /usr/bin/tailscale serve --bg --https=443 http\://12
                             /usr/bin/tailscale status, \
                             /usr/bin/tailscale status --json
 
-__USER__ ALL=(ALL) NOPASSWD: CLAUDEBOX_HOST
+Cmnd_Alias CLAUDEBOX_APPLY = /usr/local/sbin/host-apply
+
+__USER__ ALL=(ALL) NOPASSWD: CLAUDEBOX_HOST, CLAUDEBOX_APPLY

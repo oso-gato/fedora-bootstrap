@@ -411,6 +411,16 @@ systemctl daemon-reload
 systemctl enable cockpit-tailnet-serve.service
 systemctl start --no-block cockpit-tailnet-serve.service
 
+# HOST SELF-APPLY executor (#133): the ROOT-OWNED /usr/local/sbin/host-apply the box-resident host agent
+# triggers (via host-apply.service → the pinned CLAUDEBOX_APPLY sudoers entry stamped above) to make merged
+# `main` live on erebus with no human — fast-forward the control clone + re-run THIS setup.sh, health-gated
+# with rollback + a fail-closed readback. Root-owned (0755, root:root) so the agent can trigger it but NOT
+# modify it; it runs a pristine `git archive` of the PINNED remote's merged sha, so the core-writable clone
+# injects nothing (full trust chain: host-apply.sh). Bootstrap note: THIS install is the one-time manual act
+# — the self-apply verb cannot install itself.
+install -m0755 "$HERE/host-apply.sh" /usr/local/sbin/host-apply
+restorecon /usr/local/sbin/host-apply 2>/dev/null || true
+
 PHASE "host 7/7 tmux drop-in + config + bring up '$U' rootless user manager"
 # System-wide login drop-in: every ssh/mosh login gets its OWN session inside
 # ONE shared "main" tmux group. The windows (the work) are shared across every

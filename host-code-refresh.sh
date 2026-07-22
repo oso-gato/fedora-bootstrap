@@ -96,6 +96,7 @@ hcr_manifest() {
         workload-refresh-retry@.service \
         workload-refresh-retry@.timer \
         workload-rebuild@.service \
+        host-apply.service \
         claudebox-up.service \
         live-gate-watch.service \
         live-gate-watch.timer \
