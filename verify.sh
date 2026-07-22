@@ -48,4 +48,10 @@ ck "host: agent has NO passwordless dnf (immutable host)" "! sudo -kn /usr/bin/d
 # the claudebox container's own /etc/selinux/config is empty, so read the HOST file via /run/host
 # (fall back to /etc when verify.sh is run directly on the host). PASS for permissive OR enforcing.
 ck "host: SELinux config enabled (permissive or enforcing)" "grep -qE '^SELINUX=(permissive|enforcing)' /run/host/etc/selinux/config 2>/dev/null || grep -qE '^SELINUX=(permissive|enforcing)' /etc/selinux/config"
+# host App identity (the live-gate verdict poster): a run that ships WITHOUT the standing HOST App used
+# to pass GREEN silently — setup-user.sh's no-tty path declines it non-fatally and host-gh-refresh no-ops
+# rc0 — so the box posts NO live-gate verdicts and nothing said why (the fitness-stall class, applied to
+# the host identity). Make it a LOUD FAIL (like the F16 checks). WAIVABLE for a deliberately manual
+# `gh auth login` host via a marker file: `touch ~/.config/gh-app-host.manual-waiver`.
+ck "host App identity provisioned (or manual-auth waiver)" "{ podman secret exists gh_app_host_key && test -r \"\$HOME/.config/gh-app-host.env\"; } || test -e \"\$HOME/.config/gh-app-host.manual-waiver\""
 exit $fail
