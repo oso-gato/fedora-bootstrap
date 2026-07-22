@@ -55,6 +55,11 @@ case "${MUTATE:-}" in
   sbin) printf 'STALE-INJECTED' >> "$APPLY_SBIN_DIR/host-apply";;        # a stale SYSTEM-layer artifact (the host-apply seam)
   user) printf 'STALE-INJECTED' >> "$APPLY_BIN_DIR/host-agent-watch.sh";; # a stale USER-layer artifact
 esac
+# increment 2: simulate setup.sh (re)writing a deployed workload Quadlet (the fitness-lines-uncommented case).
+if [ -n "${QUADLET_WRITE:-}" ]; then
+  mkdir -p "${APPLY_QUADLET_DIR:?}"
+  printf '%s\n' "$QUADLET_WRITE" > "$APPLY_QUADLET_DIR/fedora-dev.container"
+fi
 exit 0
 EOF
 STUB_VERIFY="$ROOT/stub-verify.sh"
@@ -192,6 +197,43 @@ else
     && ok "neutralised readback WRONGLY records success on a stale artifact — the real readback IS the guard" \
     || bad "mutation" "neutralised executor did not wrongly-pass (rc=$mrc applied?=$( [ -f "$A_STATE/applied.sha" ] && echo yes||echo no)) — CASE 6 may be passing for the wrong reason"
 fi
+
+echo "== CASE 7 (increment 2): apply CHANGES a deployed workload Quadlet → the changed-quadlet signal lists it =="
+# The recreate TRIGGER: setup.sh rewrites ~core/.config/containers/systemd/fedora-dev.container (the fitness
+# lines uncommented). host-apply.sh sha's it BEFORE vs AFTER and records the changed workload to the signal
+# the host agent reads to file an approved-gated recreate. Pre-seed the OLD Quadlet; the stub writes the NEW.
+build_repo c7; advance_origin seven
+mkdir -p "$ROOT/c7/state" "$ROOT/c7/quadlets"; printf 'OLD-ENV\n' > "$ROOT/c7/quadlets/fedora-dev.container"
+run_apply c7 APPLY_QUADLET_DIR="$ROOT/c7/quadlets" QUADLET_WRITE=NEW-ENV
+{ [ "$RC" = 0 ] && [ "$(cat "$ROOT/c7/state/quadlet-changed" 2>/dev/null)" = "fedora-dev" ]; } \
+  && ok "changed Quadlet → signal lists 'fedora-dev' (the approved-gated recreate trigger)" \
+  || bad "quadlet-change-signal" "rc=$RC signal='$(cat "$ROOT/c7/state/quadlet-changed" 2>/dev/null)'; out: $(tr '\n' '|' <"$ROOT/c7.out")"
+
+echo "== CASE 8 (increment 2): an apply that does NOT change the Quadlet → EMPTY signal (no spurious recreate) =="
+# A merged change that re-runs setup.sh but leaves the Quadlet byte-identical must NOT trigger a recreate
+# (a session-dropping act). Pre-seed SAME-ENV; the stub rewrites the identical content → sha unchanged.
+build_repo c8; advance_origin eight
+mkdir -p "$ROOT/c8/state" "$ROOT/c8/quadlets"; printf 'SAME-ENV\n' > "$ROOT/c8/quadlets/fedora-dev.container"
+run_apply c8 APPLY_QUADLET_DIR="$ROOT/c8/quadlets" QUADLET_WRITE=SAME-ENV
+{ [ "$RC" = 0 ] && [ -f "$ROOT/c8/state/quadlet-changed" ] && [ ! -s "$ROOT/c8/state/quadlet-changed" ]; } \
+  && ok "unchanged Quadlet → empty signal written (no spurious recreate)" \
+  || bad "quadlet-nochange-signal" "rc=$RC signal-exists?=$( [ -f "$ROOT/c8/state/quadlet-changed" ] && echo yes||echo no) signal='$(cat "$ROOT/c8/state/quadlet-changed" 2>/dev/null)'"
+
+echo "== CASE 9 (increment 2, fitness #237 regression): UPTODATE no-op with a deployed Quadlet → EMPTY signal =="
+# The bug fitness caught: UPTODATE passed before='' to ha_write_changed, so ha_changed_quadlets diffed
+# EVERY deployed Quadlet as "new" → the idempotent same-sha no-op wrote a signal listing ALL workloads →
+# spurious approval-gated recreate tickets. A no-op changed NOTHING, so the signal must be EMPTY even when
+# ~core/.config/containers/systemd/*.container exist. (CASE 7/8 only drove the FF path, hiding this.)
+build_repo c9   # no advance → work == origin (UPTODATE)
+head="$(git -C "$C_WORK" rev-parse HEAD)"
+mkdir -p "$ROOT/c9/state" "$ROOT/c9/quadlets"
+printf '%s\n' "$head" > "$ROOT/c9/state/applied.sha"           # applied.sha == head ⇒ UPTODATE
+printf 'DEPLOYED-ENV\n' > "$ROOT/c9/quadlets/fedora-dev.container"   # a real deployed Quadlet is present
+run_apply c9 APPLY_QUADLET_DIR="$ROOT/c9/quadlets"
+{ [ "$RC" = 0 ] && grep -qi 'no-op' "$ROOT/c9.out" \
+  && [ -f "$ROOT/c9/state/quadlet-changed" ] && [ ! -s "$ROOT/c9/state/quadlet-changed" ]; } \
+  && ok "UPTODATE no-op writes an EMPTY signal even with a deployed Quadlet (no spurious recreate)" \
+  || bad "uptodate-signal" "rc=$RC signal='$(cat "$ROOT/c9/state/quadlet-changed" 2>/dev/null)' (bug: lists every workload)"
 
 echo
 echo "host-apply: $pass passed, $fail failed"

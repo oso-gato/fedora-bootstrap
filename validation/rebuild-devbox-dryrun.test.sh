@@ -51,9 +51,9 @@ case "$1" in
     esac ;;
   issue)
     case "$2" in
-      list) echo "${FAKE_ISSUE:-1}" ;;                              # discovery → one fake issue
+      list) case "$*" in *--search*) printf '%s' "${FAKE_SEARCH:-}" ;; *) echo "${FAKE_ISSUE:-1}" ;; esac ;;  # a --search list is the recreate-dedup lookup (empty=none); a plain list is discovery
       view) case "$*" in *author*) printf '%s' "${FAKE_AUTHOR:-arthur}" ;; *) printf '%s' "$FAKE_BODY" ;; esac ;;
-      *)    printf 'GH %s\n' "$*" >> "$GH_LOG" ;;                   # comment / close / edit → record
+      *)    printf 'GH %s\n' "$*" >> "$GH_LOG" ;;                   # comment / close / edit / create → record
     esac ;;
   *) printf 'GH %s\n' "$*" >> "$GH_LOG" ;;                          # label create etc → record
 esac
@@ -65,7 +65,9 @@ cat > "$BIN/systemctl" <<'EOF'
 #!/usr/bin/env bash
 printf 'SYSTEMCTL %s\n' "$*" >> "$SYSTEMCTL_LOG"
 case "$*" in
-  *"is-active workload-rebuild@"*) echo "${SCEN_UNIT_STATE:-inactive}" ;;
+  *"is-active workload-rebuild@"*)          echo "${SCEN_UNIT_STATE:-inactive}" ;;
+  *"is-active host-apply.service"*)         echo "${SCEN_APPLY_STATE:-inactive}" ;;    # apply-bootstrap unit state (increment 2)
+  *"show -p ExecMainStatus"*host-apply*)    echo "${SCEN_APPLY_RC:-0}" ;;              # apply exit contract 0/1/2/3
 esac
 exit 0
 EOF
@@ -307,6 +309,35 @@ if [ "$(sha256sum <"$WATCH")" = "$(sha256sum <"$MUT3")" ]; then no "M3 vacuous" 
   if has 'actively-continuing 0/1' && ! has 'host-agent: DONE'; then ok "M3: no nudge ⇒ handshake never confirms ⇒ DONE unreachable — the nudge is what drives it"
   else no "M3" "mutant with a no-op nudge should never reach DONE (handshake unconfirmed)"; fi
 fi
+
+# ---- increment 2: apply-bootstrap ESCALATES to an approved-gated recreate when a workload Quadlet changed ----
+# The apply ticket is bot-filed (FAKE_AUTHOR nox-bot, no approval needed — apply is autonomous). Pre-seed
+# `.applyfired` so ONE tick reaches the poll; the apply unit is done rc 0; the changed-quadlet signal lists
+# fedora-dev → do_apply_bootstrap files a rebuild-devbox ticket (which do_rebuild_devbox will then hold
+# PENDING a maintainer's `approved` tap — the session drop stays gated; the proven path is untouched).
+run_apply_esc(){ # <signal-content> [FAKE_SEARCH=…]
+  newhome; export FAKE_BODY='host-op: apply-bootstrap' FAKE_AUTHOR='nox-bot' FAKE_PERM=write FAKE_SEARCH="${2:-}"
+  mkdir -p "$HOME/.local/state/host-agent"; : > "$HOME/.local/state/host-agent/fedora-bootstrap-1.applyfired"
+  local sig="$HOME/quadlet-changed"; printf '%s' "$1" > "$sig"
+  PATH="$BIN:$PATH" SCEN_APPLY_STATE=inactive SCEN_APPLY_RC=0 APPLY_CHANGED_SIGNAL="$sig" \
+    bash "$WATCH" >/dev/null 2>&1 || true
+  unset FAKE_SEARCH
+}
+
+run_apply_esc 'fedora-dev'
+if grep -qF 'issue create' "$GH_LOG" && grep -qF 'rebuild-devbox fedora-dev' "$GH_LOG" && has 'RECREATE REQUIRED'; then
+  ok "apply rc0 + changed Quadlet ⇒ files an approval-gated rebuild-devbox recreate + says RECREATE REQUIRED"
+else no "esc-file" "expected a filed rebuild-devbox ticket + RECREATE-REQUIRED verdict"; fi
+
+run_apply_esc ''
+if ! grep -qF 'issue create' "$GH_LOG" && ! has 'RECREATE REQUIRED' && has 'host-agent: DONE'; then
+  ok "apply rc0 + EMPTY signal ⇒ NO recreate ticket (no spurious session-drop), apply still reported DONE"
+else no "esc-nochange" "an unchanged-Quadlet apply must not file a recreate"; fi
+
+run_apply_esc 'fedora-dev' '7'
+if ! grep -qF 'issue create' "$GH_LOG"; then
+  ok "changed Quadlet but an OPEN recreate ticket already exists (search hit) ⇒ idempotent, no duplicate filed"
+else no "esc-dedup" "a recreate ticket already open must not be re-filed"; fi
 
 echo
 echo "rebuild-devbox-dryrun: $pass passed, $fail failed"

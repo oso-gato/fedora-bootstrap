@@ -154,6 +154,7 @@ DEVBOX_ASSEMBLED_MARKER="${DEVBOX_ASSEMBLED_MARKER:-/home/core/.local/state/clau
 DEVBOX_ASSEMBLE_FAILED_MARKER="${DEVBOX_ASSEMBLE_FAILED_MARKER:-/home/core/.local/state/claudebox/.assemble-failed}"  # a half-assembled box (overrides a stale .assembled)
 DEVBOX_BOX_NAME="${DEVBOX_BOX_NAME:-claudebox}"           # the in-container distrobox `claude` runs inside (for the enterable probe)
 DEVBOX_APPROVER_MENTION="${DEVBOX_APPROVER_MENTION:-@oso-gato}"   # @mentioned on the awaiting-approval comment (mobile push); the AUTHORIZATION is role-checked, never this string
+APPLY_CHANGED_SIGNAL="${APPLY_CHANGED_SIGNAL:-/var/lib/fedora-bootstrap/host-apply/quadlet-changed}"   # increment 2: host-apply.sh writes the deployed workload Quadlets whose env changed; a changed REBUILDABLE dev box needs an approved-gated recreate to make the new env live
 TICKET_BODY=''   # set per-ticket in the discovery loop; rebuild-devbox parses its manifest from it
 
 log(){ echo "[$(date -u +%FT%TZ 2>/dev/null || date)] host-agent: $*" >&2; }   # → journald (no file)
@@ -711,15 +712,42 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
   fi
 }
 
+# ---- increment 2 — the approved-gated RECREATE trigger (config-converge is not enough for a running box) ----
+# apply-bootstrap re-runs setup.sh, which may REWRITE a deployed workload Quadlet (e.g. #229 uncommenting
+# the fitness Secret=/Environment= lines) — but the RUNNING container keeps its old env until it is
+# RECREATED. host-apply.sh records the CHANGED workload Quadlets (sha before vs after) in APPLY_CHANGED_SIGNAL;
+# this files an APPROVAL-GATED `rebuild-devbox` ticket for each changed REBUILDABLE dev box. It REUSES the
+# PROVEN rebuild-devbox path UNCHANGED — the ticket is bot-filed, so do_rebuild_devbox holds it PENDING until
+# a maintainer taps `approved`, then kills + recreates + RESTORES every session (the session-dropping act
+# stays maintainer-gated; the delicate R17 restore lineage is not touched). Echoes the ticket URL (empty on
+# skip/failure). IDEMPOTENT: an OPEN recreate ticket for THIS dev box + THIS apply is never re-filed.
+file_recreate_ticket(){ # <workload> <apply-issue>
+  local wl="$1" apply_issue="$2" existing url
+  existing="$(gh issue list --repo "$ORG/$REPO" --state open --label "$LABEL" --search "rebuild-devbox $wl apply #$apply_issue" --json number -q '.[].number' 2>/dev/null | head -n1)"
+  if [ -n "$existing" ]; then
+    log "$ORG/$REPO#$apply_issue: a recreate ticket for '$wl' is already open (#$existing) — not re-filing"
+    printf '%s' "$ORG/$REPO#$existing"; return 0
+  fi
+  gh label create rebuild-approval --repo "$ORG/$REPO" --color FBCA04 --description "maintainer one-tap approval for a destructive rebuild-devbox" >/dev/null 2>&1 || true
+  url="$(gh issue create --repo "$ORG/$REPO" \
+      --title "🔴 APPROVAL REQUIRED: rebuild-devbox $wl (apply-bootstrap changed its Quadlet env)" \
+      --label "$LABEL" --label rebuild-approval \
+      --body "host-op: rebuild-devbox $wl"$'\n\n'"**${DEVBOX_APPROVER_MENTION} — a maintainer's ONE-TAP \`approved\` label recreates \`$wl\` so its changed Quadlet env goes live.** apply-bootstrap (from apply #$apply_issue) re-ran setup.sh and the deployed \`$wl.container\` env/secret CHANGED on disk, but the RUNNING container still carries the OLD env — only a recreate applies it. This kills + rebuilds \`$wl\` (health-gated, R10 rollback) then RESTORES + RESUMES every session (R17). The applier is role-checked admin|maintain from the label's own timeline (an App-applied label is inert). To reject, close this issue." 2>/dev/null)" \
+    && { log "$ORG/$REPO#$apply_issue: filed approval-gated recreate ticket for '$wl': $url"; printf '%s' "$url"; return 0; }
+  log "$ORG/$REPO#$apply_issue: FAILED to file recreate ticket for '$wl' — config IS converged on disk; a manual rebuild-devbox is needed to make the env live"
+  return 1
+}
+
 # ---- apply-bootstrap (#133) — HOST SELF-APPLY: make merged `main` LIVE via the root-owned executor ----
 # DECOUPLED like rebuild-devbox: setup.sh is a MINUTES-long root run, so a blocking `systemctl start`
 # would blow the 300s host-agent tick cap (incident FIX-3, and the box's conmon goes with the timeout
 # kill). So FIRE `--no-block` + poll host-apply.service across ticks; the executor's ExecMainStatus IS
 # the verdict (mapped below). No workload arg (it applies pinned, merge-gated `main`), no author-gate
 # (LABEL-authorized, like redeploy — the merge gate is the content-authorization; see the header).
+# On a SUCCESSFUL apply that CHANGED a workload Quadlet, it files an approved-gated recreate (increment 2).
 do_apply_bootstrap(){ # <repo> <issue>
   local repo="$1" issue="$2" acted="$STATE/${1}-${2}.acted" fired="$STATE/${1}-${2}.applyfired" st detail scmain
-  local unit="host-apply.service"
+  local unit="host-apply.service" changed wl rurl recreated nonrebuild
 
   # (0) outcome already recorded by a prior tick → re-DELIVER only, never re-fire (the .acted contract).
   if [ -e "$acted" ] && IFS='|' read -r st detail < "$acted" && [ -n "$st" ]; then
@@ -744,6 +772,25 @@ do_apply_bootstrap(){ # <repo> <issue>
       2) st=failed; detail="apply-bootstrap FAILED readback — the live host artifacts do NOT all equal merged main (applied != proven-live); success NOT recorded; merged tree intact + git-revertable. Investigate; re-file to retry." ;;
       *) st=failed; detail="apply-bootstrap FAILED — host-apply executor errored (ExecMainStatus=${scmain:-?}). Host left recoverable (merged tree intact)." ;;
     esac
+    # increment 2 — a SUCCESSFUL apply may have rewritten a deployed workload Quadlet (new env on disk, NOT
+    # yet live on the running container). For each CHANGED REBUILDABLE dev box, file an approval-gated
+    # rebuild-devbox recreate (the proven path; the maintainer's one tap gates the session drop). Written
+    # BEFORE .acted so the escalation rides the SAME idempotent delivery — a re-tick re-delivers, never re-files.
+    if [ "$st" = done ]; then
+      changed="$(cat "$APPLY_CHANGED_SIGNAL" 2>/dev/null || echo '')"; recreated=''; nonrebuild=''
+      if [ -n "$changed" ]; then
+        while IFS= read -r wl; do
+          [ -n "$wl" ] || continue
+          if is_rebuildable_workload "$wl"; then
+            rurl="$(file_recreate_ticket "$wl" "$issue")" && recreated="$recreated ${rurl:-$wl}" || nonrebuild="$nonrebuild $wl(recreate-file-failed)"
+          else
+            nonrebuild="$nonrebuild $wl(no-auto-recreate:not-a-rebuildable-devbox)"
+          fi
+        done <<< "$changed"
+        [ -n "$recreated" ] && detail="$detail  RECREATE REQUIRED (Quadlet env changed) — filed approval-gated rebuild-devbox →${recreated}; tap \`approved\` to make the new env live on the running box."
+        [ -n "$nonrebuild" ] && detail="$detail  NOTE — changed Quadlet(s) with no auto-recreate path:${nonrebuild} (a manual redeploy/recreate makes their env live)."
+      fi
+    fi
     printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"; return
   fi
 

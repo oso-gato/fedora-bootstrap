@@ -116,6 +116,55 @@ ha_origin_allowed() { # <origin_url>
   return 1
 }
 
+# ---- QUADLET-CHANGE DETECTION (increment 2: config-converge is not enough for a running container) ----
+# A re-run of setup.sh may REWRITE a deployed workload Quadlet (~<user>/.config/containers/systemd/
+# <name>.container) — e.g. #229 uncommenting the fitness `Secret=`/`Environment=` lines. That changes the
+# file ON DISK + daemon-reloads, but the RUNNING container keeps its old env until it is RECREATED. So the
+# executor records WHICH workload Quadlets actually changed (sha256 before vs after the apply); the host
+# agent reads that signal and files an APPROVAL-GATED rebuild-devbox recreate for the changed dev box (the
+# session-dropping act stays maintainer-gated + reuses the proven R17 restore lineage). PURE where it can be.
+#
+# ha_quadlet_shas <dir> -> "<name>\t<sha>" per <name>.container (name = basename minus .container); the
+# SORTED, whitespace-free lines make ha_changed_quadlets a pure string compare. Missing dir ⇒ no lines.
+ha_quadlet_shas() { # <dir>
+  local dir="$1" f n s
+  [ -d "$dir" ] || return 0
+  for f in "$dir"/*.container; do
+    [ -f "$f" ] || continue
+    n="$(basename "$f" .container)"
+    s="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)"
+    printf '%s\t%s\n' "$n" "$s"
+  done | sort
+}
+# ha_changed_quadlets <before-shas> <after-shas> -> changed workload names, one per line (PURE, unit-tested).
+# CHANGED = present AFTER with a sha that differs from (or was absent) BEFORE. A REMOVED quadlet is NOT
+# changed (nothing to recreate). An unreadable sha ("" field) never spuriously matches a real one.
+ha_changed_quadlets() { # <before> <after>  (after fed to awk via stdin so an empty after still yields none)
+  local before="$1"
+  printf '%s\n' "$2" | awk -v before="$before" '
+    BEGIN{ n=split(before, B, "\n"); for(i=1;i<=n;i++){ if(B[i]=="") continue; t=index(B[i],"\t"); if(t){ nm=substr(B[i],1,t-1); pre[nm]=substr(B[i],t+1) } } }
+    { if($0=="") next; t=index($0,"\t"); if(!t) next; nm=substr($0,1,t-1); sh=substr($0,t+1);
+      if(!(nm in pre) || pre[nm]!=sh) print nm }
+  '
+}
+# ha_write_changed <before-shas> <quadlet-dir> <signal-path> <state-dir> (I/O): capture the AFTER shas,
+# compute the changed workloads, and write them (one per line; EMPTY on a no-op) to the signal file
+# WORLD-READABLE (the host agent is uid 1000). Called on EVERY rc-0 terminal path so the signal always
+# reflects THIS apply (the agent reads it only on rc 0). A write failure degrades to no-recreate (safe).
+ha_write_changed() { # <before> <qdir> <signal> <state>
+  local before="$1" qdir="$2" signal="$3" state="$4" after changed
+  after="$(ha_quadlet_shas "$qdir")"
+  changed="$(ha_changed_quadlets "$before" "$after")"
+  printf '%s' "$changed" > "$signal" 2>/dev/null || { warn "could not write quadlet-changed signal $signal — no recreate will be filed"; return 0; }
+  chmod 0644 "$signal" 2>/dev/null || true
+  chmod 0755 "$state"  2>/dev/null || true      # uid 1000 must traverse the root-owned state dir to read the signal
+  if [ -n "$changed" ]; then
+    log "workload Quadlet(s) CHANGED on disk — the new env is NOT yet live on the running container: $(printf '%s' "$changed" | tr '\n' ' ')(the host agent files an approved-gated recreate)"
+  else
+    log "no deployed workload Quadlet changed by this apply — no recreate needed"
+  fi
+}
+
 # ---- the apply, run as ROOT ------------------------------------------------------------------------
 # Test seams (APPLY_*) are read ONLY here; in production `sudo` env_reset strips them (see header), so
 # the agent cannot influence any of these — the executor takes the hardcoded, merge-gated defaults.
@@ -126,6 +175,12 @@ ha_main() {
   local state="${APPLY_STATE_DIR:-/var/lib/fedora-bootstrap/host-apply}"             # root-owned: the applied.sha record is unforgeable by the agent
   local applied="$state/applied.sha"
   local gt="${APPLY_GIT_TIMEOUT:-120}"
+  # increment 2 — the deployed workload Quadlets + the changed-quadlet signal the host agent reads to
+  # decide whether an (approved-gated) recreate is needed. The agent runs as uid 1000, so the signal must
+  # be world-readable (chmod'd on write); a stale signal is never read (the agent reads it ONLY on rc 0,
+  # and every rc-0 terminal path rewrites it fresh, empty on a no-op).
+  local qdir="${APPLY_QUADLET_DIR:-/home/$U/.config/containers/systemd}"
+  local changed_signal="${APPLY_CHANGED_SIGNAL:-$state/quadlet-changed}"
   mkdir -p "$state" 2>/dev/null || true
 
   _HA_GITRUN="${APPLY_GIT_RUNNER-runuser -u $U --}"; _HA_CLONE="$clone"; _HA_GT="$gt"   # arm gitc (used here + in ha_rollback)
@@ -157,7 +212,7 @@ ha_main() {
   decision="$(ha_decide "$head" "$fetched" "$anc" "$dirty" "$appl_match")"
   local short; short="$(printf '%s' "$fetched" | cut -c1-12)"
   case "$decision" in
-    UPTODATE)       log "already at merged main $short and readback-verified — no-op"; return 0 ;;
+    UPTODATE)       ha_write_changed "$(ha_quadlet_shas "$qdir")" "$qdir" "$changed_signal" "$state"; log "already at merged main $short and readback-verified — no-op"; return 0 ;;   # before==after ⇒ empty signal (a no-op changed nothing; passing before='' would diff EVERY quadlet as "new")
     REFUSE-DIRTY)   warn "control clone has UNCOMMITTED changes — REFUSING (a dirty host clone is a question, not a force-pull); untouched"; return 3 ;;
     REFUSE-DIVERGED)warn "origin main $short does NOT fast-forward HEAD (diverged/force-push?) — REFUSING (untouched)"; return 3 ;;
     FF)             log "fast-forward available: $(printf '%s' "$head" | cut -c1-12) -> $short — applying merged main" ;;
@@ -172,6 +227,9 @@ ha_main() {
   fi
 
   local prior="$head"   # rollback target: the clone's pre-apply HEAD (the clone is NOT merged until success)
+
+  # increment 2 — snapshot the deployed workload Quadlets BEFORE the apply (re-run of setup.sh may rewrite one).
+  local before_q; before_q="$(ha_quadlet_shas "$qdir")"
 
   # ---- FORWARD APPLY: run the merged setup.sh as root; unhealthy/failed => rollback ----
   if ! ha_run_setup "$tmp"; then
@@ -189,6 +247,10 @@ ha_main() {
          "Host left recoverable (merged tree intact, git-revertable); re-file to retry."
     return 2
   fi
+
+  # increment 2 — record WHICH deployed workload Quadlets changed (env-on-disk changed; the running
+  # container is stale). The host agent reads this signal + files an approved-gated recreate.
+  ha_write_changed "$before_q" "$qdir" "$changed_signal" "$state"
 
   # ---- success: record the applied sha + fast-forward the live clone (operator + F16 visibility) ----
   gitc merge --ff-only "$fetched" >/dev/null 2>&1 \
@@ -282,6 +344,17 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ] && [ "${1:-}" = "--selftest" ]; then
   o "substring wrong host"     "https://evilgithub.com/oso-gato/fedora-bootstrap"    refuse
   o "substring attacker host"  "https://attacker.tld/oso-gato/fedora-bootstrap"      refuse
   o "empty origin"             ""                                                     refuse
+
+  # QUADLET-CHANGE detection (increment 2): CHANGED = present AFTER with a differing/new sha; a REMOVED
+  # quadlet is NOT changed (nothing to recreate). PURE — the trigger for the approved-gated recreate.
+  q(){ local g; g="$(ha_changed_quadlets "$2" "$3" | tr '\n' ',')"; [ "$g" = "$4" ] && echo "ok: $1" \
+       || { echo "FAIL: $1 — got '$g' want '$4'"; f=1; }; }
+  q "unchanged => none"         $'fedora-dev\tAAA'                       $'fedora-dev\tAAA'                       ''
+  q "env changed => that one"   $'fedora-dev\tAAA'                       $'fedora-dev\tBBB'                       'fedora-dev,'
+  q "new quadlet => changed"    ''                                      $'fedora-dev\tAAA'                       'fedora-dev,'
+  q "removed => NOT changed"    $'fedora-dev\tAAA'                       ''                                      ''
+  q "one of two changed"        $'fedora-dev\tAAA\nfedora-desktop\tXXX'  $'fedora-dev\tBBB\nfedora-desktop\tXXX'  'fedora-dev,'
+  q "empty both => none"        ''                                      ''                                      ''
 
   [ "$f" = 0 ] && echo "ALL HOST-APPLY SELFTESTS PASS" || echo "HOST-APPLY SELFTESTS FAILED"
   exit "$f"
