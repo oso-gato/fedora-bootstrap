@@ -486,6 +486,14 @@ fi
 
 systemctl --user daemon-reload
 
+# Capture the SCRIPTED dev-App creds setup.sh ferried via `su` (GH_APP_*) BEFORE the per-iteration blank
+# below clobbers them. The documented NO-TTY fallback (setup.sh: "pastes are impossible unless GH_APP_*
+# env is set") relies on those reaching a workload's COLLECT_ONLY spin-up, but the blank ran first, so a
+# fully-scripted commission FATALed with no tty and no creds. The ferry carries ONE App set (for the
+# first workload); it is passed to that workload's collect and then CONSUMED. An interactive run leaves
+# these empty and each wizard prompts over the ferried tty exactly as before.
+_ferry_gh_app_id="${GH_APP_ID:-}"; _ferry_gh_app_inst="${GH_APP_INSTALLATION_ID:-}"; _ferry_gh_app_secret="${GH_APP_SECRET:-}"
+
 # ---- per-container provisioning ----
 for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     # (a) Clone the container's repo (idempotent). NO `|| true` on the pull
@@ -527,8 +535,15 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
         exit 1
     fi
     echo ">> ${_c}: asking its setup questions (delegated to its own spin-up.sh) ..."
-    _collected="$(cd "$HOME/$_c" && COLLECT_ONLY=1 ./spin-up.sh)" \
+    # Pass the ferried scripted dev-App creds (empty on an interactive run ⇒ the wizard prompts) as a
+    # command-prefix env, then CONSUME them so a second workload never reuses the first's App.
+    _collected="$(cd "$HOME/$_c" && env \
+            GH_APP_ID="$_ferry_gh_app_id" \
+            GH_APP_INSTALLATION_ID="$_ferry_gh_app_inst" \
+            GH_APP_SECRET="$_ferry_gh_app_secret" \
+            COLLECT_ONLY=1 ./spin-up.sh)" \
         || { echo "FATAL: $_c spin-up.sh collect failed" >&2; exit 1; }
+    _ferry_gh_app_id=""; _ferry_gh_app_inst=""; _ferry_gh_app_secret=""
     # The eval sets the WORKLOAD's answers (incl. ITS TS_AUTHKEY); the host's own TS_AUTHKEY
     # is saved/restored around it — but the workload's key must be CAPTURED first, or it is
     # silently DROPPED (verified live: the operator pasted nox's key and the box still fell
