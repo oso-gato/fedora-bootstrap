@@ -338,7 +338,13 @@ if [ -z "${TS_AUTHKEY:-}" ] && [ -t 0 ]; then
 fi
 if ! tailscale status >/dev/null 2>&1; then
     if [ -n "${TS_AUTHKEY:-}" ]; then
-        tailscale up "${ts_up[@]}" --auth-key="$TS_AUTHKEY"   # unattended join
+        # Pass the key via a file (tailscale's --auth-key=file: prefix, stable since 1.38) so the
+        # secret never lands on tailscale's argv (readable via /proc/<pid>/cmdline). Only the PATH is
+        # on argv; the value stays in a 0600 root-only file, removed right after the join.
+        _tskf="$(mktemp)"; chmod 600 "$_tskf"; printf '%s' "$TS_AUTHKEY" > "$_tskf"
+        trap 'rm -f "$_tskf"' EXIT
+        tailscale up "${ts_up[@]}" --auth-key="file:$_tskf"   # unattended join (key via file:, not argv)
+        rm -f "$_tskf"; trap - EXIT
     else
         echo ">> Tailscale needs browser auth. A https://login.tailscale.com/... link will"
         echo ">> print on the NEXT line. Open it now and approve this node."
