@@ -625,15 +625,19 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     fi
 
     # (b4) Ferry the WORKLOAD's TS_AUTHKEY into its Quadlet deploy: the key goes into a
-    # podman secret (never a file/env-file) and the shipped commented `Secret=` line is
-    # activated — the entrypoint sees $TS_AUTHKEY (type=env) and joins unattended. No key
-    # collected => no-op (the box's web-login fallback prints its URL in `podman logs`).
+    # podman secret and the shipped commented `Secret=` line is activated as a MOUNT (type=mount,
+    # target=ts-authkey) — the entrypoint reads /run/secrets/ts-authkey and joins unattended.
+    # type=mount, NOT type=env: an env var would land in the container environment, which distrobox
+    # re-materialises as `--env=TS_AUTHKEY=<key>` on every `distrobox enter`/`podman exec` argv
+    # (/proc-readable). No key collected => no-op (the box's web-login fallback prints its URL in logs).
+    # The `^#* *` anchor matches a commented OR an already-uncommented (legacy type=env) line so a
+    # setup.sh re-run self-heals a live box to the mount form.
     if [ -n "${_wl_ts:-}" ]; then
         printf '%s' "$_wl_ts" | podman secret create --replace "${_c}-ts-authkey" - >/dev/null
-        sed -i "s|^# *Secret=${_c}-ts-authkey,type=env,target=TS_AUTHKEY.*|Secret=${_c}-ts-authkey,type=env,target=TS_AUTHKEY|" \
+        sed -i "s|^#* *Secret=${_c}-ts-authkey,type=.*|Secret=${_c}-ts-authkey,type=mount,target=ts-authkey,mode=0400|" \
             "$HOME/.config/containers/systemd/$_c.container"
-        if grep -q "^Secret=${_c}-ts-authkey,type=env,target=TS_AUTHKEY" "$HOME/.config/containers/systemd/$_c.container"; then
-            echo "  -> ${_c}: unattended tailnet join wired (podman secret '${_c}-ts-authkey')."
+        if grep -q "^Secret=${_c}-ts-authkey,type=mount,target=ts-authkey" "$HOME/.config/containers/systemd/$_c.container"; then
+            echo "  -> ${_c}: unattended tailnet join wired (podman secret '${_c}-ts-authkey', mounted)."
         else
             echo "  -> ${_c}: WARN — its Quadlet ships no '# Secret=${_c}-ts-authkey' line to activate;" >&2
             echo "     secret created but NOT wired; the box will use the web-login fallback" >&2
