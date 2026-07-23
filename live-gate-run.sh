@@ -58,9 +58,10 @@ if ! { git -C "$SRC" init -q \
 fi
 SHA="$(git -C "$SRC" rev-parse --short HEAD)"
 # FULL sha for the machine-read verdict header: the dev-side consumers (auto-merge.sh, pr-poller.sh)
-# bind verdicts to the full 40-hex head sha on the comment's FIRST line — a 7-hex prefix is only 28
-# bits and a ground commit-sha collision would let a never-gated head inherit a GREEN (#96 STEP-2
-# forge-hunt). Short $SHA stays for tags/logs where length matters and nothing machine-trusts it.
+# bind verdicts to the full 40-hex head sha AND the full 40-hex base (target main) sha (R25 base-drift
+# voiding) on the comment's FIRST line — a 7-hex prefix is only 28 bits and a ground commit-sha
+# collision would let a never-gated head inherit a GREEN (#96 STEP-2 forge-hunt). Short $SHA stays for
+# tags/logs where length matters and nothing machine-trusts it.
 SHA_FULL="$(git -C "$SRC" rev-parse HEAD)"
 
 # ---- STRUCTURAL GUARD: gateable ONLY if the candidate carries a top-level .live-gate and/or a
@@ -264,8 +265,13 @@ say "== OVERALL VERDICT: $overall  ($SLUG#$PR @ $SHA) =="
 
 # Post the combined verdict to the PR (host MAY comment; NEVER merges).
 TAIL="$(tail -28 "$LOG" | sed 's/`/ /g')"
-BODY="$(printf '**Host live-gate (Gate B): VERDICT %s** — %s @ %s (targets: %s)\n\nEach target built DISPOSABLY on the host (localhost/disposable/*, never pushed) from an ephemeral PR-head tree (torn down) + access-probed on its own loopback. ALL targets must be GREEN.\n\n```\n%s\n```\n' \
-  "$overall" "$REPO_NAME" "$SHA_FULL" "${targets[*]}" "$TAIL")"
+# R25: the base (target `main`) TIP this verdict was computed against — read live at post time (not at
+# build start) so a main that advanced DURING the multi-target build voids the verdict immediately, not
+# on the next poll. Empty on a rare gh failure → the dev-side consumers fail-closed (they require a
+# 40-hex base) and re-gate next sweep. baseRefOid is the target-main tip, NOT the git merge-base.
+BASE_FULL="$(gh pr view "$PR" --repo "$SLUG" --json baseRefOid -q .baseRefOid 2>/dev/null)"
+BODY="$(printf '**Host live-gate (Gate B): VERDICT %s** — %s @ %s base %s (targets: %s)\n\nEach target built DISPOSABLY on the host (localhost/disposable/*, never pushed) from an ephemeral PR-head tree (torn down) + access-probed on its own loopback. ALL targets must be GREEN.\n\n```\n%s\n```\n' \
+  "$overall" "$REPO_NAME" "$SHA_FULL" "$BASE_FULL" "${targets[*]}" "$TAIL")"
 if gh pr comment "$PR" --repo "$SLUG" --body "$BODY"; then
   echo "[live-gate] verdict $overall posted to $SLUG#$PR"
 else
