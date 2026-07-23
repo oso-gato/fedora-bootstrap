@@ -587,7 +587,7 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     if [ -n "${GH_APP_ID:-}" ] && [ -n "${GH_APP_SECRET:-}" ]; then
         _q="$HOME/.config/containers/systemd/$_c.container"
         sed -i \
-          -e "s|^# *Secret=gh_app_key,type=mount,target=gh_app_key.*|Secret=${GH_APP_SECRET},type=mount,target=gh_app_key|" \
+          -e "s|^#* *Secret=gh_app_key,type=mount,target=gh_app_key.*|Secret=${GH_APP_SECRET},type=mount,target=gh_app_key,uid=1000,gid=1000,mode=0400|" \
           -e "s|^# *Environment=GH_APP_ID=.*|Environment=GH_APP_ID=${GH_APP_ID} GH_APP_INSTALLATION_ID=${GH_APP_INSTALLATION_ID}|" \
           "$_q"
         echo "  -> ${_c}: standing GitHub App credential wired (podman secret '${GH_APP_SECRET}', App ${GH_APP_ID})."
@@ -603,7 +603,7 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     if [ -n "${GH_APP_FITNESS_SECRET:-}" ]; then
         _qc="$HOME/.config/containers/systemd/$_c.container"
         sed -i \
-          -e "s|^# *Secret=gh_app_key_fitness,type=mount,target=gh_app_key_fitness.*|Secret=${GH_APP_FITNESS_SECRET},type=mount,target=gh_app_key_fitness|" \
+          -e "s|^#* *Secret=gh_app_key_fitness,type=mount,target=gh_app_key_fitness.*|Secret=${GH_APP_FITNESS_SECRET},type=mount,target=gh_app_key_fitness,mode=0400|" \
           -e "s|^# *Environment=GH_APP_FITNESS_ID=.*|Environment=GH_APP_FITNESS_ID=${GH_APP_FITNESS_ID} GH_APP_FITNESS_INSTALLATION_ID=${GH_APP_FITNESS_INSTALLATION_ID}|" \
           -e "s|^# *Environment=FITNESS_SAME_IDENTITY=0.*|Environment=FITNESS_SAME_IDENTITY=${FITNESS_SAME_IDENTITY:-0}|" \
           "$_qc"
