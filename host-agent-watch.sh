@@ -656,27 +656,18 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
     printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"; return
   fi
 
-  # (2) FRESH → AUTHORIZE (destructive) + validate the manifest + capture the old ID + FIRE the rebuild.
-  # AUTHORIZE (R17 approval gate — see the DESTRUCTIVE-VERB AUTHORIZATION header): a maintainer's
-  # explicit act, in either form. Neither ⇒ PENDING (open + unconsumed, re-checked every tick), so the
-  # one-tap `approved` label can arrive any time later — never a refusal that consumes the ticket.
-  local author; author="$(gh issue view "$issue" --repo "$ORG/$REPO" --json author -q '.author.login' 2>/dev/null || echo '')"
-  if is_authorized_author "$author"; then
-    :   # a maintainer AUTHORED the ticket — authorship IS approval (the original path, unchanged)
-  elif approved_by_maintainer "$issue"; then
-    log "$ORG/$repo#$issue: rebuild-devbox APPROVED via the \`approved\` label (applier role-checked admin|maintain) — proceeding"
-  else
-    # PENDING APPROVAL: no .done/.acted is written, so discovery re-dispatches here every tick until a
-    # maintainer taps the label (or authors/closes). ONE marker-gated comment tells the human the tap.
-    local pend="$STATE/${repo}-${issue}.approval-asked"
-    if [ ! -e "$pend" ]; then
-      gh issue comment "$issue" --repo "$ORG/$repo" --body "**host-agent: ⏳ AWAITING APPROVAL** — ${DEVBOX_APPROVER_MENTION} this \`rebuild-devbox $wl\` ticket was filed by the apparatus and needs a maintainer's ONE-TAP authorization: **apply the \`approved\` label to this issue**. It kills + rebuilds the dev box, then restores + resumes every manifest session. The applier is role-checked admin|maintain from the label's own timeline (an App-applied label is inert). The host re-checks every ~10s and fires the moment the label lands. To reject: close this issue." >/dev/null 2>&1 \
-        && : > "$pend" \
-        || log "$ORG/$repo#$issue: awaiting-approval comment failed to post (will retry next tick)"
-    fi
-    log "$ORG/$repo#$issue: rebuild-devbox PENDING maintainer approval (\`approved\` label or maintainer authorship) — ticket left open, re-checking each tick"
-    return
-  fi
+  # (2) FRESH → FIRE the rebuild (NO human tap) + validate the manifest + capture the old ID.
+  # R41 DEPLOY-TO-LIVE AUTONOMY / GOVERNANCE §6(g) (2026-07-27): the maintainer's `approved`-label gate
+  # on this destructive verb is REMOVED — this SUPERSEDES the approval-gated R17 design of 2026-07-19.
+  #
+  # WHY THIS IS SAFE — the authorization is no longer "a human said ok" but "the machine PROVED it can
+  # restore". The SESSION MANIFEST below is captured FRESH from the LIVE dev box, and this verb REFUSES
+  # to fire when that capture fails (rc != 0 ⇒ respond `failed`, no kill). It will not destroy what it
+  # cannot restore — a machine-enforced, FAIL-CLOSED recoverability precondition that the human tap
+  # merely sat on top of, adding ceremony rather than safety. Approval governs GOALS (R1), never
+  # deployments: a rebuild is reversible by construction (manifest → restore → resume → VERIFIED, R17),
+  # so gating it bought little and cost a recurring human act on the loop's normal path.
+  log "$ORG/$repo#$issue: rebuild-devbox proceeding autonomously (R41 — no approval tap; recoverability is gated by the fresh session-manifest capture below)"
   # SESSION MANIFEST — captured FRESH from the LIVE dev box, NOT trusted from the ticket body.
   # The in-box producer CANNOT enumerate all sessions (a claudebox-nested shell reads only its OWN
   # /proc lineage; the fedora-dev poller's rebuild_request_tick refuses for exactly this reason, and a
@@ -728,12 +719,11 @@ file_recreate_ticket(){ # <workload> <apply-issue>
     log "$ORG/$REPO#$apply_issue: a recreate ticket for '$wl' is already open (#$existing) — not re-filing"
     printf '%s' "$ORG/$REPO#$existing"; return 0
   fi
-  gh label create rebuild-approval --repo "$ORG/$REPO" --color FBCA04 --description "maintainer one-tap approval for a destructive rebuild-devbox" >/dev/null 2>&1 || true
   url="$(gh issue create --repo "$ORG/$REPO" \
-      --title "🔴 APPROVAL REQUIRED: rebuild-devbox $wl (apply-bootstrap changed its Quadlet env)" \
-      --label "$LABEL" --label rebuild-approval \
-      --body "host-op: rebuild-devbox $wl"$'\n\n'"**${DEVBOX_APPROVER_MENTION} — a maintainer's ONE-TAP \`approved\` label recreates \`$wl\` so its changed Quadlet env goes live.** apply-bootstrap (from apply #$apply_issue) re-ran setup.sh and the deployed \`$wl.container\` env/secret CHANGED on disk, but the RUNNING container still carries the OLD env — only a recreate applies it. This kills + rebuilds \`$wl\` (health-gated, R10 rollback) then RESTORES + RESUMES every session (R17). The applier is role-checked admin|maintain from the label's own timeline (an App-applied label is inert). To reject, close this issue." 2>/dev/null)" \
-    && { log "$ORG/$REPO#$apply_issue: filed approval-gated recreate ticket for '$wl': $url"; printf '%s' "$url"; return 0; }
+      --title "rebuild-devbox $wl (apply-bootstrap changed its Quadlet env)" \
+      --label "$LABEL" \
+      --body "host-op: rebuild-devbox $wl"$'\n\n'"The apply converged config ON DISK; a changed Quadlet \`Environment=\`/\`Secret=\` only takes effect on a container RECREATE, which this ticket performs AUTONOMOUSLY (R41 — no approval tap). Safety is recoverability, not a human: the rebuild REFUSES to fire unless it can first capture the live session manifest, so it never destroys what it cannot restore, and it restores + resumes every captured session afterwards (R17).")" \
+    && { log "$ORG/$REPO#$apply_issue: filed autonomous recreate ticket for '$wl': $url"; printf '%s' "$url"; return 0; }
   log "$ORG/$REPO#$apply_issue: FAILED to file recreate ticket for '$wl' — config IS converged on disk; a manual rebuild-devbox is needed to make the env live"
   return 1
 }
@@ -744,7 +734,7 @@ file_recreate_ticket(){ # <workload> <apply-issue>
 # kill). So FIRE `--no-block` + poll host-apply.service across ticks; the executor's ExecMainStatus IS
 # the verdict (mapped below). No workload arg (it applies pinned, merge-gated `main`), no author-gate
 # (LABEL-authorized, like redeploy — the merge gate is the content-authorization; see the header).
-# On a SUCCESSFUL apply that CHANGED a workload Quadlet, it files an approved-gated recreate (increment 2).
+# On a SUCCESSFUL apply that CHANGED a workload Quadlet, it files an AUTONOMOUS recreate (increment 2; R41).
 do_apply_bootstrap(){ # <repo> <issue>
   local repo="$1" issue="$2" acted="$STATE/${1}-${2}.acted" fired="$STATE/${1}-${2}.applyfired" st detail scmain
   local unit="host-apply.service" changed wl rurl recreated nonrebuild
