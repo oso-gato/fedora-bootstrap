@@ -164,7 +164,7 @@ DEVBOX_ASSEMBLED_MARKER="${DEVBOX_ASSEMBLED_MARKER:-/home/core/.local/state/clau
 DEVBOX_ASSEMBLE_FAILED_MARKER="${DEVBOX_ASSEMBLE_FAILED_MARKER:-/home/core/.local/state/claudebox/.assemble-failed}"  # a half-assembled box (overrides a stale .assembled)
 DEVBOX_BOX_NAME="${DEVBOX_BOX_NAME:-claudebox}"           # the in-container distrobox `claude` runs inside (for the enterable probe)
 DEVBOX_APPROVER_MENTION="${DEVBOX_APPROVER_MENTION:-@oso-gato}"   # [UNWIRED since R41 — the awaiting-approval comment it addressed is removed; retained only so an out-of-tree override keeps parsing]
-APPLY_CHANGED_SIGNAL="${APPLY_CHANGED_SIGNAL:-/var/lib/fedora-bootstrap/host-apply/quadlet-changed}"   # increment 2: host-apply.sh writes the deployed workload Quadlets whose env changed; a changed REBUILDABLE dev box needs an approved-gated recreate to make the new env live
+APPLY_CHANGED_SIGNAL="${APPLY_CHANGED_SIGNAL:-/var/lib/fedora-bootstrap/host-apply/quadlet-changed}"   # increment 2: host-apply.sh writes the deployed workload Quadlets whose env changed; a changed REBUILDABLE dev box needs a recreate to make the new env live, filed + consumed AUTONOMOUSLY since R41 (no maintainer tap — see the DESTRUCTIVE-VERB AUTHORIZATION header)
 TICKET_BODY=''   # set per-ticket in the discovery loop; rebuild-devbox parses its manifest from it
 
 log(){ echo "[$(date -u +%FT%TZ 2>/dev/null || date)] host-agent: $*" >&2; }   # → journald (no file)
