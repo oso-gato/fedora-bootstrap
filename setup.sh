@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.77 (R41 DEPLOY-TO-LIVE AUTONOMY — the standing human tap on the merged→live path is removed: rebuild-devbox now fires autonomously, gated by the fail-closed live session-manifest capture instead of a maintainer's `approved` label. Authority: oso-gato/fedora-dev 00-REQUIREMENTS.md R41 + 00-GOVERNANCE.md §6(g), the maintainer's decision 2026-07-27, landed in fedora-dev#261. Changelog: UPGRADING.md.)
+# Version: 1.2.78 (live-gate HEAD-SHA COHERENCE — the gate can no longer verdict one sha while the watcher dedups another: live-gate-watch.sh hands its dedup sha to live-gate-run.sh, which refuses to gate any other head. Fixes the #267 stall where a lagging refs/pull/N/head buried a live head under a GREEN marker. Changelog: UPGRADING.md.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
