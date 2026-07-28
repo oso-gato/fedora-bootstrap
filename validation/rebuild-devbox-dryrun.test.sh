@@ -17,13 +17,17 @@
 #     stale/absent ⇒ poller=down; and (G4) a poller-down run whose sessions ALL restored is DONE+DEGRADED
 #     (sessions are the deliverable), never a FAILED that would route the maintainer to a destructive re-rebuild;
 #   * a failed/rolled-back rebuild ⇒ FAILED, surfaced (never a half-built box reported as done);
-#   * a DESTRUCTIVE verb from a non-maintainer author ⇒ REFUSED, no rebuild fired;
+#   * (R41) a DESTRUCTIVE verb with NO maintainer approval — bot-authored, unapproved — ⇒ FIRES: the human
+#     tap is REMOVED, and no approval artifact (ask comment, `rebuild-approval` label) survives any path;
+#   * what REPLACED that tap — RECOVERABILITY: a well-formed manifest with ZERO capturable sessions ⇒
+#     REFUSED, box NOT killed (it never destroys what it cannot restore);
 #   * a malformed / missing session manifest ⇒ REFUSED, no rebuild fired;
 #   * the happy path ⇒ FIRE writes the marker + starts workload-rebuild@ (ticket stays open), then
 #     FINISH reports DONE with sessions ACTIVELY CONTINUING + poller sweeping.
-#   * THREE in-suite MUTATIONS (each sed must change the file, else its row fails vacuous): neutralize the
-#     box-ready gate → a not-ready box is (wrongly) restored; neutralize session_working → an idle session
-#     is (wrongly) claimed working; neutralize the nudge → the handshake never confirms (DONE never reached).
+#   * FOUR in-suite MUTATIONS (each sed must change the file, else its row fails vacuous): M1 neutralize the
+#     box-ready gate → a not-ready box is (wrongly) restored; M2 neutralize session_working → an idle session
+#     is (wrongly) claimed working; M3 neutralize the nudge → the handshake never confirms (DONE never
+#     reached); M4 neutralize the zero-session refusal → the mutant destroys a box it cannot restore.
 #
 # Run:  bash validation/rebuild-devbox-dryrun.test.sh   → exit 0 = all cases pass
 set -uo pipefail
@@ -136,41 +140,35 @@ if grep -qF 'start --no-block workload-rebuild@fedora-dev.service' "$HOME/system
    && ! has 'issue close'; then ok "authorized+valid → rebuild FIRED, marker written, ticket open"
 else no "authorized+valid → rebuild FIRED" "expected workload-rebuild@ start + .rebuild marker + NO close"; fi
 
-echo "== R17 APPROVAL GATE: a bot-authored ticket with NO approval ⇒ PENDING (open, unconsumed, ONE ask) =="
-newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read; unset FAKE_TIMELINE FAKE_PERM_arthur 2>/dev/null
-tick
-if has 'AWAITING APPROVAL' && ! has 'issue close' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log" \
-   && [ ! -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" ] \
-   && [ ! -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.done" ]; then ok "unapproved bot ticket → PENDING: ask posted, nothing fired, ticket open + unconsumed"
-else no "pending path" "expected AWAITING APPROVAL comment + no rebuild + no close + no .done"; fi
-tick   # marker-gated: a SECOND tick re-checks the approval but does NOT re-ask
-if [ "$(grep -cF 'AWAITING APPROVAL' "$GH_LOG")" = 1 ]; then ok "second tick re-checks without re-asking (marker-gated)"
-else no "re-ask gate" "expected exactly ONE awaiting-approval comment across two ticks"; fi
-
-echo "== R17 APPROVAL GATE: the ONE-TAP maintainer-applied 'approved' label FIRES the rebuild =="
-newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_PERM_arthur=admin FAKE_TIMELINE=$'labeled\tarthur'; unset SCEN_UNIT_STATE
+echo "== R41 AUTONOMY: a bot-authored ticket with NO approval FIRES (the human tap is REMOVED) =="
+# AUTHORITY (verifiable — the constitution lives in the fedora-dev repo, NOT in this one):
+# `oso-gato/fedora-dev` `00-REQUIREMENTS.md` R41 (DEPLOY-TO-LIVE AUTONOMY) + `00-GOVERNANCE.md` §6(g)
+# (the maintainer's decision 2026-07-27), which superseded the 2026-07-19 approval-gated R17 design:
+# approval governs GOALS, not deployments. Both landed on fedora-dev `main` in fedora-dev#261, merged
+# by the maintainer. What authorizes this destructive verb is no longer a human tap but the machine's
+# own proof that it can restore (the session-manifest capture below, which fail-closes).
+newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read; unset FAKE_TIMELINE FAKE_PERM_arthur SCEN_UNIT_STATE 2>/dev/null
 SCEN_NEWID=OLDID tick
 if grep -qF 'start --no-block workload-rebuild@fedora-dev.service' "$HOME/systemctl.log" \
-   && [ -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" ] && ! has 'issue close'; then ok "maintainer tap → FIRED, marker written, ticket open (the one-tap path)"
-else no "approve fires" "expected workload-rebuild@ start + .rebuild marker + no close"; fi
+   && [ -f "$HOME/.local/state/host-agent/fedora-bootstrap-1.rebuild" ]; then ok "unapproved bot ticket → FIRES autonomously (no human tap on the normal path)"
+else no "autonomous fire" "expected workload-rebuild@ start + .rebuild marker with NO approval"; fi
 
-echo "== R17 APPROVAL GATE trust boundary: App label INERT; a maintainer UN-label UN-approves =="
-newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_TIMELINE=$'labeled\tsomebot'; unset FAKE_PERM_arthur 2>/dev/null   # somebot resolves read ⇒ inert
-tick
-A1=ok; { has 'AWAITING APPROVAL' && ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; } || A1=no
-newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_PERM_arthur=admin FAKE_TIMELINE=$'labeled\tarthur\nunlabeled\tarthur'   # newest = un-label
-tick
-A2=ok; { ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; } || A2=no
-if [ "$A1$A2" = okok ]; then ok "App-applied label authorizes NOTHING + maintainer un-label un-approves (both PENDING)"
-else no "label trust boundary" "A1=$A1 (App label must not fire) A2=$A2 (un-label must not fire)"; fi
+echo "== R41: no approval machinery survives on any path (no ask, no rebuild-approval label) =="
+if ! has 'AWAITING APPROVAL' && ! has 'rebuild-approval'; then ok "no awaiting-approval comment and no rebuild-approval label — the tap is gone"
+else no "residual approval tap" "an approval artifact survived the R41 removal"; fi
 
-echo "== M4: neutralize approved_by_maintainer ⇒ the one-tap approval no longer fires (the gate bites) =="
-MUT4="$ROOT/watch-m4.sh"; sed 's/elif approved_by_maintainer "$issue"; then/elif false; then/' "$WATCH" > "$MUT4"
+echo "== R41 SAFETY: RECOVERABILITY, not a human, is what gates the destroy — and it still fail-closes =="
+# The guard that REPLACED the tap: refuse to kill a box whose sessions cannot be restored. Proven live
+# by the zero-session FAIL-SAFE row below; proven LOAD-BEARING here by neutralizing it — the mutant
+# destroys a session-less box, which the real script refuses. If this row ever passes vacuously the
+# apparatus would be free to destroy what it cannot restore.
+MUT4="$ROOT/watch-m4.sh"; sed 's/^  if \[ -z "$manifest" \]; then$/  if false; then/' "$WATCH" > "$MUT4"
 if [ "$(sha256sum <"$WATCH")" = "$(sha256sum <"$MUT4")" ]; then no "M4 vacuous" "sed did not change the copy"; else   # sha256sum, not cmp: the live-gate image has no diffutils
-  newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read FAKE_PERM_arthur=admin FAKE_TIMELINE=$'labeled\tarthur'
-  tick_on "$MUT4"
-  if ! grep -qF 'workload-rebuild@' "$HOME/systemctl.log" && has 'AWAITING APPROVAL'; then ok "M4: mutant ignores the tap ⇒ the approve-fires row discriminates"
-  else no "M4" "mutant fired or did not ask — the approval row would not bite"; fi
+  newhome; export FAKE_BODY=$'host-op: rebuild-devbox fedora-dev\n%%DEVBOX-MANIFEST-BEGIN%%\n%%DEVBOX-MANIFEST-END%%' FAKE_AUTHOR=appbot FAKE_PERM=read
+  unset FAKE_TIMELINE FAKE_PERM_arthur 2>/dev/null
+  SCEN_NEWID=OLDID tick_on "$MUT4"
+  if grep -qF 'workload-rebuild@' "$HOME/systemctl.log"; then ok "M4: mutant destroys a session-less box ⇒ the recoverability refusal is what protects it"
+  else no "M4" "mutant did not fire — the zero-session refusal row would not discriminate"; fi
 fi
 unset FAKE_TIMELINE FAKE_PERM_arthur 2>/dev/null
 
@@ -310,7 +308,7 @@ if [ "$(sha256sum <"$WATCH")" = "$(sha256sum <"$MUT3")" ]; then no "M3 vacuous" 
   else no "M3" "mutant with a no-op nudge should never reach DONE (handshake unconfirmed)"; fi
 fi
 
-# ---- increment 2: apply-bootstrap ESCALATES to an approved-gated recreate when a workload Quadlet changed ----
+# ---- increment 2: apply-bootstrap ESCALATES to an AUTONOMOUS (R41) recreate when a workload Quadlet changed ----
 # The apply ticket is bot-filed (FAKE_AUTHOR nox-bot, no approval needed — apply is autonomous). Pre-seed
 # `.applyfired` so ONE tick reaches the poll; the apply unit is done rc 0; the changed-quadlet signal lists
 # fedora-dev → do_apply_bootstrap files a rebuild-devbox ticket (which do_rebuild_devbox will then hold
@@ -326,7 +324,7 @@ run_apply_esc(){ # <signal-content> [FAKE_SEARCH=…]
 
 run_apply_esc 'fedora-dev'
 if grep -qF 'issue create' "$GH_LOG" && grep -qF 'rebuild-devbox fedora-dev' "$GH_LOG" && has 'RECREATE REQUIRED'; then
-  ok "apply rc0 + changed Quadlet ⇒ files an approval-gated rebuild-devbox recreate + says RECREATE REQUIRED"
+  ok "apply rc0 + changed Quadlet ⇒ files an autonomous rebuild-devbox recreate + says RECREATE REQUIRED"
 else no "esc-file" "expected a filed rebuild-devbox ticket + RECREATE-REQUIRED verdict"; fi
 
 run_apply_esc ''

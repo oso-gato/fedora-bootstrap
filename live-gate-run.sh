@@ -11,10 +11,14 @@
 # Each gate runs in a SEPARATE disposable container that never touches the running workload, so it
 # is NOT gated on the dev box's session (validation is never blocked by an active dev session).
 #
-# Usage: live-gate-run.sh <repo> <pr-number>
-#   <repo>       the bare repo name under github.com/oso-gato (e.g. fedora-desktop)
-#   <pr-number>  the open PR to gate
-# Exit: 0 GREEN | 1 RED | 2 FATAL (bad args / missing builder / PR-head UNFETCHABLE — infra, NOT a verdict) |
+# Usage: live-gate-run.sh <repo> <pr-number> [expected-head-sha]
+#   <repo>               the bare repo name under github.com/oso-gato (e.g. fedora-desktop)
+#   <pr-number>          the open PR to gate
+#   [expected-head-sha]  OPTIONAL full 40-hex head sha the CALLER resolved and will dedup under. When
+#                        given, this run REFUSES to gate any other sha (see HEAD-SHA COHERENCE below).
+#                        Omitted (a standalone/manual run) = gate whatever the PR head ref carries.
+# Exit: 0 GREEN | 1 RED | 2 FATAL (bad args / missing builder / PR-head UNFETCHABLE / PR-head sha
+#       INCOHERENT with the caller's dedup key — infra, NOT a verdict) |
 #       3 SKIPPED (not gateable — a neutral SKIPPED comment WAS delivered to the PR) |
 #       4 UNDELIVERED (verdict computed but the PR comment could not be posted — caller must re-gate)
 # Codes 2 and 4 are NON-VERDICTS: the watcher must NOT write the per-SHA dedup marker for them, or the
@@ -30,9 +34,13 @@
 # See validation/LIVE-GATE-HANDOFF.md for the `.live-gate` schema.
 set -uo pipefail
 
-REPO_NAME="${1:?usage: live-gate-run.sh <repo> <pr-number>}"
+REPO_NAME="${1:?usage: live-gate-run.sh <repo> <pr-number> [expected-head-sha]}"
 PR="${2:?pr-number required}"
+EXPECT_SHA="${3:-}"
 case "$REPO_NAME" in */*|*:*) echo "FATAL: <repo> must be a bare name ($REPO_NAME)"; exit 2;; esac
+if [ -n "$EXPECT_SHA" ] && ! [[ "$EXPECT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "FATAL: [expected-head-sha] must be a full 40-hex sha ($EXPECT_SHA)"; exit 2
+fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BUILDER="$HOME/.local/bin/build-candidate.sh"; [ -x "$BUILDER" ] || BUILDER="$HERE/build-candidate.sh"
@@ -63,6 +71,38 @@ SHA="$(git -C "$SRC" rev-parse --short HEAD)"
 # collision would let a never-gated head inherit a GREEN (#96 STEP-2 forge-hunt). Short $SHA stays for
 # tags/logs where length matters and nothing machine-trusts it.
 SHA_FULL="$(git -C "$SRC" rev-parse HEAD)"
+
+# ---- HEAD-SHA COHERENCE: the DEDUP KEY and the GATED ARTIFACT must name the SAME sha ----
+# The caller (live-gate-watch.sh) resolves the PR head via `gh pr view --json headRefOid` and writes its
+# per-(repo,SHA) `.done` marker under THAT sha, while this runner independently fetches
+# `refs/pull/<n>/head` — a DERIVED ref GitHub updates ASYNCHRONOUSLY, which can still carry the PREVIOUS
+# head for a minute or so after a push. When the two disagree the gate builds sha X, posts a verdict
+# naming X, and returns a VERDICT code — so the caller dedups sha Y. Y is then buried FOREVER: marked
+# "already gated" with no verdict ever on the PR, and the dev-side consumers (which bind a verdict to the
+# full 40-hex head) see none, so the poller NOOPs indefinitely. Same bury CLASS as CAT-04, a different
+# cause. OBSERVED on fedora-bootstrap#267 (2026-07-28): b19b03c was pushed at 20:22:07Z, the tick that
+# followed posted at 20:23:31Z a DUPLICATE GREEN naming the PREVIOUS head 2ff1964, and b19b03c sat
+# ungated behind a GREEN marker until a human intervened.
+# It then RECURRED ON THIS FIX'S OWN HEAD, which is what makes the evidence conclusive rather than a
+# one-off: 7ab58c2 (the commit adding this guard) was pushed at ~21:22Z and the 21:24:04Z tick posted
+# GREEN naming b19b03c — the previous head AGAIN — so 7ab58c2 was itself deduped GREEN with no verdict
+# of its own. Two independent occurrences ~1h apart on one PR; the lag is routine, not exotic.
+# So: refuse to gate an incoherent head. Exit 2 = infra NON-verdict (nothing built, NO comment, NOT
+# deduped) → the caller re-gates next poll, by which time the pull ref has caught up. This costs one
+# shallow fetch, never a build, and cannot mask a real verdict: a genuine head always converges.
+#
+# PROSPECTIVE ONLY — recovering an ALREADY-BURIED head is MANUAL, by design (this guard stops a marker
+# being written for a sha that was never gated; it cannot un-write one the pre-fix code already wrote).
+# A head buried before this shipped stays buried: the watcher skips it SILENTLY forever and the R18
+# idle-with-work-pending anomaly is the only thing that ever surfaces it. Recovery is either:
+#   rm ~/.local/state/live-gate/<repo>-<full-40-hex-sha>.done   # on the host → re-gated next tick
+#   or push a new commit                                        # a new sha is a new dedup key
+# Deliberately NOT self-healing: auto-reaping a marker whose sha has no verdict comment would mean
+# trusting comment-absence (an API read that fails OPEN) to delete the only record that a sha was gated.
+if [ -n "$EXPECT_SHA" ] && [ "$SHA_FULL" != "$EXPECT_SHA" ]; then
+  echo "[live-gate] WARN: head sha MISMATCH — caller dedups on $EXPECT_SHA but refs/pull/$PR/head resolved to $SHA_FULL (the pull ref lags a fresh push); gating NOTHING, exit 2 so the caller does NOT dedup and RE-GATEs next poll"
+  exit 2
+fi
 
 # ---- STRUCTURAL GUARD: gateable ONLY if the candidate carries a top-level .live-gate and/or a
 # Containerfile*. Otherwise SKIP GRACEFULLY (neutral comment, exit 3) — never error. This is what

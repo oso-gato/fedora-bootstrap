@@ -98,7 +98,12 @@ for row in "${PRS[@]}"; do
     continue
   fi
   echo "[live-gate-watch] gating $repo#$num @ ${sha:0:7}"
-  "$RUNNER" "$repo" "$num"; rc=$?
+  # Pass the sha we will DEDUP under: the runner fetches `refs/pull/<n>/head` independently, and that
+  # derived ref can still carry the PREVIOUS head for a minute after a push. The runner REFUSES to gate
+  # any other sha (exit 2 = non-verdict → not deduped → re-gated next poll), so the `.done` marker below
+  # can only ever name a sha that was actually gated and commented on. Without this handoff the gate
+  # posts a verdict for the OLD head while this marker buries the NEW one (observed: this repo's #267).
+  "$RUNNER" "$repo" "$num" "$sha"; rc=$?
   # DEDUP DISCIPLINE: write the per-SHA .done marker ONLY for a DELIVERED outcome (a verdict/skip that
   # actually reached the PR as a comment). rc 2 (FATAL infra) and rc 4 (verdict computed but the
   # comment post FAILED) are NON-verdicts — dedup'ing them buries the commit forever with nothing on

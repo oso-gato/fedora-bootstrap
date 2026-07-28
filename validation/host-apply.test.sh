@@ -201,12 +201,12 @@ fi
 echo "== CASE 7 (increment 2): apply CHANGES a deployed workload Quadlet → the changed-quadlet signal lists it =="
 # The recreate TRIGGER: setup.sh rewrites ~core/.config/containers/systemd/fedora-dev.container (the fitness
 # lines uncommented). host-apply.sh sha's it BEFORE vs AFTER and records the changed workload to the signal
-# the host agent reads to file an approved-gated recreate. Pre-seed the OLD Quadlet; the stub writes the NEW.
+# the host agent reads to file a recreate (autonomous since R41). Pre-seed the OLD Quadlet; the stub writes the NEW.
 build_repo c7; advance_origin seven
 mkdir -p "$ROOT/c7/state" "$ROOT/c7/quadlets"; printf 'OLD-ENV\n' > "$ROOT/c7/quadlets/fedora-dev.container"
 run_apply c7 APPLY_QUADLET_DIR="$ROOT/c7/quadlets" QUADLET_WRITE=NEW-ENV
 { [ "$RC" = 0 ] && [ "$(cat "$ROOT/c7/state/quadlet-changed" 2>/dev/null)" = "fedora-dev" ]; } \
-  && ok "changed Quadlet → signal lists 'fedora-dev' (the approved-gated recreate trigger)" \
+  && ok "changed Quadlet → signal lists 'fedora-dev' (the autonomous recreate trigger)" \
   || bad "quadlet-change-signal" "rc=$RC signal='$(cat "$ROOT/c7/state/quadlet-changed" 2>/dev/null)'; out: $(tr '\n' '|' <"$ROOT/c7.out")"
 
 echo "== CASE 8 (increment 2): an apply that does NOT change the Quadlet → EMPTY signal (no spurious recreate) =="
@@ -222,7 +222,7 @@ run_apply c8 APPLY_QUADLET_DIR="$ROOT/c8/quadlets" QUADLET_WRITE=SAME-ENV
 echo "== CASE 9 (increment 2, fitness #237 regression): UPTODATE no-op with a deployed Quadlet → EMPTY signal =="
 # The bug fitness caught: UPTODATE passed before='' to ha_write_changed, so ha_changed_quadlets diffed
 # EVERY deployed Quadlet as "new" → the idempotent same-sha no-op wrote a signal listing ALL workloads →
-# spurious approval-gated recreate tickets. A no-op changed NOTHING, so the signal must be EMPTY even when
+# spurious recreate tickets (which since R41 fire autonomously). A no-op changed NOTHING, so the signal must be EMPTY even when
 # ~core/.config/containers/systemd/*.container exist. (CASE 7/8 only drove the FF path, hiding this.)
 build_repo c9   # no advance → work == origin (UPTODATE)
 head="$(git -C "$C_WORK" rev-parse HEAD)"

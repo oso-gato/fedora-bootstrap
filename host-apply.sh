@@ -121,8 +121,10 @@ ha_origin_allowed() { # <origin_url>
 # <name>.container) — e.g. #229 uncommenting the fitness `Secret=`/`Environment=` lines. That changes the
 # file ON DISK + daemon-reloads, but the RUNNING container keeps its old env until it is RECREATED. So the
 # executor records WHICH workload Quadlets actually changed (sha256 before vs after the apply); the host
-# agent reads that signal and files an APPROVAL-GATED rebuild-devbox recreate for the changed dev box (the
-# session-dropping act stays maintainer-gated + reuses the proven R17 restore lineage). PURE where it can be.
+# agent reads that signal and files a rebuild-devbox recreate for the changed dev box, which since R41 is
+# consumed AUTONOMOUSLY — no maintainer tap (see host-agent-watch.sh's DESTRUCTIVE-VERB AUTHORIZATION for
+# the fedora-dev R41/§6(g) citations); the session-dropping act is gated by the fail-closed session-manifest
+# capture instead, and still reuses the proven R17 restore lineage. PURE where it can be.
 #
 # ha_quadlet_shas <dir> -> "<name>\t<sha>" per <name>.container (name = basename minus .container); the
 # SORTED, whitespace-free lines make ha_changed_quadlets a pure string compare. Missing dir ⇒ no lines.
@@ -159,7 +161,7 @@ ha_write_changed() { # <before> <qdir> <signal> <state>
   chmod 0644 "$signal" 2>/dev/null || true
   chmod 0755 "$state"  2>/dev/null || true      # uid 1000 must traverse the root-owned state dir to read the signal
   if [ -n "$changed" ]; then
-    log "workload Quadlet(s) CHANGED on disk — the new env is NOT yet live on the running container: $(printf '%s' "$changed" | tr '\n' ' ')(the host agent files an approved-gated recreate)"
+    log "workload Quadlet(s) CHANGED on disk — the new env is NOT yet live on the running container: $(printf '%s' "$changed" | tr '\n' ' ')(the host agent files a recreate, consumed autonomously — R41, no maintainer tap)"
   else
     log "no deployed workload Quadlet changed by this apply — no recreate needed"
   fi
@@ -176,7 +178,7 @@ ha_main() {
   local applied="$state/applied.sha"
   local gt="${APPLY_GIT_TIMEOUT:-120}"
   # increment 2 — the deployed workload Quadlets + the changed-quadlet signal the host agent reads to
-  # decide whether an (approved-gated) recreate is needed. The agent runs as uid 1000, so the signal must
+  # decide whether a recreate is needed (autonomous since R41). The agent runs as uid 1000, so the signal must
   # be world-readable (chmod'd on write); a stale signal is never read (the agent reads it ONLY on rc 0,
   # and every rc-0 terminal path rewrites it fresh, empty on a no-op).
   local qdir="${APPLY_QUADLET_DIR:-/home/$U/.config/containers/systemd}"
@@ -249,7 +251,7 @@ ha_main() {
   fi
 
   # increment 2 — record WHICH deployed workload Quadlets changed (env-on-disk changed; the running
-  # container is stale). The host agent reads this signal + files an approved-gated recreate.
+  # container is stale). The host agent reads this signal + files a recreate (autonomous since R41).
   ha_write_changed "$before_q" "$qdir" "$changed_signal" "$state"
 
   # ---- success: record the applied sha + fast-forward the live clone (operator + F16 visibility) ----
@@ -346,7 +348,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ] && [ "${1:-}" = "--selftest" ]; then
   o "empty origin"             ""                                                     refuse
 
   # QUADLET-CHANGE detection (increment 2): CHANGED = present AFTER with a differing/new sha; a REMOVED
-  # quadlet is NOT changed (nothing to recreate). PURE — the trigger for the approved-gated recreate.
+  # quadlet is NOT changed (nothing to recreate). PURE — the trigger for the autonomous (R41) recreate.
   q(){ local g; g="$(ha_changed_quadlets "$2" "$3" | tr '\n' ',')"; [ "$g" = "$4" ] && echo "ok: $1" \
        || { echo "FAIL: $1 — got '$g' want '$4'"; f=1; }; }
   q "unchanged => none"         $'fedora-dev\tAAA'                       $'fedora-dev\tAAA'                       ''
