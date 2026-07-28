@@ -103,8 +103,31 @@ trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
 
 echo "== build DISPOSABLE candidate $TAG (Containerfile=$CFILE; host top-level engine; layer cache retained + dnf bind cache $FD_DNF_CACHE; no --no-cache) =="
 iso=(); [ -n "${BUILD_ISOLATION:-}" ] && iso=(--isolation="$BUILD_ISOLATION")
+
+# HEALTHCHECK FORMAT TRAP (2026-07-28) — THIS MADE THE ACCEPTANCE GATE UNPASSABLE.
+#
+# podman defaults to the OCI image format, and the OCI spec has no healthcheck field: a Containerfile
+# HEALTHCHECK is silently DROPPED with a warning buried in the build log
+# ("HEALTHCHECK is not supported for OCI image format and will be ignored"). validate-candidate.sh then
+# waits for the container to report healthy and reports `healthy FAIL(none)` — "none" meaning no
+# healthcheck is defined. So a candidate that correctly declares a healthcheck is built into an image
+# that cannot have one, and is then failed for not having one. NO CORRECT IMAGE COULD EVER PASS.
+#
+# Measured on oso-gato/e2e-beta: #9 and #10 both hard-failed this way while the service itself was
+# demonstrably working — the boot log shows `status-server: listening on 0.0.0.0:8080` immediately
+# before `healthy FAIL(none)`. The product was fine; the gate was unwinnable.
+#
+# `--format docker` is applied ONLY when the Containerfile actually declares a HEALTHCHECK, so the
+# fleet default stays OCI and the blast radius is limited to exactly the candidates that need it.
+# Docker format is the only image format that carries a healthcheck; podman, GHCR and every consumer
+# in this fleet accept it.
+fmt=()
+if grep -qiE '^[[:space:]]*HEALTHCHECK[[:space:]]' "$SRC/$CFILE" 2>/dev/null; then
+  fmt=(--format docker)
+  echo "   Containerfile declares HEALTHCHECK -> building with --format docker (OCI would silently discard it and the gate would then fail the image for not having one)"
+fi
 # shellcheck disable=SC2086
-if ! podman build "${iso[@]}" ${BUILD_ARGS:-} -v "$FD_DNF_CACHE:/var/cache/libdnf5:rw,z" -t "$TAG" -f "$SRC/$CFILE" "$SRC"; then
+if ! podman build "${iso[@]}" "${fmt[@]}" ${BUILD_ARGS:-} -v "$FD_DNF_CACHE:/var/cache/libdnf5:rw,z" -t "$TAG" -f "$SRC/$CFILE" "$SRC"; then
   echo "VERDICT: RED (build failed)"; exit 1
 fi
 
