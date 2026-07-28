@@ -53,22 +53,32 @@
 #     VERIFY the entrypoint-supervised poller is OBSERVABLY sweeping → REPORT killed/restored/resumed/
 #     could-not. Fail-safe: any unverified kill, unhealthy rebuild, idle-not-resuming session, or
 #     silent poller SURFACES as FAILED (silence never means restored). Because it kills active sessions,
-#     it is AUTHOR-GATED (below), unlike the reversible `redeploy`.
+#     its authorization is RECOVERABILITY, not a human tap (see DESTRUCTIVE-VERB AUTHORIZATION below).
 #
 # DESTRUCTIVE-VERB AUTHORIZATION (host-agent header's own standing requirement; R16 scope law): the
 #   `host-task` label is NOT sufficient authorization for a verb that destroys running work. `redeploy`
-#   is reversible/bounded (label-authorized). `rebuild-devbox` requires a MAINTAINER'S EXPLICIT ACT, in
-#   EITHER of two equivalent forms (the R17 APPROVAL GATE, maintainer-confirmed 2026-07-19):
-#     (a) the ISSUE AUTHOR holds admin|maintain (is_authorized_author — authorship IS approval; the
-#         original path, unchanged), OR
-#     (b) a MAINTAINER has APPLIED the `approved` LABEL to the ticket (approved_by_maintainer) — the
-#         ONE-TAP path: the APPARATUS files the ticket (manifest + all), the human authorizes with a
-#         single label tap on mobile. TIMELINE-BOUND, never presence-bound (the fleet-halt applier
-#         discipline): the label's own labeled/unlabeled events are walked NEWEST-FIRST and the first
-#         event whose actor is role-checked admin|maintain decides — an App identity or mere label
-#         presence authorizes NOTHING, and an unresolvable actor is fail-closed NOT-approved.
-#   A bot-authored ticket with NEITHER is PENDING, not refused: left OPEN + UNCONSUMED (no .done), one
-#   marker-gated "awaiting approval" comment posted, re-checked every tick — the tap can come anytime.
+#   is reversible/bounded (label-authorized). `rebuild-devbox` destroys running work, so it must be
+#   authorized by something STRONGER than the label — and as of R41 that something is a MACHINE-PROVEN
+#   RECOVERABILITY PRECONDITION rather than a maintainer's tap.
+#
+#   AUTHORITY FOR THE NO-TAP RULE (verifiable, not asserted — these are the exact locations):
+#     * `oso-gato/fedora-dev` → `00-REQUIREMENTS.md` → **R41 DEPLOY-TO-LIVE AUTONOMY**: "The merged→live
+#       path carries NO standing human tap … including changes that require a container recreate. Human
+#       approval governs GOALS (R1), never deployments."
+#     * `oso-gato/fedora-dev` → `00-GOVERNANCE.md` → **§6(g)** ("AUTONOMY IS THE TIE-BREAKER …", the
+#       maintainer's decision 2026-07-27), which states in terms: "The standing human tap in the
+#       merged→live path is REMOVED (R41) — including the `approved` label gate on a deploy that
+#       requires a container recreate. This SUPERSEDES the approval-gated R17 design confirmed
+#       2026-07-19." Its STATUS records that removing this live deploy tap is R41's first build task.
+#     * Both landed on fedora-dev `main` in **fedora-dev#261**, merged 2026-07-27 by the MAINTAINER
+#       (`oso-gato`, admin) — the R1/Trinity maintainer-merge-only path for the confirmed spec. NOTE for
+#       reviewers: the constitution lives in the fedora-dev repo, NOT in this one; grepping this tree (or
+#       a clone stale of #261) finds nothing and is not evidence of absence.
+#
+#   WHAT NOW AUTHORIZES THE DESTROY: the verb captures the SESSION MANIFEST fresh from the LIVE dev box
+#   and REFUSES to fire when that capture fails (rc != 0 ⇒ respond `failed`, no kill), then restores +
+#   resumes every captured session and VERIFIES (R17). It will not destroy what it cannot restore — a
+#   fail-closed machine guard, where the removed tap was a recurring human act on the loop's normal path.
 #   * OUTCOME = the `host-agent: DONE|FAILED — <detail>` COMMENT (the authoritative signal the dev
 #     side waits on) + the `host-done`/`host-failed` label (best-effort, created-on-use) + the issue
 #     CLOSED.
@@ -153,7 +163,7 @@ DEVBOX_WORK_POLL="${DEVBOX_WORK_POLL:-5}"                 # s: marker-poll inter
 DEVBOX_ASSEMBLED_MARKER="${DEVBOX_ASSEMBLED_MARKER:-/home/core/.local/state/claudebox/.assembled}"          # box-ready signal the `claude` wrapper itself gates on
 DEVBOX_ASSEMBLE_FAILED_MARKER="${DEVBOX_ASSEMBLE_FAILED_MARKER:-/home/core/.local/state/claudebox/.assemble-failed}"  # a half-assembled box (overrides a stale .assembled)
 DEVBOX_BOX_NAME="${DEVBOX_BOX_NAME:-claudebox}"           # the in-container distrobox `claude` runs inside (for the enterable probe)
-DEVBOX_APPROVER_MENTION="${DEVBOX_APPROVER_MENTION:-@oso-gato}"   # @mentioned on the awaiting-approval comment (mobile push); the AUTHORIZATION is role-checked, never this string
+DEVBOX_APPROVER_MENTION="${DEVBOX_APPROVER_MENTION:-@oso-gato}"   # [UNWIRED since R41 — the awaiting-approval comment it addressed is removed; retained only so an out-of-tree override keeps parsing]
 APPLY_CHANGED_SIGNAL="${APPLY_CHANGED_SIGNAL:-/var/lib/fedora-bootstrap/host-apply/quadlet-changed}"   # increment 2: host-apply.sh writes the deployed workload Quadlets whose env changed; a changed REBUILDABLE dev box needs an approved-gated recreate to make the new env live
 TICKET_BODY=''   # set per-ticket in the discovery loop; rebuild-devbox parses its manifest from it
 
@@ -208,7 +218,11 @@ kill_verified(){ # <oldid> <newid> <gone|alive>
   echo ok; return 0
 }
 
-# approval_fold: PURE core of the R17 approval gate — rows "event<TAB>maint" NEWEST-FIRST (event ∈
+# approval_fold: [UNWIRED since R41 — RETAINED, NOT LIVE: no caller reaches this on any host-task path;
+# the `rebuild-devbox` tap it used to serve is removed. Kept (with its selftest rows, which still assert
+# the FOLD's own behaviour truthfully) so a future destructive verb that genuinely needs a maintainer act
+# inherits the audited timeline-bound logic rather than re-inventing it. It gates NOTHING today.]
+# PURE core of the former R17 approval gate — rows "event<TAB>maint" NEWEST-FIRST (event ∈
 # labeled|unlabeled for the `approved` label; maint ∈ 1 = actor role-checked admin|maintain, 0 =
 # confirmed non-maintainer/App, U = role could not be resolved) → APPROVED|NO on stdout. The FIRST
 # maintainer event decides (labeled ⇒ APPROVED, unlabeled ⇒ NO — a maintainer REMOVING the label is an
@@ -337,7 +351,8 @@ do_redeploy(){ # <repo> <issue> <workload>
 
 # ---- rebuild-devbox (R17) — the DESTRUCTIVE lifecycle verb: KILL → REBUILD → RESTORE → RESUME → VERIFY ----
 
-# is_authorized_author: a DESTRUCTIVE verb needs the ISSUE AUTHOR to hold admin|maintain on the control
+# is_authorized_author: [UNWIRED since R41 — RETAINED, NOT LIVE: no caller; see approval_fold's note.]
+# Formerly: a DESTRUCTIVE verb needed the ISSUE AUTHOR to hold admin|maintain on the control
 # repo (the `host-task` label is NOT authorization — host-agent header; R16 scope law). FAIL-CLOSED:
 # an unreadable / empty / non-collaborator permission is NOT authorized (a 404 is `gh api` rc≠0).
 is_authorized_author(){ # <login>
@@ -350,7 +365,8 @@ is_authorized_author(){ # <login>
   case "$role" in admin|maintain) return 0;; *) return 1;; esac
 }
 
-# approved_by_maintainer: has a MAINTAINER applied the `approved` label to <issue>? Resolves the label's
+# approved_by_maintainer: [UNWIRED since R41 — RETAINED, NOT LIVE: no caller; see approval_fold's note.]
+# Formerly: has a MAINTAINER applied the `approved` label to <issue>? Resolves the label's
 # own timeline events (oldest-first from the API → reversed to newest-first), role-checks each actor
 # (`.role_name` — `.permission` collapses maintain→"write"; a 200 answer maps role → 1/0; ANY failed
 # lookup ⇒ U — `gh api` exits rc≠0 on a 404 and on a rate-limit/5xx alike, and this function does NOT
@@ -657,8 +673,12 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
   fi
 
   # (2) FRESH → FIRE the rebuild (NO human tap) + validate the manifest + capture the old ID.
-  # R41 DEPLOY-TO-LIVE AUTONOMY / GOVERNANCE §6(g) (2026-07-27): the maintainer's `approved`-label gate
-  # on this destructive verb is REMOVED — this SUPERSEDES the approval-gated R17 design of 2026-07-19.
+  # R41 DEPLOY-TO-LIVE AUTONOMY: the maintainer's `approved`-label gate on this destructive verb is
+  # REMOVED, superseding the approval-gated R17 design of 2026-07-19. AUTHORITY (exact locations, and
+  # the full quotations, are in the DESTRUCTIVE-VERB AUTHORIZATION header): `oso-gato/fedora-dev`
+  # `00-REQUIREMENTS.md` R41 + `00-GOVERNANCE.md` §6(g) (maintainer's decision 2026-07-27), both landed
+  # on fedora-dev `main` in fedora-dev#261, merged by the maintainer. The constitution is in fedora-dev,
+  # not in this repo.
   #
   # WHY THIS IS SAFE — the authorization is no longer "a human said ok" but "the machine PROVED it can
   # restore". The SESSION MANIFEST below is captured FRESH from the LIVE dev box, and this verb REFUSES
@@ -703,14 +723,15 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
   fi
 }
 
-# ---- increment 2 — the approved-gated RECREATE trigger (config-converge is not enough for a running box) ----
+# ---- increment 2 — the AUTONOMOUS RECREATE trigger (config-converge is not enough for a running box) ----
 # apply-bootstrap re-runs setup.sh, which may REWRITE a deployed workload Quadlet (e.g. #229 uncommenting
 # the fitness Secret=/Environment= lines) — but the RUNNING container keeps its old env until it is
 # RECREATED. host-apply.sh records the CHANGED workload Quadlets (sha before vs after) in APPLY_CHANGED_SIGNAL;
-# this files an APPROVAL-GATED `rebuild-devbox` ticket for each changed REBUILDABLE dev box. It REUSES the
-# PROVEN rebuild-devbox path UNCHANGED — the ticket is bot-filed, so do_rebuild_devbox holds it PENDING until
-# a maintainer taps `approved`, then kills + recreates + RESTORES every session (the session-dropping act
-# stays maintainer-gated; the delicate R17 restore lineage is not touched). Echoes the ticket URL (empty on
+# this files a `rebuild-devbox` ticket for each changed REBUILDABLE dev box. It REUSES the PROVEN
+# rebuild-devbox path UNCHANGED — and since R41 removed the tap (see DESTRUCTIVE-VERB AUTHORIZATION for the
+# exact fedora-dev citations), do_rebuild_devbox consumes that bot-filed ticket AUTONOMOUSLY: it kills +
+# recreates + RESTORES every session, refusing to fire at all unless it can first capture the live session
+# manifest (the delicate R17 restore lineage is not touched). Echoes the ticket URL (empty on
 # skip/failure). IDEMPOTENT: an OPEN recreate ticket for THIS dev box + THIS apply is never re-filed.
 file_recreate_ticket(){ # <workload> <apply-issue>
   local wl="$1" apply_issue="$2" existing url
@@ -763,8 +784,9 @@ do_apply_bootstrap(){ # <repo> <issue>
       *) st=failed; detail="apply-bootstrap FAILED — host-apply executor errored (ExecMainStatus=${scmain:-?}). Host left recoverable (merged tree intact)." ;;
     esac
     # increment 2 — a SUCCESSFUL apply may have rewritten a deployed workload Quadlet (new env on disk, NOT
-    # yet live on the running container). For each CHANGED REBUILDABLE dev box, file an approval-gated
-    # rebuild-devbox recreate (the proven path; the maintainer's one tap gates the session drop). Written
+    # yet live on the running container). For each CHANGED REBUILDABLE dev box, file a rebuild-devbox
+    # recreate (the proven path), which since R41 is consumed AUTONOMOUSLY — the session drop is gated by
+    # the fail-closed live manifest capture, not a maintainer tap. Written
     # BEFORE .acted so the escalation rides the SAME idempotent delivery — a re-tick re-delivers, never re-files.
     if [ "$st" = done ]; then
       changed="$(cat "$APPLY_CHANGED_SIGNAL" 2>/dev/null || echo '')"; recreated=''; nonrebuild=''
@@ -777,7 +799,7 @@ do_apply_bootstrap(){ # <repo> <issue>
             nonrebuild="$nonrebuild $wl(no-auto-recreate:not-a-rebuildable-devbox)"
           fi
         done <<< "$changed"
-        [ -n "$recreated" ] && detail="$detail  RECREATE REQUIRED (Quadlet env changed) — filed approval-gated rebuild-devbox →${recreated}; tap \`approved\` to make the new env live on the running box."
+        [ -n "$recreated" ] && detail="$detail  RECREATE REQUIRED (Quadlet env changed) — filed rebuild-devbox →${recreated}; it runs AUTONOMOUSLY (R41 — no approval tap) and makes the new env live on the running box, restoring + resuming every session."
         [ -n "$nonrebuild" ] && detail="$detail  NOTE — changed Quadlet(s) with no auto-recreate path:${nonrebuild} (a manual redeploy/recreate makes their env live)."
       fi
     fi

@@ -137,9 +137,12 @@ if grep -qF 'start --no-block workload-rebuild@fedora-dev.service' "$HOME/system
 else no "authorized+valid → rebuild FIRED" "expected workload-rebuild@ start + .rebuild marker + NO close"; fi
 
 echo "== R41 AUTONOMY: a bot-authored ticket with NO approval FIRES (the human tap is REMOVED) =="
-# GOVERNANCE §6(g) 2026-07-27 superseded the 2026-07-19 approval-gated R17 design: approval governs
-# GOALS, not deployments. What authorizes this destructive verb is no longer a human tap but the
-# machine's own proof that it can restore (the session-manifest capture below, which fail-closes).
+# AUTHORITY (verifiable — the constitution lives in the fedora-dev repo, NOT in this one):
+# `oso-gato/fedora-dev` `00-REQUIREMENTS.md` R41 (DEPLOY-TO-LIVE AUTONOMY) + `00-GOVERNANCE.md` §6(g)
+# (the maintainer's decision 2026-07-27), which superseded the 2026-07-19 approval-gated R17 design:
+# approval governs GOALS, not deployments. Both landed on fedora-dev `main` in fedora-dev#261, merged
+# by the maintainer. What authorizes this destructive verb is no longer a human tap but the machine's
+# own proof that it can restore (the session-manifest capture below, which fail-closes).
 newhome; export FAKE_BODY="$MF" FAKE_AUTHOR=appbot FAKE_PERM=read; unset FAKE_TIMELINE FAKE_PERM_arthur SCEN_UNIT_STATE 2>/dev/null
 SCEN_NEWID=OLDID tick
 if grep -qF 'start --no-block workload-rebuild@fedora-dev.service' "$HOME/systemctl.log" \
@@ -317,7 +320,7 @@ run_apply_esc(){ # <signal-content> [FAKE_SEARCH=…]
 
 run_apply_esc 'fedora-dev'
 if grep -qF 'issue create' "$GH_LOG" && grep -qF 'rebuild-devbox fedora-dev' "$GH_LOG" && has 'RECREATE REQUIRED'; then
-  ok "apply rc0 + changed Quadlet ⇒ files an approval-gated rebuild-devbox recreate + says RECREATE REQUIRED"
+  ok "apply rc0 + changed Quadlet ⇒ files an autonomous rebuild-devbox recreate + says RECREATE REQUIRED"
 else no "esc-file" "expected a filed rebuild-devbox ticket + RECREATE-REQUIRED verdict"; fi
 
 run_apply_esc ''

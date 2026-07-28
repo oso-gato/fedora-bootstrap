@@ -121,8 +121,10 @@ ha_origin_allowed() { # <origin_url>
 # <name>.container) — e.g. #229 uncommenting the fitness `Secret=`/`Environment=` lines. That changes the
 # file ON DISK + daemon-reloads, but the RUNNING container keeps its old env until it is RECREATED. So the
 # executor records WHICH workload Quadlets actually changed (sha256 before vs after the apply); the host
-# agent reads that signal and files an APPROVAL-GATED rebuild-devbox recreate for the changed dev box (the
-# session-dropping act stays maintainer-gated + reuses the proven R17 restore lineage). PURE where it can be.
+# agent reads that signal and files a rebuild-devbox recreate for the changed dev box, which since R41 is
+# consumed AUTONOMOUSLY — no maintainer tap (see host-agent-watch.sh's DESTRUCTIVE-VERB AUTHORIZATION for
+# the fedora-dev R41/§6(g) citations); the session-dropping act is gated by the fail-closed session-manifest
+# capture instead, and still reuses the proven R17 restore lineage. PURE where it can be.
 #
 # ha_quadlet_shas <dir> -> "<name>\t<sha>" per <name>.container (name = basename minus .container); the
 # SORTED, whitespace-free lines make ha_changed_quadlets a pure string compare. Missing dir ⇒ no lines.

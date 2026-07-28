@@ -222,7 +222,7 @@ run_apply c8 APPLY_QUADLET_DIR="$ROOT/c8/quadlets" QUADLET_WRITE=SAME-ENV
 echo "== CASE 9 (increment 2, fitness #237 regression): UPTODATE no-op with a deployed Quadlet → EMPTY signal =="
 # The bug fitness caught: UPTODATE passed before='' to ha_write_changed, so ha_changed_quadlets diffed
 # EVERY deployed Quadlet as "new" → the idempotent same-sha no-op wrote a signal listing ALL workloads →
-# spurious approval-gated recreate tickets. A no-op changed NOTHING, so the signal must be EMPTY even when
+# spurious recreate tickets (which since R41 fire autonomously). A no-op changed NOTHING, so the signal must be EMPTY even when
 # ~core/.config/containers/systemd/*.container exist. (CASE 7/8 only drove the FF path, hiding this.)
 build_repo c9   # no advance → work == origin (UPTODATE)
 head="$(git -C "$C_WORK" rev-parse HEAD)"
