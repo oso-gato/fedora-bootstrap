@@ -547,6 +547,25 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
         echo "   so its secrets/credentials were NOT provisioned — refusing to continue silently)" >&2
         exit 1
     fi
+    # ---- ANSWERS FROM THE PRIVATE CONTROL REPO (erebus/<container>.env) ------------------------
+    # Read this container's configuration before its wizard runs, so the wizard has nothing left to
+    # ask. Each `KEY=value` becomes an environment variable the wizard prefers over prompting
+    # (every spin-up.sh resolves `${KEY:-$(ask …)}`), so a filled-in file provisions the container
+    # with no human and no terminal — which is what an autonomous apply-bootstrap has.
+    # THIS IS WHY DAY-0 AUTHORISES THE APP FIRST: the repo is PRIVATE, so it is readable only with an
+    # App installation token. The host App identity is established earlier in this same phase, above.
+    # FAIL-SOFT: no file, no token, no repo, or a value the parser refuses ⇒ nothing is exported and
+    # the wizard behaves exactly as it always has (defaults, or prompts when a human is present).
+    # Configuration that cannot be fetched must never stop a host bringing a container up.
+    # The parser admits ONLY plain `KEY=value` (this output is eval'd — see container-config.sh).
+    if [ -x "$HOME/.local/bin/container-config.sh" ]; then
+        _ccfg="$("$HOME/.local/bin/container-config.sh" get "$_c" 2>&1 >/dev/null)"; [ -n "$_ccfg" ] && echo "   $_ccfg"
+        while IFS= read -r _kv; do
+            [ -n "$_kv" ] || continue
+            export "${_kv?}"
+        done < <("$HOME/.local/bin/container-config.sh" get "$_c" 2>/dev/null)
+    fi
+
     echo ">> ${_c}: asking its setup questions (delegated to its own spin-up.sh) ..."
     # Pass the ferried scripted dev-App creds (empty on an interactive run ⇒ the wizard prompts) as a
     # command-prefix env, then CONSUME them so a second workload never reuses the first's App.
