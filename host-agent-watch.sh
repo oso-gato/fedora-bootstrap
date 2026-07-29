@@ -273,7 +273,7 @@ $2
 $fence
 </details>"
 }
-why_tail(){ # <unit> <summary-prefix> → why_block of THAT UNIT'S LAST INVOCATION. Never fatal.
+why_tail(){ # <unit> <summary-prefix> <executor-marker> → why_block of THAT UNIT'S LAST INVOCATION. Never fatal.
   # TRY EVERY WAY TO SEE IT, AND SAY WHICH ONE WORKED.
   # 36 apply-bootstrap failures produced not one line of the executor's own output, and two separate
   # attempts to fix that (a wider tail, then invocation-scoping) both shipped without ever being
@@ -283,7 +283,16 @@ why_tail(){ # <unit> <summary-prefix> → why_block of THAT UNIT'S LAST INVOCATI
   # Rather than guess a third time, try them in order and take the first that actually contains the
   # executor's own marker, then NAME the query in the report. The next failure therefore tells us both
   # the cause AND which read found it — the thing six days of "A or B" never yielded.
-  local n=300 inv='' j='' via='' cand=''
+  #
+  # THE MARKER IS THE CALLER'S ($3), NOT A CONSTANT. Each unit is a DIFFERENT executor with its own
+  # output prefix: host-apply.service emits `[host-apply]`; workload-refresh@<wl> runs
+  # container-refresh.sh, which prefixes EVERY line `[<wl>]` and can never emit `[host-apply]`. A
+  # hardcoded marker made the redeploy caller's search always miss, so the fallback fired
+  # unconditionally and stamped "no [host-apply] lines" over a body that held the actual cause —
+  # the exact mislabelling this function exists to end, re-committed at half its call sites.
+  # And the fallback now reports only what it CHECKED (this read lacked the marker), never what the
+  # read contains: absence of the marker does not make a body systemd bookends.
+  local n=300 mark="$3" inv='' j='' via='' cand=''
   inv="$(systemctl --user show -p InvocationID --value "$1" 2>/dev/null)"
   # Ordered candidates. `--user` first (the unit is a --user unit); the system journal last, because
   # the executor escalates via sudo and a root child's records may land there. A query that errors or
@@ -295,8 +304,8 @@ why_tail(){ # <unit> <summary-prefix> → why_block of THAT UNIT'S LAST INVOCATI
     # PREFER a read that contains the executor's own lines; remember the first non-empty as a fallback.
     # $1 is the LABEL; $2 is the first word of the command (literally `journalctl`). Naming the tool
     # instead of the read makes all four candidates render identically and defeats the entire point.
-    if printf '%s' "$cand" | grep -q '\[host-apply\]'; then j="$cand"; via="$1 (has [host-apply] output)"; return 0; fi
-    [ -z "${_wt_fallback:-}" ] && { _wt_fallback="$cand"; _wt_fallback_via="$1 (no [host-apply] lines — systemd bookends only)"; }
+    if printf '%s' "$cand" | grep -qF -- "$mark"; then j="$cand"; via="$1 (has $mark output)"; return 0; fi
+    [ -z "${_wt_fallback:-}" ] && { _wt_fallback="$cand"; _wt_fallback_via="$1 (no $mark lines — could not confirm the executor's own output in this read)"; }
     return 0
   }
   _wt_fallback=''; _wt_fallback_via=''
@@ -420,7 +429,9 @@ do_redeploy(){ # <repo> <issue> <workload>
     else
       st=failed; detail="redeploy '$wl' FAILED — workload-refresh@${wl} exit sc=$sc mainstatus=${scmain:-?} (start error, or candidate unhealthy → auto-rolled-back; host left on prior image)${err:+ — $err}"
       # a BLOCKING start, so a non-zero sc means the unit RAN and failed → its journal holds the cause.
-      detail+="$(why_tail "workload-refresh@${wl}.service" "workload-refresh@${wl} log")"
+      # The marker is CONTAINER-REFRESH's, not host-apply's: workload-refresh@ runs container-refresh.sh,
+      # which prefixes every line it emits with `[<workload>]`. $wl is a validated known workload.
+      detail+="$(why_tail "workload-refresh@${wl}.service" "workload-refresh@${wl} log" "[$wl]")"
     fi
     printf '%s|%s\n' "$st" "$detail" > "$acted"   # record BEFORE delivery: a retry re-delivers, never re-acts
   fi
@@ -865,7 +876,7 @@ do_apply_bootstrap(){ # <repo> <issue>
     # only gestures at ("the apply failed OR the host was unhealthy" is not something anyone can act
     # on). Best-effort by construction — why_tail yields the empty string when the journal cannot be
     # read, and `why` is a pre-set LOCAL, so the report can never be lost to its own diagnostic.
-    [ "${scmain:-x}" = 0 ] || why="$(why_tail "$unit" "host-apply log")"
+    [ "${scmain:-x}" = 0 ] || why="$(why_tail "$unit" "host-apply log" "[host-apply]")"
     case "${scmain:-x}" in
       0) st=done;   detail="apply-bootstrap: merged \`main\` APPLIED — setup.sh re-run as root, host health-gated (verify.sh), live artifacts readback-verified byte-equal merged main (no-op if already current)." ;;
       3) st=failed; detail="apply-bootstrap REFUSED — the host control clone is dirty or has DIVERGED from main (non-fast-forward), or main was unfetchable; a diverged host clone is a question, not a force-pull. Host left untouched.$why" ;;
