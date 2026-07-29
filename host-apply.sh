@@ -62,7 +62,29 @@ warn() { printf '[host-apply] %s\n' "$*" >&2; }
 # ROOT-OWNED throwaway trees are tracked and reaped by ONE EXIT trap (a per-function RETURN trap would
 # be clobbered by the nested rollback's own trap and leak the outer tree). ha_mktemp registers each.
 _HA_TMPS=()
-ha_mktemp() { local d; d="$(mktemp -d /tmp/host-apply.XXXXXX)" || return 1; _HA_TMPS+=("$d"); printf '%s' "$d"; }
+# THE TREE MUST BE TRAVERSABLE BY THE OPERATING USER, or setup.sh cannot finish.
+# `mktemp -d` creates 0700. Running as root that means root-only — and setup.sh is a TWO-PRIVILEGE-LAYER
+# script: after the system layer it hands the rest across the boundary with
+#   su - "$U" -c "… '$HERE/setup-user.sh'"          (setup.sh:73)
+# `core` cannot traverse a 0700 root-owned directory, so that exec dies EACCES/126, `set -e` aborts the
+# forward apply, ha_rollback re-materialises ANOTHER 0700 tree and dies the same way, and ha_main returns
+# 1 — which the host agent reports as the generic "the apply failed or the host was UNHEALTHY".
+# CONFIRMED ON THE HOST 2026-07-29, both trees in one run:
+#   -bash: line 1: /tmp/host-apply.SHxOaH/setup-user.sh: Permission denied   (forward)
+#   -bash: line 1: /tmp/host-apply.tCznyr/setup-user.sh: Permission denied   (rollback)
+#   [host-apply] rollback re-converge did NOT complete cleanly … rc=1
+# Deterministic, and present since the verb shipped (#187): apply-bootstrap is 45 filed / 0 succeeded.
+# It also means the HEALTH GATE has never once executed — it is downstream of this — so #319's
+# ha_run_verify repair could not have helped, and did not.
+# 0755 is the right mode and not a widening: the tree is a `git archive` of a PUBLIC repo at a merged
+# sha, it is world-readable in the clone it comes from, and it carries no secret (the App PEM is
+# ferried by env, never materialised here). Files keep their archived modes; only the directory needs
+# the +x that lets the unprivileged half of the install reach its own script.
+ha_mktemp() {
+  local d; d="$(mktemp -d /tmp/host-apply.XXXXXX)" || return 1
+  chmod 0755 "$d" || { rm -rf "$d"; return 1; }   # unreadable tree ⇒ no tree: never run setup.sh from one
+  _HA_TMPS+=("$d"); printf '%s' "$d"
+}
 _ha_cleanup() { local d; for d in "${_HA_TMPS[@]:-}"; do [ -n "$d" ] && rm -rf "$d"; done; }
 
 # gitc: run git in the control clone AS THE OPERATING USER (creds + ownership + safe.directory correct,
