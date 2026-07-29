@@ -59,6 +59,17 @@ EVALOUT="$(FAKE_ENV="$(printf 'A=1;touch %s/pwned2\n' "$ROOT")" env PATH="$BIN:$
 ( eval "$EVALOUT" ) >/dev/null 2>&1 || true
 [ ! -e "$ROOT/pwned2" ] && ok "eval of the emitted text runs nothing" || no "eval-safety" "a semicolon chain executed"
 
+echo "== THE DEFAULT PATH: ambient gh auth, no token command =="
+# Every row above sets CC_TOKEN_CMD, so none of them exercised what production actually runs.
+# The first cut defaulted CC_TOKEN_CMD to `gh-app-auth.sh token`, whose key path is
+# /run/secrets/gh_app_key — the IN-CONTAINER mount, absent on the host. It would have returned
+# nothing on every run and fallen back to defaults silently: green, dead, and untested.
+# On the host, host-gh-refresh.sh keeps ~/.config/gh/hosts.yml as the App, so `gh` IS the App.
+OUT="$(env PATH="$BIN:$PATH" FAKE_ENV="$(printf 'BOX_HOSTNAME=nox\n')" bash "$SUT" get nox 2>/dev/null)"; RC=$?
+{ [ "$RC" = 0 ] && printf '%s' "$OUT" | grep -qx 'BOX_HOSTNAME=nox'; } \
+  && ok "no CC_TOKEN_CMD → uses gh's ambient auth and returns values" \
+  || no "ambient-auth default" "rc=$RC out='$OUT' (the default path fetches nothing — silently dead)"
+
 echo "== a bad container name is refused before any network call =="
 OUT="$(env PATH="$BIN:$PATH" CC_TOKEN_CMD="$BIN/tok" FAKE_ENV='A=1' bash "$SUT" get '../../etc/passwd' 2>/dev/null)"; RC=$?
 { [ "$RC" = 0 ] && [ -z "$OUT" ]; } && ok "path traversal in the name → refused, empty" || no "name-check" "rc=$RC out='$OUT'"

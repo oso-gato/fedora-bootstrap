@@ -27,14 +27,23 @@
 #   container-config.sh get <container>    print `KEY=value` lines for that container; empty if none
 #   container-config.sh --selftest         exercise the pure parser (no network, no token)
 #
-# ENV: CC_REPO (oso-gato/rosetta-stone) · CC_DIR (erebus) · CC_TOKEN_CMD (gh-app-auth.sh token)
+# HOW IT AUTHENTICATES: it does NOT mint a token. `host-gh-refresh.sh` already rewrites this user's
+# `~/.config/gh/hosts.yml` with a fresh App installation token every hour (host-gh-refresh.timer), so on
+# the host `gh` IS the App. Using that ambient identity is both simpler and correct.
+# It is NOT `gh-app-auth.sh token`: that minter defaults to /run/secrets/gh_app_key, the IN-CONTAINER
+# secret mount, which does not exist on the host — calling it here would have returned nothing every
+# time and silently fallen back to defaults, i.e. shipped green and dead. The host's key lives in the
+# rootless podman secret `gh_app_host_key` and is handed to the minter by host-gh-refresh, never on disk.
+#
+# ENV: CC_REPO (oso-gato/rosetta-stone) · CC_DIR (erebus) · CC_TOKEN_CMD (TEST SEAM ONLY — when set,
+#      its stdout is used as the token instead of gh's ambient auth)
 # Covered by validation/container-config.test.sh.
 set -uo pipefail
 HERE="$(dirname "$(readlink -f "$0")")"
 
 CC_REPO="${CC_REPO:-oso-gato/rosetta-stone}"
 CC_DIR="${CC_DIR:-erebus}"
-CC_TOKEN_CMD="${CC_TOKEN_CMD:-$HERE/gh-app-auth.sh token}"
+CC_TOKEN_CMD="${CC_TOKEN_CMD:-}"   # empty ⇒ gh's ambient auth (the host App, refreshed hourly)
 
 log(){ echo "[container-config] $*" >&2; }
 
@@ -101,14 +110,19 @@ case "$name" in
   ''|*[!A-Za-z0-9._-]*) log "refusing container name '$name' — not a plain repo-safe name"; exit 0;;
 esac
 
-tok="$($CC_TOKEN_CMD 2>/dev/null)" || tok=""
-if [ -z "$tok" ]; then
-  log "no App token available — $name will use its own defaults (this is not an error)"
-  exit 0
+# Ambient gh auth by default (the host App); CC_TOKEN_CMD overrides it for tests.
+if [ -n "$CC_TOKEN_CMD" ]; then
+  tok="$($CC_TOKEN_CMD 2>/dev/null)" || tok=""
+  if [ -z "$tok" ]; then
+    log "token command produced nothing — $name will use its own defaults (this is not an error)"
+    exit 0
+  fi
+  body="$(GH_TOKEN="$tok" gh api "repos/$CC_REPO/contents/$CC_DIR/$name.env" -q .content 2>/dev/null \
+          | base64 -d 2>/dev/null)" || body=""
+else
+  body="$(gh api "repos/$CC_REPO/contents/$CC_DIR/$name.env" -q .content 2>/dev/null \
+          | base64 -d 2>/dev/null)" || body=""
 fi
-
-body="$(GH_TOKEN="$tok" gh api "repos/$CC_REPO/contents/$CC_DIR/$name.env" -q .content 2>/dev/null \
-        | base64 -d 2>/dev/null)" || body=""
 if [ -z "$body" ]; then
   log "no $CC_DIR/$name.env in $CC_REPO — $name will use its own defaults"
   exit 0
