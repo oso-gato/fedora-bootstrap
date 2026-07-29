@@ -282,7 +282,12 @@ why_tail(){ # <unit> <summary-prefix> → why_block of THAT UNIT'S LAST INVOCATI
   # by one day of "it exited 1".
   # `_SYSTEMD_INVOCATION_ID` selects exactly the most recent run, so unrelated history can never crowd
   # out the cause, and the bound is then a ceiling on ONE run rather than a sample across many.
-  local n=300 j inv
+  # INITIALIZED, not merely declared. `local j` leaves j UNSET, so the fallback's `[ -n "$j" ]` below
+  # reads an unset variable under `set -u` whenever the invocation id is unavailable — which is exactly
+  # the case this fallback exists to serve. That kills the $( ) subshell the caller wraps this in, so the
+  # tail comes back EMPTY and the cause is discarded silently: the SAME unset-read that wedged the first
+  # cut, surviving here only because the subshell contains it. Assign before any read.
+  local n=300 j='' inv=''
   inv="$(systemctl --user show -p InvocationID --value "$1" 2>/dev/null)"
   if [ -n "$inv" ]; then
     j="$(journalctl --user _SYSTEMD_INVOCATION_ID="$inv" -n "$n" --no-pager 2>/dev/null)"
