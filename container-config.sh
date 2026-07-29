@@ -4,8 +4,13 @@
 # WHY THIS EXISTS: provisioning a container asked its questions on a terminal. That is fine on
 # Day-0 with a human present and impossible everywhere else — an autonomous `apply-bootstrap` has no
 # tty, so any container whose wizard prompts could not be provisioned without someone sitting there.
-# The answers now live in oso-gato/ak-private under `erebus/<container>.env`, one file per container,
-# and the host reads them instead of asking.
+# The answers now live in oso-gato/rosetta-stone under `erebus/<container>.env`, one file per
+# container, and the host reads them instead of asking.
+#
+# WHY ITS OWN REPO, not the existing private one: ak-private is a Claude Code PLUGIN MARKETPLACE —
+# it is cloned onto every machine that installs those skills, so a host credential placed there would
+# travel to all of them and stay in each git history permanently. rosetta-stone is read by the host
+# and nothing else.
 #
 # THE BOOTSTRAP ORDER THIS DEPENDS ON (maintainer's requirement, 2026-07-29): the repo is PRIVATE, so
 # it is readable only with a GitHub App installation token. Day-0 therefore authorises the App BEFORE
@@ -22,12 +27,12 @@
 #   container-config.sh get <container>    print `KEY=value` lines for that container; empty if none
 #   container-config.sh --selftest         exercise the pure parser (no network, no token)
 #
-# ENV: CC_REPO (oso-gato/ak-private) · CC_DIR (erebus) · CC_TOKEN_CMD (gh-app-auth.sh token)
+# ENV: CC_REPO (oso-gato/rosetta-stone) · CC_DIR (erebus) · CC_TOKEN_CMD (gh-app-auth.sh token)
 # Covered by validation/container-config.test.sh.
 set -uo pipefail
 HERE="$(dirname "$(readlink -f "$0")")"
 
-CC_REPO="${CC_REPO:-oso-gato/ak-private}"
+CC_REPO="${CC_REPO:-oso-gato/rosetta-stone}"
 CC_DIR="${CC_DIR:-erebus}"
 CC_TOKEN_CMD="${CC_TOKEN_CMD:-$HERE/gh-app-auth.sh token}"
 

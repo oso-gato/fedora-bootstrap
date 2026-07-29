@@ -548,7 +548,7 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
         exit 1
     fi
     # ---- ANSWERS FROM THE PRIVATE CONTROL REPO (erebus/<container>.env) ------------------------
-    # Read this container's configuration before its wizard runs, so the wizard has nothing left to
+    # Read this container's configuration (oso-gato/rosetta-stone, erebus/<container>.env) before its wizard runs, so the wizard has nothing left to
     # ask. Each `KEY=value` becomes an environment variable the wizard prefers over prompting
     # (every spin-up.sh resolves `${KEY:-$(ask …)}`), so a filled-in file provisions the container
     # with no human and no terminal — which is what an autonomous apply-bootstrap has.
