@@ -558,11 +558,17 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     # the wizard behaves exactly as it always has (defaults, or prompts when a human is present).
     # Configuration that cannot be fetched must never stop a host bringing a container up.
     # The parser admits ONLY plain `KEY=value` (this output is eval'd — see container-config.sh).
+    # Clear whatever the PREVIOUS container's file exported. $STATE is one process across the whole
+    # loop, so without this a container with no TS_AUTHKEY of its own would silently inherit the
+    # previous one's — the same cross-container credential bleed the ferry's CONSUME step prevents.
+    # (The App/fitness vars are reset just above; these are the ones that reset does not cover.)
+    for _k in ${_cc_exported:-}; do unset "$_k"; done; _cc_exported=""
     if [ -x "$HOME/.local/bin/container-config.sh" ]; then
         _ccfg="$("$HOME/.local/bin/container-config.sh" get "$_c" 2>&1 >/dev/null)"; [ -n "$_ccfg" ] && echo "   $_ccfg"
         while IFS= read -r _kv; do
             [ -n "$_kv" ] || continue
             export "${_kv?}"
+            _cc_exported="$_cc_exported ${_kv%%=*}"
         done < <("$HOME/.local/bin/container-config.sh" get "$_c" 2>/dev/null)
     fi
 
@@ -570,9 +576,9 @@ for _c in "${WORKLOAD_CONTAINERS[@]}"; do
     # Pass the ferried scripted dev-App creds (empty on an interactive run ⇒ the wizard prompts) as a
     # command-prefix env, then CONSUME them so a second workload never reuses the first's App.
     _collected="$(cd "$HOME/$_c" && env \
-            GH_APP_ID="$_ferry_gh_app_id" \
-            GH_APP_INSTALLATION_ID="$_ferry_gh_app_inst" \
-            GH_APP_SECRET="$_ferry_gh_app_secret" \
+            GH_APP_ID="${_ferry_gh_app_id:-${GH_APP_ID:-}}" \
+            GH_APP_INSTALLATION_ID="${_ferry_gh_app_inst:-${GH_APP_INSTALLATION_ID:-}}" \
+            GH_APP_SECRET="${_ferry_gh_app_secret:-${GH_APP_SECRET:-}}" \
             COLLECT_ONLY=1 ./spin-up.sh)" \
         || { echo "FATAL: $_c spin-up.sh collect failed" >&2; exit 1; }
     _ferry_gh_app_id=""; _ferry_gh_app_inst=""; _ferry_gh_app_secret=""
