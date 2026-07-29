@@ -273,10 +273,24 @@ $2
 $fence
 </details>"
 }
-why_tail(){ # <unit> <summary-prefix> → why_block of that unit's last N journal lines. Never fatal.
-  local n=40 j                       # BOUNDED: a runaway log must not flood the ticket
-  j="$(journalctl --user -u "$1" -n "$n" --no-pager 2>/dev/null)" || return 0
-  why_block "$2 (last $n lines — the actual cause)" "$j"
+why_tail(){ # <unit> <summary-prefix> → why_block of THAT UNIT'S LAST INVOCATION. Never fatal.
+  # SCOPED TO ONE RUN, and big enough to contain it (fixed 2026-07-29, measured on ticket #314).
+  # The first version took `-n 40` across the unit's WHOLE history. host-apply had run five times, so
+  # those 40 lines were entirely systemd's own start/exit bookends for five invocations and contained
+  # NOT ONE line of the script's output. The diagnostic was too small to see the thing it exists to
+  # see: it proved `status=1/FAILURE` and nothing whatever about why — six days of "A or B" replaced
+  # by one day of "it exited 1".
+  # `_SYSTEMD_INVOCATION_ID` selects exactly the most recent run, so unrelated history can never crowd
+  # out the cause, and the bound is then a ceiling on ONE run rather than a sample across many.
+  local n=300 j inv
+  inv="$(systemctl --user show -p InvocationID --value "$1" 2>/dev/null)"
+  if [ -n "$inv" ]; then
+    j="$(journalctl --user _SYSTEMD_INVOCATION_ID="$inv" -n "$n" --no-pager 2>/dev/null)"
+  fi
+  # fall back to the unit-scoped read if the invocation id is unavailable (older systemd, transient race)
+  [ -n "$j" ] || j="$(journalctl --user -u "$1" -n "$n" --no-pager 2>/dev/null)" || return 0
+  [ -n "$j" ] || return 0
+  why_block "$2 (last invocation — the actual cause)" "$j"
 }
 
 if [ "${1:-}" = "--selftest" ]; then
