@@ -244,6 +244,41 @@ approval_fold(){
   echo NO; return 0                 # no maintainer event at all (incl. zero rows) ⇒ not approved
 }
 
+# ---- THE FAILURE MUST SAY WHY (2026-07-29) — a failed unit's LAST WORDS ride in the ticket ----
+# apply-bootstrap failed + rolled back on this host from 2026-07-23 — six BLOCKED tickets
+# (#263/#264/#265, #301/#302/#303) and not one named the actual error. Every report was the same
+# disjunction: "the forward setup.sh apply failed OR the host was UNHEALTHY after". Nobody can act on
+# an OR. The verdict was read from the unit's EXIT CODE alone while the unit's own journal — which
+# holds the real cause — was never captured, so the evidence existed for six days and reached nobody.
+#
+# TWO invariants, both learned by breaking them in this change's first cut:
+#   * BEST-EFFORT, ALWAYS. The diagnostic must never be able to fail the report it rides in — an
+#     unreadable or empty journal yields the EMPTY STRING and the ticket posts, just without a tail.
+#     The first cut instead read an UNSET global: under `set -u` that ABORTS the tick mid-loop, before
+#     `printf > .acted` and before `respond`, so the ticket got NO comment, no marker, and the next
+#     tick re-entered and died the same way — a diagnostic that wedged the very bus it explains.
+#     `why_block` is pure and dependency-free precisely so --selftest asserts the empty case.
+#   * A NAMED UNIT, NEVER A GLOBAL. The tail is a PARAMETER, so every site reports ITS OWN unit's log.
+#     A global captured on one verb's path would otherwise be appended — under the heading "the actual
+#     cause" — to an unrelated verb's failure later in the SAME sweep (all tickets run in one process).
+why_block(){ # <summary> <log-text> → a collapsed evidence block, or NOTHING. PURE (selftest-exercised).
+  local fence='```'
+  [ -n "$2" ] || return 0
+  printf '%s' "
+
+<details><summary>$1</summary>
+
+$fence
+$2
+$fence
+</details>"
+}
+why_tail(){ # <unit> <summary-prefix> → why_block of that unit's last N journal lines. Never fatal.
+  local n=40 j                       # BOUNDED: a runaway log must not flood the ticket
+  j="$(journalctl --user -u "$1" -n "$n" --no-pager 2>/dev/null)" || return 0
+  why_block "$2 (last $n lines — the actual cause)" "$j"
+}
+
 if [ "${1:-}" = "--selftest" ]; then
   f=0; ck(){ local g; g="$(printf '%s' "$2" | parse_op)"; [ "$g" = "$3" ] && echo "ok: $1" || { echo "FAIL: $1 — got '$g' want '$3'"; f=1; }; }
   ck "plain"        $'host-op: redeploy fedora-dev\nplease deploy'   'redeploy fedora-dev'
@@ -295,6 +330,17 @@ if [ "${1:-}" = "--selftest" ]; then
   caf "app noise over maint approval" 'labeled\t0\nunlabeled\t0\nlabeled\t1\n'   APPROVED   # App events inert; the maintainer's decides
   caf "unresolvable newest"           'labeled\tU\nlabeled\t1\n'                 NO         # fail-closed: never guess past a U
   caf "no events"                     ''                                          NO
+  # ---- why_block (SAY WHY) — the evidence block is BEST-EFFORT: no log ⇒ no block, never a failure ----
+  # This is the invariant the first cut of the change violated (it read an unset global under `set -u`,
+  # aborting the tick before the comment). Assert the empty case explicitly, not by inspection.
+  [ -z "$(why_block 'host-apply log' '')" ] \
+    && echo "ok: wb empty log ⇒ NO block (the diagnostic never breaks the report it rides in)" \
+    || { echo "FAIL: wb emitted a block for an empty log"; f=1; }
+  case "$(why_block 'host-apply log (last 40 lines)' 'setup.sh: line 42: boom')" in
+    *'<details>'*'host-apply log (last 40 lines)'*'setup.sh: line 42: boom'*'</details>'*)
+      echo "ok: wb wraps the real cause in a collapsed block" ;;
+    *) echo "FAIL: wb did not carry the cause into the block"; f=1 ;;
+  esac
   [ "$f" = 0 ] && echo "ALL HOST-AGENT SELFTESTS PASS" || echo "HOST-AGENT SELFTESTS FAILED"; exit "$f"
 fi
 
@@ -342,7 +388,9 @@ do_redeploy(){ # <repo> <issue> <workload>
     elif [ "$sc" = 0 ]; then
       st=done;   detail="redeploy '$wl' done — workload-refresh@ pulled + digest-compared + health-gated restart (no-op if already current)"
     else
-      st=failed; detail="redeploy '$wl' FAILED — workload-refresh@${wl} exit sc=$sc mainstatus=${scmain:-?} (start error, or candidate unhealthy → auto-rolled-back; host left on prior image)${err:+ — $err}$_why"
+      st=failed; detail="redeploy '$wl' FAILED — workload-refresh@${wl} exit sc=$sc mainstatus=${scmain:-?} (start error, or candidate unhealthy → auto-rolled-back; host left on prior image)${err:+ — $err}"
+      # a BLOCKING start, so a non-zero sc means the unit RAN and failed → its journal holds the cause.
+      detail+="$(why_tail "workload-refresh@${wl}.service" "workload-refresh@${wl} log")"
     fi
     printf '%s|%s\n' "$st" "$detail" > "$acted"   # record BEFORE delivery: a retry re-delivers, never re-acts
   fi
@@ -715,10 +763,15 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
   local oldid; oldid="$(podman container inspect "$wl" -f '{{.Id}}' 2>/dev/null || echo '')"
   { printf '%s\n' "$oldid"; printf '%s\n' "$manifest"; } > "$rb"     # marker: line1=oldID, rest=validated manifest
   systemctl --user reset-failed "workload-rebuild@${wl}.service" 2>/dev/null || true
-  if systemctl --user start --no-block "workload-rebuild@${wl}.service" 2>/dev/null; then
+  # SAY WHY: the start is --no-block, so a failure here means the unit never RAN — its journal would be
+  # some PREVIOUS run, i.e. a false cause. systemctl's own stderr IS the cause, so capture it (the same
+  # `err=` treatment do_redeploy already gives its start) instead of discarding it into /dev/null.
+  local starterr
+  if starterr="$(systemctl --user start --no-block "workload-rebuild@${wl}.service" 2>&1)"; then
     log "$ORG/$repo#$issue: rebuild-devbox FIRED for $wl (old ${oldid:0:12}); FORCE health-gated rebuild running — restore/resume/verify on completion."
   else
-    st=failed; detail="rebuild-devbox '$wl': could not start workload-rebuild@${wl} — unit missing? Box left untouched.$_why"
+    starterr="${starterr//$'\n'/ }"
+    st=failed; detail="rebuild-devbox '$wl': could not start workload-rebuild@${wl} — unit missing? Box left untouched.${starterr:+ — $starterr}"
     rm -f "$rb"; printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"
   fi
 }
@@ -759,6 +812,7 @@ file_recreate_ticket(){ # <workload> <apply-issue>
 do_apply_bootstrap(){ # <repo> <issue>
   local repo="$1" issue="$2" acted="$STATE/${1}-${2}.acted" fired="$STATE/${1}-${2}.applyfired" st detail scmain
   local unit="host-apply.service" changed wl rurl recreated nonrebuild
+  local why=''            # the failed unit's last words — LOCAL + pre-set: read on paths that never assign it
 
   # (0) outcome already recorded by a prior tick → re-DELIVER only, never re-fire (the .acted contract).
   if [ -e "$acted" ] && IFS='|' read -r st detail < "$acted" && [ -n "$st" ]; then
@@ -776,39 +830,18 @@ do_apply_bootstrap(){ # <repo> <issue>
       *) : ;;   # inactive/failed/dead → the oneshot terminated; read ExecMainStatus for the verdict.
     esac
     scmain="$(systemctl --user show -p ExecMainStatus --value "$unit" 2>/dev/null)"
-    # THE FAILURE MUST SAY WHY (2026-07-29). apply-bootstrap has failed and rolled back on THIS host
-    # since 2026-07-23 -- SIX DAYS, six BLOCKED tickets (#263/#264/#265, #301/#302/#303), and not one of
-    # them names the actual error. Every report said the same disjunction: "the forward setup.sh apply
-    # failed OR the host was UNHEALTHY after". Nobody can act on an OR. The verdict was read from the
-    # unit's EXIT CODE alone while the unit's own log -- which contains the real cause -- was never
-    # captured, so the evidence existed for six days and reached nobody.
-    #
-    # The cost was not the outage itself, it was the INVISIBILITY: fedora-bootstrap#283 (the one-line
-    # fix for the health-check trap that is failing the e2e-beta acceptance run RIGHT NOW) merged on
-    # 2026-07-28 and has never reached this host. The apparatus is failing its own acceptance test with
-    # a broken tool it already repaired but cannot deliver -- and could not tell anyone why.
-    #
-    # Same defect class, and the same fix, as the poller's `pr list failed` line: KEEP THE ERROR AT THE
-    # POINT OF FAILURE. Bounded to the last 40 lines so a runaway log cannot flood the ticket, and
-    # entirely best-effort -- if the journal cannot be read the ticket still posts, just without the tail.
-    _why=""
-    if [ "${scmain:-x}" != 0 ]; then
-      _why="$(journalctl --user -u "$unit" -n 40 --no-pager 2>/dev/null | tail -40)"
-      [ -n "$_why" ] && _why="
-
-<details><summary>host-apply log (last 40 lines — the actual cause)</summary>
-
-\`\`\`
-$_why
-\`\`\`
-</details>"
-    fi
+    # SAY WHY (2026-07-29) — the whole point of this change, at the site that cost six days: the
+    # executor RAN and terminated, so `host-apply.service`'s own journal holds the cause the exit code
+    # only gestures at ("the apply failed OR the host was unhealthy" is not something anyone can act
+    # on). Best-effort by construction — why_tail yields the empty string when the journal cannot be
+    # read, and `why` is a pre-set LOCAL, so the report can never be lost to its own diagnostic.
+    [ "${scmain:-x}" = 0 ] || why="$(why_tail "$unit" "host-apply log")"
     case "${scmain:-x}" in
       0) st=done;   detail="apply-bootstrap: merged \`main\` APPLIED — setup.sh re-run as root, host health-gated (verify.sh), live artifacts readback-verified byte-equal merged main (no-op if already current)." ;;
-      3) st=failed; detail="apply-bootstrap REFUSED — the host control clone is dirty or has DIVERGED from main (non-fast-forward), or main was unfetchable; a diverged host clone is a question, not a force-pull. Host left untouched.$_why" ;;
-      1) st=failed; detail="apply-bootstrap FAILED — the forward setup.sh apply failed or the host was UNHEALTHY after; ROLLED BACK + re-converged to the prior commit (best-effort — a config re-run does not uninstall packages a failed forward-apply may have added). Host on prior code; re-file after fixing.$_why" ;;
-      2) st=failed; detail="apply-bootstrap FAILED readback — the live host artifacts do NOT all equal merged main (applied != proven-live); success NOT recorded; merged tree intact + git-revertable. Investigate; re-file to retry.$_why" ;;
-      *) st=failed; detail="apply-bootstrap FAILED — host-apply executor errored (ExecMainStatus=${scmain:-?}). Host left recoverable (merged tree intact).$_why" ;;
+      3) st=failed; detail="apply-bootstrap REFUSED — the host control clone is dirty or has DIVERGED from main (non-fast-forward), or main was unfetchable; a diverged host clone is a question, not a force-pull. Host left untouched.$why" ;;
+      1) st=failed; detail="apply-bootstrap FAILED — the forward setup.sh apply failed or the host was UNHEALTHY after; ROLLED BACK + re-converged to the prior commit (best-effort — a config re-run does not uninstall packages a failed forward-apply may have added). Host on prior code; re-file after fixing.$why" ;;
+      2) st=failed; detail="apply-bootstrap FAILED readback — the live host artifacts do NOT all equal merged main (applied != proven-live); success NOT recorded; merged tree intact + git-revertable. Investigate; re-file to retry.$why" ;;
+      *) st=failed; detail="apply-bootstrap FAILED — host-apply executor errored (ExecMainStatus=${scmain:-?}). Host left recoverable (merged tree intact).$why" ;;
     esac
     # increment 2 — a SUCCESSFUL apply may have rewritten a deployed workload Quadlet (new env on disk, NOT
     # yet live on the running container). For each CHANGED REBUILDABLE dev box, file a rebuild-devbox
@@ -836,11 +869,15 @@ $_why
   # (2) FRESH → fire the decoupled apply. The FF-pull/refuse/health-gate/rollback/readback all live in the
   #     root-owned executor (agent-unmodifiable); this only triggers it + reports.
   systemctl --user reset-failed "$unit" 2>/dev/null || true
-  if systemctl --user start --no-block "$unit" 2>/dev/null; then
+  # SAY WHY, but the RIGHT why: --no-block, so a failure here means the unit never ran and its journal
+  # would be a PREVIOUS apply — capture systemctl's stderr, which is this failure's actual cause.
+  local starterr
+  if starterr="$(systemctl --user start --no-block "$unit" 2>&1)"; then
     : > "$fired"
     log "$ORG/$repo#$issue: apply-bootstrap FIRED (host-apply.service) — FF-pull + setup.sh + health-gate + readback running; verdict on completion."
   else
-    st=failed; detail="apply-bootstrap: could not start host-apply.service — unit missing? (the self-apply verb goes live only AFTER the one-time bootstrap manual \`setup.sh\` — it cannot install itself.) Host untouched.$_why"
+    starterr="${starterr//$'\n'/ }"
+    st=failed; detail="apply-bootstrap: could not start host-apply.service — unit missing? (the self-apply verb goes live only AFTER the one-time bootstrap manual \`setup.sh\` — it cannot install itself.) Host untouched.${starterr:+ — $starterr}"
     printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"
   fi
 }
