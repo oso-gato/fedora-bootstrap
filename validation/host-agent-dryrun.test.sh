@@ -34,16 +34,30 @@ exit 0
 EOF
 
 # ---- stub systemctl: RECORD the call, NEVER execute a unit. THIS is the "no real workload" guard. ----
+# FAKE_START_RC lets a case make a `start` FAIL (with stderr, as the real one does) — the failure paths
+# are exactly where the "say why" reporting lives, and they were previously never executed by any test.
 cat > "$BIN/systemctl" <<'EOF'
 #!/usr/bin/env bash
 printf 'SYSTEMCTL %s\n' "$*" >> "$SYSTEMCTL_LOG"
 case "$*" in
   *"show -p ExecMainStatus"*) echo "${FAKE_EXECMAIN:-0}" ;;  # emulate a clean refresh (mainstatus 0)
   *"is-active"*)              echo "${FAKE_ISACTIVE:-inactive}" ;;  # apply-bootstrap poll (host-apply.service)
+  *start*) [ "${FAKE_START_RC:-0}" = 0 ] || {
+             echo "Failed to start: Unit not found." >&2; exit "${FAKE_START_RC}"; } ;;
 esac
 exit 0
 EOF
-chmod +x "$BIN/gh" "$BIN/systemctl"
+
+# ---- stub journalctl: serve a case-chosen unit log; RECORD which unit was asked for. ----
+# The recording is load-bearing for one assertion: a failure report must carry the log of the unit that
+# ACTUALLY failed, never a global captured on some other verb's path earlier in the same sweep.
+cat > "$BIN/journalctl" <<'EOF'
+#!/usr/bin/env bash
+printf 'JOURNALCTL %s\n' "$*" >> "${JOURNAL_LOG:-/dev/null}"
+[ "${FAKE_JOURNAL_RC:-0}" = 0 ] || exit "${FAKE_JOURNAL_RC}"
+printf '%s\n' "${FAKE_JOURNAL:-}"
+EOF
+chmod +x "$BIN/gh" "$BIN/systemctl" "$BIN/journalctl"
 
 pass=0; fail=0
 run_case(){ # <desc> <fake-body> <expect-systemctl-start: yes|no> <expect-comment-substr>
@@ -52,7 +66,7 @@ run_case(){ # <desc> <fake-body> <expect-systemctl-start: yes|no> <expect-commen
   export HOME="$home"
   export GH_LOG="$home/gh.log";              : > "$GH_LOG"
   export SYSTEMCTL_LOG="$home/systemctl.log"; : > "$SYSTEMCTL_LOG"
-  export FAKE_BODY="$body" FAKE_ISSUE=1 FAKE_EXECMAIN=0
+  export FAKE_BODY="$body" FAKE_ISSUE=1 FAKE_EXECMAIN=0 FAKE_START_RC=0
   PATH="$BIN:$PATH" bash "$WATCH" >/dev/null 2>&1 || true
   local got_start=no
   grep -q 'SYSTEMCTL --user start workload-refresh@' "$SYSTEMCTL_LOG" && got_start=yes
@@ -90,7 +104,7 @@ echo "== apply-bootstrap (#133): DECOUPLED fire → poll → deliver (host-apply
 ahome="$ROOT/apply-home"; mkdir -p "$ahome"
 ab_tick(){ # <isactive> <execmain>
   export HOME="$ahome" GH_LOG="$ahome/gh.log" SYSTEMCTL_LOG="$ahome/sc.log"
-  export FAKE_BODY=$'host-op: apply-bootstrap\napply merged main' FAKE_ISSUE=1 FAKE_ISACTIVE="$1" FAKE_EXECMAIN="$2"
+  export FAKE_BODY=$'host-op: apply-bootstrap\napply merged main' FAKE_ISSUE=1 FAKE_ISACTIVE="$1" FAKE_EXECMAIN="$2" FAKE_START_RC=0
   : > "$GH_LOG"; : > "$SYSTEMCTL_LOG"
   PATH="$BIN:$PATH" bash "$WATCH" >/dev/null 2>&1 || true
 }
@@ -125,6 +139,49 @@ PATH="$BIN:$PATH" bash "$WATCH" >/dev/null 2>&1 || true
 { grep -q 'host-agent: FAILED' "$rhome/gh.log" && grep -qi 'REFUSED' "$rhome/gh.log"; } \
   && { pass=$((pass+1)); printf '  ok   ExecMainStatus=3 → FAILED REFUSED (diverged/dirty, a question)\n'; } \
   || { fail=$((fail+1)); printf '  FAIL ExecMainStatus=3 mapping\n       gh.log: %s\n' "$(tr '\n' ' ' <"$rhome/gh.log")"; }
+
+echo "== SAY WHY: the FAILURE paths must DELIVER a verdict, carrying THEIR OWN unit's cause =="
+# REGRESSION (2026-07-29). These paths compose the failure report, and no case had ever executed one —
+# every case above takes a SUCCEEDING start. The first cut of "say why" read an unset global here:
+# under `set -u` that ABORTS the tick before `.acted` is written and before the comment is posted, so
+# the ticket gets NO verdict, no marker, and the next tick re-enters and dies identically — a
+# permanently wedged bus, from the diagnostic meant to explain it. Assert what must survive a failure:
+# the verdict is DELIVERED, it names the cause, the cause is THIS unit's, and the op is RECORDED.
+whome="$ROOT/redeploy-fail"; mkdir -p "$whome"
+export HOME="$whome" GH_LOG="$whome/gh.log" SYSTEMCTL_LOG="$whome/sc.log" JOURNAL_LOG="$whome/j.log"
+export FAKE_BODY=$'host-op: redeploy fedora-dev' FAKE_ISSUE=1 FAKE_EXECMAIN=1 FAKE_START_RC=1
+export FAKE_JOURNAL='verify.sh FAILED — cockpit.socket dead'
+: > "$GH_LOG"; : > "$SYSTEMCTL_LOG"; : > "$JOURNAL_LOG"
+PATH="$BIN:$PATH" bash "$WATCH" >/dev/null 2>&1 || true
+c=0; d=''
+grep -q 'host-agent: FAILED' "$GH_LOG" \
+  || { c=1; d="NO verdict delivered at all (the pre-fix crash — tick aborted, ticket left silent)"; }
+grep -qF 'verify.sh FAILED — cockpit.socket dead' "$GH_LOG" \
+  || { c=1; d="${d:+$d; }verdict delivered WITHOUT the unit journal — the cause was discarded again"; }
+grep -qF -- '-u workload-refresh@fedora-dev.service' "$JOURNAL_LOG" \
+  || { c=1; d="${d:+$d; }read the wrong unit's journal: $(tr '\n' ' ' <"$JOURNAL_LOG")"; }
+[ -e "$whome/.local/state/host-agent/fedora-bootstrap-1.acted" ] \
+  || { c=1; d="${d:+$d; }no .acted marker — the op ran but was never recorded (a retry would re-act)"; }
+ab_check "redeploy start FAILS → FAILED verdict DELIVERED + .acted, carrying workload-refresh@'s OWN log" "$c" "$d"
+
+# apply-bootstrap's fire path is --no-block: a failure there means the unit never RAN, so its journal
+# would be some PREVIOUS apply. The cause is systemctl's stderr — assert THAT is what is reported, and
+# that no journal was consulted (a stale log presented as "the actual cause" is a false report).
+nhome="$ROOT/apply-nostart"; mkdir -p "$nhome"
+export HOME="$nhome" GH_LOG="$nhome/gh.log" SYSTEMCTL_LOG="$nhome/sc.log" JOURNAL_LOG="$nhome/j.log"
+export FAKE_BODY=$'host-op: apply-bootstrap' FAKE_ISSUE=1 FAKE_ISACTIVE=inactive FAKE_EXECMAIN=0 FAKE_START_RC=1
+: > "$GH_LOG"; : > "$SYSTEMCTL_LOG"; : > "$JOURNAL_LOG"
+PATH="$BIN:$PATH" bash "$WATCH" >/dev/null 2>&1 || true
+c=0; d=''
+grep -qF 'could not start host-apply.service' "$GH_LOG" \
+  || { c=1; d="no could-not-start verdict delivered: $(tr '\n' ' ' <"$GH_LOG")"; }
+grep -qF 'Failed to start: Unit not found.' "$GH_LOG" \
+  || { c=1; d="${d:+$d; }verdict delivered without systemctl's stderr — the actual cause"; }
+[ -s "$JOURNAL_LOG" ] \
+  && { c=1; d="${d:+$d; }consulted a journal for a unit that never ran (a PREVIOUS apply = a false cause)"; }
+[ -e "$nhome/.local/state/host-agent/fedora-bootstrap-1.applyfired" ] \
+  && { c=1; d="${d:+$d; }marked .applyfired despite the start failing (would poll forever)"; }
+ab_check "apply-bootstrap start FAILS → verdict names systemctl's stderr, consults NO stale journal" "$c" "$d"
 
 echo
 echo "host-agent-dryrun: $pass passed, $fail failed"
