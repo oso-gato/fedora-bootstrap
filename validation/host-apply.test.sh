@@ -236,5 +236,50 @@ run_apply c9 APPLY_QUADLET_DIR="$ROOT/c9/quadlets"
   || bad "uptodate-signal" "rc=$RC signal='$(cat "$ROOT/c9/state/quadlet-changed" 2>/dev/null)' (bug: lists every workload)"
 
 echo
+echo "== THE HEALTH GATE'S REAL INVOCATION — the line 27/27 apply failures actually died on =="
+# Every row above substitutes $APPLY_VERIFY_CMD, so the real ha_run_verify body had NEVER been executed
+# by a test. It ran `runuser -u core -- bash verify.sh`, which starts no login session: root's env is
+# kept, so $XDG_RUNTIME_DIR is unset and verify.sh's five `systemctl --user` checks cannot reach the
+# user manager. The gate then called the host UNHEALTHY and rolled back — 27 times out of 27.
+# $APPLY_RUNUSER stubs ONLY the privilege drop (the sole part needing root); the environment
+# construction under test is the real one.
+HV="$ROOT/hv"; mkdir -p "$HV"
+# a stand-in verify.sh that PASSES iff it was handed a usable user session
+cat > "$HV/verify.sh" <<'EOF'
+#!/usr/bin/env bash
+[ -n "${XDG_RUNTIME_DIR:-}" ] || { echo "no XDG_RUNTIME_DIR — systemctl --user would fail here"; exit 1; }
+[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] || { echo "no DBUS_SESSION_BUS_ADDRESS"; exit 1; }
+echo "session OK: $XDG_RUNTIME_DIR"; exit 0
+EOF
+chmod +x "$HV/verify.sh"
+# stub runuser: drop the `-u <user> --` prefix and exec the rest AS THE TEST USER (runuser needs root).
+cat > "$HV/runuser" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "-u" ] && shift 2
+[ "$1" = "--" ] && shift
+exec "$@"
+EOF
+chmod +x "$HV/runuser"
+
+sed -n '/^ha_run_verify() {/,/^}/p' "$EXEC" > "$HV/real.sh"
+[ -s "$HV/real.sh" ] || bad "health-gate-extract" "could not extract ha_run_verify from $EXEC"
+VOUT="$( set +e; env -u APPLY_VERIFY_CMD APPLY_RUNUSER="$HV/runuser" APPLY_USER="$(id -un)" \
+         bash -c 'set -uo pipefail; warn(){ echo "warn: $*" >&2; }; . "$1"; ha_run_verify "$2"' \
+         _ "$HV/real.sh" "$HV" 2>&1 )"; VRC=$?
+{ [ "$VRC" = 0 ] && printf '%s' "$VOUT" | grep -q 'session OK'; } \
+  && ok "the health gate hands a real user session across the privilege drop" \
+  || bad "health-gate-env" "rc=$VRC out='$VOUT' (verify.sh runs with no user session — every apply rolls back)"
+
+# MUTATION RUN IN-SUITE: restore the pre-fix invocation. It MUST fail, or the row above proves nothing.
+MUT="$HV/mutant.sh"
+{ printf 'ha_run_verify(){ local tree="$1"; "${APPLY_RUNUSER:-runuser}" -u "${APPLY_USER:-core}" -- bash "$tree/verify.sh"; }\n'; } > "$MUT"
+MOUT="$( set +e; APPLY_RUNUSER="$HV/runuser" APPLY_USER="$(id -un)" \
+         env -u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS \
+         bash -c 'set -uo pipefail; source "$1"; ha_run_verify "$2"' _ "$MUT" "$HV" 2>&1 )"; MRC=$?
+[ "$MRC" != 0 ] \
+  && ok "M: the pre-fix invocation FAILS the same verify.sh — the row above discriminates" \
+  || bad "health-gate-mutation" "the pre-fix call passed too (rc=$MRC) — the row is vacuous"
+
+echo
 echo "host-apply: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -274,10 +274,35 @@ ha_run_setup() { # <tree>
 # The HEALTH GATE: the host's own acceptance suite (verify.sh, Build Principle 8) is the host analogue
 # of a redeploy's container healthcheck. It runs as the OPERATING USER (its checks are user-scope), so
 # root drops to $U via runuser. Non-zero => unhealthy => rollback.
+#
+# DROPPING PRIVILEGE IS NOT THE SAME AS BEING THAT USER. `runuser -u <u> --` (no `-l`) starts NO login
+# session: it keeps ROOT's environment, so $XDG_RUNTIME_DIR is root's or unset and there is no user
+# D-Bus address. verify.sh makes FIVE `systemctl --user` calls (podman.socket, the two claudebox-rebuild
+# units, host-code-refresh.timer, claudebox-up.service); with no runtime dir they cannot reach the user
+# manager and fail — so the gate reported the host UNHEALTHY and rolled the apply back, on every single
+# run. MEASURED 2026-07-29: apply-bootstrap tickets #239 through #317 — 27 attempts, 27 FAILED, 0 DONE,
+# i.e. host self-apply has never once succeeded since it shipped. The maintainer saw the same split by
+# hand: `sudo verify.sh` FAILED 12 checks while plain `verify.sh` as the operating user passed 27/27.
+# The suite could not catch it: every existing row substitutes $APPLY_VERIFY_CMD, so this line — the one
+# that actually runs on the host — had never been executed by a test.
+# So: hand the user session across the privilege drop explicitly. $APPLY_RUNUSER is a seam that stubs
+# ONLY the part needing root, leaving the environment construction under test.
 ha_run_verify() { # <tree>
-  local tree="$1"
+  local tree="$1" u uid rt
   if [ -n "${APPLY_VERIFY_CMD:-}" ]; then APPLY_TREE="$tree" bash -c "$APPLY_VERIFY_CMD"; return $?; fi
-  runuser -u "${APPLY_USER:-core}" -- bash "$tree/verify.sh"
+  u="${APPLY_USER:-core}"
+  uid="$(id -u "$u" 2>/dev/null)"
+  case "$uid" in ''|*[!0-9]*)
+    warn "health gate: cannot resolve uid for '$u' — verify.sh cannot be run as the operating user"
+    return 1 ;;
+  esac
+  rt="/run/user/$uid"
+  # A missing runtime dir means the user manager is not running (lingering off), NOT that the host is
+  # broken. Say which, loudly — a week of identical "UNHEALTHY" verdicts hid this exact distinction.
+  [ -d "$rt" ] || warn "health gate: $rt is MISSING (user manager not running — \`loginctl enable-linger $u\`); verify.sh's systemctl --user checks cannot pass and this will read as UNHEALTHY"
+  "${APPLY_RUNUSER:-runuser}" -u "$u" -- env \
+    "XDG_RUNTIME_DIR=$rt" "DBUS_SESSION_BUS_ADDRESS=unix:path=$rt/bus" \
+    bash "$tree/verify.sh"
 }
 
 # ROLLBACK = re-converge to the PRIOR commit by re-running its setup.sh (best-effort). The clone HEAD is
