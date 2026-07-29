@@ -280,6 +280,45 @@ MOUT="$( set +e; APPLY_RUNUSER="$HV/runuser" APPLY_USER="$(id -un)" \
   && ok "M: the pre-fix invocation FAILS the same verify.sh — the row above discriminates" \
   || bad "health-gate-mutation" "the pre-fix call passed too (rc=$MRC) — the row is vacuous"
 
+echo "== THE MATERIALISED TREE MUST BE TRAVERSABLE BY THE OPERATING USER =="
+# setup.sh is TWO privilege layers: after the system half it runs
+#   su - "$U" -c "… '$HERE/setup-user.sh'"     (setup.sh:73)
+# so the tree root must be +x for that user. `mktemp -d` gives 0700, which as root means root-only —
+# and CONFIRMED ON THE HOST 2026-07-29 that killed every apply, forward AND rollback:
+#   -bash: line 1: /tmp/host-apply.SHxOaH/setup-user.sh: Permission denied
+# The suite could never catch it: every case runs as `core`, so the drop to `core` is a no-op and the
+# 0700 tree is traversable by its own creator. This row checks the MODE, which holds regardless of uid.
+HT="$ROOT/ha-mktemp"; mkdir -p "$HT"
+eval "$(sed -n '/^ha_mktemp() {/,/^}/p' "$EXEC")"
+_HA_TMPS=()
+TREE="$(ha_mktemp)"
+if [ -z "$TREE" ] || [ ! -d "$TREE" ]; then
+  bad "tree-mode" "ha_mktemp produced no directory"
+else
+  MODE="$(stat -c '%a' "$TREE")"
+  case "$MODE" in
+    *[157]) ok "materialised tree is traversable by others (mode $MODE)";;
+    *)      bad "tree-mode" "mode $MODE — the operating user cannot enter it; setup.sh:73 dies EACCES/126";;
+  esac
+  # …and the privilege drop's own target must be reachable through it, not merely present.
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$TREE/setup-user.sh"; chmod 0755 "$TREE/setup-user.sh"
+  [ -x "$TREE/setup-user.sh" ] && ok "setup-user.sh is executable inside the tree" \
+                               || bad "tree-exec" "setup-user.sh not executable in the materialised tree"
+  rm -rf "$TREE"
+fi
+
+# MUTATION RUN IN-SUITE: restore the pre-fix 0700 tree; the row above must then FAIL, or it is vacuous.
+MUTHA="$ROOT/ha-mktemp-mut.sh"
+printf 'ha_mktemp_mut() { local d; d="$(mktemp -d %s/host-apply.XXXXXX)" || return 1; printf "%%s" "$d"; }\n' "$ROOT" > "$MUTHA"
+# shellcheck source=/dev/null
+. "$MUTHA"
+MT="$(ha_mktemp_mut)"; MMODE="$(stat -c '%a' "$MT")"
+case "$MMODE" in
+  *[157]) bad "tree-mutation" "the pre-fix mktemp -d gave $MMODE — the row cannot discriminate";;
+  *)      ok "M: pre-fix mktemp -d yields $MMODE (root-only) — the row above discriminates";;
+esac
+rm -rf "$MT"
+
 echo
 echo "host-apply: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
