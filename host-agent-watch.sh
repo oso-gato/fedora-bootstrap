@@ -342,7 +342,7 @@ do_redeploy(){ # <repo> <issue> <workload>
     elif [ "$sc" = 0 ]; then
       st=done;   detail="redeploy '$wl' done — workload-refresh@ pulled + digest-compared + health-gated restart (no-op if already current)"
     else
-      st=failed; detail="redeploy '$wl' FAILED — workload-refresh@${wl} exit sc=$sc mainstatus=${scmain:-?} (start error, or candidate unhealthy → auto-rolled-back; host left on prior image)${err:+ — $err}"
+      st=failed; detail="redeploy '$wl' FAILED — workload-refresh@${wl} exit sc=$sc mainstatus=${scmain:-?} (start error, or candidate unhealthy → auto-rolled-back; host left on prior image)${err:+ — $err}$_why"
     fi
     printf '%s|%s\n' "$st" "$detail" > "$acted"   # record BEFORE delivery: a retry re-delivers, never re-acts
   fi
@@ -718,7 +718,7 @@ do_rebuild_devbox(){ # <repo> <issue> <workload>
   if systemctl --user start --no-block "workload-rebuild@${wl}.service" 2>/dev/null; then
     log "$ORG/$repo#$issue: rebuild-devbox FIRED for $wl (old ${oldid:0:12}); FORCE health-gated rebuild running — restore/resume/verify on completion."
   else
-    st=failed; detail="rebuild-devbox '$wl': could not start workload-rebuild@${wl} — unit missing? Box left untouched."
+    st=failed; detail="rebuild-devbox '$wl': could not start workload-rebuild@${wl} — unit missing? Box left untouched.$_why"
     rm -f "$rb"; printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"
   fi
 }
@@ -776,12 +776,39 @@ do_apply_bootstrap(){ # <repo> <issue>
       *) : ;;   # inactive/failed/dead → the oneshot terminated; read ExecMainStatus for the verdict.
     esac
     scmain="$(systemctl --user show -p ExecMainStatus --value "$unit" 2>/dev/null)"
+    # THE FAILURE MUST SAY WHY (2026-07-29). apply-bootstrap has failed and rolled back on THIS host
+    # since 2026-07-23 -- SIX DAYS, six BLOCKED tickets (#263/#264/#265, #301/#302/#303), and not one of
+    # them names the actual error. Every report said the same disjunction: "the forward setup.sh apply
+    # failed OR the host was UNHEALTHY after". Nobody can act on an OR. The verdict was read from the
+    # unit's EXIT CODE alone while the unit's own log -- which contains the real cause -- was never
+    # captured, so the evidence existed for six days and reached nobody.
+    #
+    # The cost was not the outage itself, it was the INVISIBILITY: fedora-bootstrap#283 (the one-line
+    # fix for the health-check trap that is failing the e2e-beta acceptance run RIGHT NOW) merged on
+    # 2026-07-28 and has never reached this host. The apparatus is failing its own acceptance test with
+    # a broken tool it already repaired but cannot deliver -- and could not tell anyone why.
+    #
+    # Same defect class, and the same fix, as the poller's `pr list failed` line: KEEP THE ERROR AT THE
+    # POINT OF FAILURE. Bounded to the last 40 lines so a runaway log cannot flood the ticket, and
+    # entirely best-effort -- if the journal cannot be read the ticket still posts, just without the tail.
+    _why=""
+    if [ "${scmain:-x}" != 0 ]; then
+      _why="$(journalctl --user -u "$unit" -n 40 --no-pager 2>/dev/null | tail -40)"
+      [ -n "$_why" ] && _why="
+
+<details><summary>host-apply log (last 40 lines — the actual cause)</summary>
+
+\`\`\`
+$_why
+\`\`\`
+</details>"
+    fi
     case "${scmain:-x}" in
       0) st=done;   detail="apply-bootstrap: merged \`main\` APPLIED — setup.sh re-run as root, host health-gated (verify.sh), live artifacts readback-verified byte-equal merged main (no-op if already current)." ;;
-      3) st=failed; detail="apply-bootstrap REFUSED — the host control clone is dirty or has DIVERGED from main (non-fast-forward), or main was unfetchable; a diverged host clone is a question, not a force-pull. Host left untouched." ;;
-      1) st=failed; detail="apply-bootstrap FAILED — the forward setup.sh apply failed or the host was UNHEALTHY after; ROLLED BACK + re-converged to the prior commit (best-effort — a config re-run does not uninstall packages a failed forward-apply may have added). Host on prior code; re-file after fixing." ;;
-      2) st=failed; detail="apply-bootstrap FAILED readback — the live host artifacts do NOT all equal merged main (applied != proven-live); success NOT recorded; merged tree intact + git-revertable. Investigate; re-file to retry." ;;
-      *) st=failed; detail="apply-bootstrap FAILED — host-apply executor errored (ExecMainStatus=${scmain:-?}). Host left recoverable (merged tree intact)." ;;
+      3) st=failed; detail="apply-bootstrap REFUSED — the host control clone is dirty or has DIVERGED from main (non-fast-forward), or main was unfetchable; a diverged host clone is a question, not a force-pull. Host left untouched.$_why" ;;
+      1) st=failed; detail="apply-bootstrap FAILED — the forward setup.sh apply failed or the host was UNHEALTHY after; ROLLED BACK + re-converged to the prior commit (best-effort — a config re-run does not uninstall packages a failed forward-apply may have added). Host on prior code; re-file after fixing.$_why" ;;
+      2) st=failed; detail="apply-bootstrap FAILED readback — the live host artifacts do NOT all equal merged main (applied != proven-live); success NOT recorded; merged tree intact + git-revertable. Investigate; re-file to retry.$_why" ;;
+      *) st=failed; detail="apply-bootstrap FAILED — host-apply executor errored (ExecMainStatus=${scmain:-?}). Host left recoverable (merged tree intact).$_why" ;;
     esac
     # increment 2 — a SUCCESSFUL apply may have rewritten a deployed workload Quadlet (new env on disk, NOT
     # yet live on the running container). For each CHANGED REBUILDABLE dev box, file a rebuild-devbox
@@ -813,7 +840,7 @@ do_apply_bootstrap(){ # <repo> <issue>
     : > "$fired"
     log "$ORG/$repo#$issue: apply-bootstrap FIRED (host-apply.service) — FF-pull + setup.sh + health-gate + readback running; verdict on completion."
   else
-    st=failed; detail="apply-bootstrap: could not start host-apply.service — unit missing? (the self-apply verb goes live only AFTER the one-time bootstrap manual \`setup.sh\` — it cannot install itself.) Host untouched."
+    st=failed; detail="apply-bootstrap: could not start host-apply.service — unit missing? (the self-apply verb goes live only AFTER the one-time bootstrap manual \`setup.sh\` — it cannot install itself.) Host untouched.$_why"
     printf '%s|%s\n' "$st" "$detail" > "$acted"; respond "$repo" "$issue" "$st" "$detail"
   fi
 }
