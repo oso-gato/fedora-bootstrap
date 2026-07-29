@@ -183,6 +183,75 @@ grep -qF 'Failed to start: Unit not found.' "$GH_LOG" \
   && { c=1; d="${d:+$d; }marked .applyfired despite the start failing (would poll forever)"; }
 ab_check "apply-bootstrap start FAILS → verdict names systemctl's stderr, consults NO stale journal" "$c" "$d"
 
+echo "== why_tail NAMES THE READ THAT FOUND THE CAUSE (not the tool) =="
+# The point of trying four reads is knowing WHICH one saw the executor's output. The first cut used
+# `$2` inside the helper — the first word of the COMMAND (literally `journalctl`), not the label — so
+# all four candidates rendered identically and the feature was defeated exactly where it is
+# load-bearing. 13/13 passed carrying that defect, because nothing asserted the label.
+_wt_probe(){ # <marker-present:0|1> → the rendered report text
+  ( unset -f grep
+    eval "$(sed -n '/^why_tail()/,/^}/p' "$HERE/../host-agent-watch.sh")"
+    why_block(){ printf '%s' "$1"; }
+    systemctl(){ echo "INV123"; }
+    journalctl(){
+      case "$*" in
+        *_SYSTEMD_INVOCATION_ID=INV123*)
+          if [ "${MARK:-0}" = 1 ]; then echo "[host-apply] setup.sh apply FAILED"
+          else echo "systemd[901]: Starting host-apply.service"; fi ;;
+        *) echo "systemd[901]: bookend" ;;
+      esac
+    }
+    MARK="$1" why_tail host-apply.service "host-apply log" "[host-apply]" )
+}
+_hit="$(_wt_probe 1)"; _miss="$(_wt_probe 0)"
+c=0; d=''
+case "$_hit" in *"user journal, this invocation"*) : ;; *) c=1; d="did not name its LABEL: [$_hit]";; esac
+case "$_hit" in *journalctl*) c=1; d="${d:+$d; }named the TOOL (journalctl) instead of the read";; esac
+ab_check "a marker-bearing read reports its LABEL, never the tool name" "$c" "$d"
+c=0; d=''
+case "$_miss" in *"no [host-apply] lines"*) : ;; *) c=1; d="markerless read did not say the marker was missing: [$_miss]";; esac
+# …and says only what it CHECKED. The first cut asserted "systemd bookends only" — a claim about the
+# BODY'S CONTENTS that nothing in the function ever reads. Absence of the marker is not presence of
+# bookends: the redeploy body below is neither.
+case "$_miss" in *"bookends only"*) c=1; d="${d:+$d; }asserts the body is bookends — a content claim the code never checks";; esac
+ab_check "a markerless read reports the marker was absent, and claims NOTHING about the body" "$c" "$d"
+
+echo "== why_tail's MARKER IS THE CALLER'S — the redeploy path is not stamped with host-apply's =="
+# The marker was hardcoded `[host-apply]`, which host-apply.sh ALONE emits. why_tail's other caller
+# reports a FAILED redeploy from workload-refresh@<wl>, whose journal carries container-refresh.sh's
+# `[<wl>]` lines and can never contain `[host-apply]`. So the search always missed, the fallback fired
+# unconditionally, and every redeploy failure was labelled "no [host-apply] lines — systemd bookends
+# only" directly above a body holding the actual cause. The label this PR exists to ADD was a LIE on
+# half its call sites — the same mistake, re-committed by the fix for it.
+_wt_probe2(){ # <unit> <summary-prefix> <marker> <invocation-body> → the rendered report text
+  ( unset -f grep
+    eval "$(sed -n '/^why_tail()/,/^}/p' "$HERE/../host-agent-watch.sh")"
+    why_block(){ printf '%s' "$1"; }
+    systemctl(){ echo "INV777"; }
+    journalctl(){
+      case "$*" in
+        *_SYSTEMD_INVOCATION_ID=INV777*) printf '%s\n' "$BODY" ;;
+        *) echo "systemd[901]: bookend" ;;
+      esac
+    }
+    BODY="$4" why_tail "$1" "$2" "$3" )
+}
+_rd="$(_wt_probe2 "workload-refresh@fedora-dev.service" "workload-refresh@fedora-dev log" "[fedora-dev]" \
+        "[fedora-dev] FAILED — candidate never became (healthy) after 120s")"
+c=0; d=''
+case "$_rd" in *"has [fedora-dev] output"*) : ;; *) c=1; d="did not recognise container-refresh's OWN marker: [$_rd]";; esac
+case "$_rd" in *host-apply*) c=1; d="${d:+$d; }stamped the redeploy report with host-apply's marker";; esac
+case "$_rd" in *"no [fedora-dev] lines"*) c=1; d="${d:+$d; }called a cause-bearing body markerless";; esac
+ab_check "a redeploy read carrying container-refresh's cause is NAMED as such, not mislabelled" "$c" "$d"
+# WIRING — the parameter is inert unless BOTH callers pass their own executor's marker (and under
+# `set -u` an unpassed one kills the subshell, restoring the silence this PR exists to end).
+c=0; d=''
+grep -qF 'why_tail "workload-refresh@${wl}.service" "workload-refresh@${wl} log" "[$wl]"' "$HERE/../host-agent-watch.sh" \
+  || { c=1; d="the redeploy caller does not pass container-refresh's [<workload>] marker"; }
+grep -qF 'why_tail "$unit" "host-apply log" "[host-apply]"' "$HERE/../host-agent-watch.sh" \
+  || { c=1; d="${d:+$d; }the apply caller does not pass [host-apply]"; }
+ab_check "BOTH callers pass their OWN executor's marker" "$c" "$d"
+
 echo
 echo "host-agent-dryrun: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
