@@ -293,7 +293,9 @@ why_tail(){ # <unit> <summary-prefix> → why_block of THAT UNIT'S LAST INVOCATI
     cand="$("${@:2}" 2>/dev/null)" || cand=""
     [ -n "$cand" ] || return 0
     # PREFER a read that contains the executor's own lines; remember the first non-empty as a fallback.
-    if printf '%s' "$cand" | grep -q '\[host-apply\]'; then j="$cand"; via="$2 (has [host-apply] output)"; return 0; fi
+    # $1 is the LABEL; $2 is the first word of the command (literally `journalctl`). Naming the tool
+    # instead of the read makes all four candidates render identically and defeats the entire point.
+    if printf '%s' "$cand" | grep -q '\[host-apply\]'; then j="$cand"; via="$1 (has [host-apply] output)"; return 0; fi
     [ -z "${_wt_fallback:-}" ] && { _wt_fallback="$cand"; _wt_fallback_via="$1 (no [host-apply] lines — systemd bookends only)"; }
     return 0
   }

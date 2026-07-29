@@ -183,6 +183,35 @@ grep -qF 'Failed to start: Unit not found.' "$GH_LOG" \
   && { c=1; d="${d:+$d; }marked .applyfired despite the start failing (would poll forever)"; }
 ab_check "apply-bootstrap start FAILS → verdict names systemctl's stderr, consults NO stale journal" "$c" "$d"
 
+echo "== why_tail NAMES THE READ THAT FOUND THE CAUSE (not the tool) =="
+# The point of trying four reads is knowing WHICH one saw the executor's output. The first cut used
+# `$2` inside the helper — the first word of the COMMAND (literally `journalctl`), not the label — so
+# all four candidates rendered identically and the feature was defeated exactly where it is
+# load-bearing. 13/13 passed carrying that defect, because nothing asserted the label.
+_wt_probe(){ # <marker-present:0|1> → the rendered report text
+  ( unset -f grep
+    eval "$(sed -n '/^why_tail()/,/^}/p' "$HERE/../host-agent-watch.sh")"
+    why_block(){ printf '%s' "$1"; }
+    systemctl(){ echo "INV123"; }
+    journalctl(){
+      case "$*" in
+        *_SYSTEMD_INVOCATION_ID=INV123*)
+          if [ "${MARK:-0}" = 1 ]; then echo "[host-apply] setup.sh apply FAILED"
+          else echo "systemd[901]: Starting host-apply.service"; fi ;;
+        *) echo "systemd[901]: bookend" ;;
+      esac
+    }
+    MARK="$1" why_tail host-apply.service "host-apply log" )
+}
+_hit="$(_wt_probe 1)"; _miss="$(_wt_probe 0)"
+c=0; d=''
+case "$_hit" in *"user journal, this invocation"*) : ;; *) c=1; d="did not name its LABEL: [$_hit]";; esac
+case "$_hit" in *journalctl*) c=1; d="${d:+$d; }named the TOOL (journalctl) instead of the read";; esac
+ab_check "a marker-bearing read reports its LABEL, never the tool name" "$c" "$d"
+c=0; d=''
+case "$_miss" in *"no [host-apply] lines"*) : ;; *) c=1; d="bookends-only read did not say so: [$_miss]";; esac
+ab_check "a bookends-only read says so explicitly (the state that misled everyone for six days)" "$c" "$d"
+
 echo
 echo "host-agent-dryrun: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
