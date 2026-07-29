@@ -274,28 +274,37 @@ $fence
 </details>"
 }
 why_tail(){ # <unit> <summary-prefix> → why_block of THAT UNIT'S LAST INVOCATION. Never fatal.
-  # SCOPED TO ONE RUN, and big enough to contain it (fixed 2026-07-29, measured on ticket #314).
-  # The first version took `-n 40` across the unit's WHOLE history. host-apply had run five times, so
-  # those 40 lines were entirely systemd's own start/exit bookends for five invocations and contained
-  # NOT ONE line of the script's output. The diagnostic was too small to see the thing it exists to
-  # see: it proved `status=1/FAILURE` and nothing whatever about why — six days of "A or B" replaced
-  # by one day of "it exited 1".
-  # `_SYSTEMD_INVOCATION_ID` selects exactly the most recent run, so unrelated history can never crowd
-  # out the cause, and the bound is then a ceiling on ONE run rather than a sample across many.
-  # INITIALIZED, not merely declared. `local j` leaves j UNSET, so the fallback's `[ -n "$j" ]` below
-  # reads an unset variable under `set -u` whenever the invocation id is unavailable — which is exactly
-  # the case this fallback exists to serve. That kills the $( ) subshell the caller wraps this in, so the
-  # tail comes back EMPTY and the cause is discarded silently: the SAME unset-read that wedged the first
-  # cut, surviving here only because the subshell contains it. Assign before any read.
-  local n=300 j='' inv=''
+  # TRY EVERY WAY TO SEE IT, AND SAY WHICH ONE WORKED.
+  # 36 apply-bootstrap failures produced not one line of the executor's own output, and two separate
+  # attempts to fix that (a wider tail, then invocation-scoping) both shipped without ever being
+  # confirmed to capture a cause — because nobody could check from off-host. The cause was eventually
+  # found by running the executor by hand on the terminal, where its output was plainly visible. So the
+  # output EXISTS; one of these queries can see it and the single query used here could not.
+  # Rather than guess a third time, try them in order and take the first that actually contains the
+  # executor's own marker, then NAME the query in the report. The next failure therefore tells us both
+  # the cause AND which read found it — the thing six days of "A or B" never yielded.
+  local n=300 inv='' j='' via='' cand=''
   inv="$(systemctl --user show -p InvocationID --value "$1" 2>/dev/null)"
-  if [ -n "$inv" ]; then
-    j="$(journalctl --user _SYSTEMD_INVOCATION_ID="$inv" -n "$n" --no-pager 2>/dev/null)"
-  fi
-  # fall back to the unit-scoped read if the invocation id is unavailable (older systemd, transient race)
-  [ -n "$j" ] || j="$(journalctl --user -u "$1" -n "$n" --no-pager 2>/dev/null)" || return 0
+  # Ordered candidates. `--user` first (the unit is a --user unit); the system journal last, because
+  # the executor escalates via sudo and a root child's records may land there. A query that errors or
+  # is not permitted simply yields nothing and is skipped.
+  _wt_try(){ # <label> <command...>
+    [ -n "$j" ] && return 0
+    cand="$("${@:2}" 2>/dev/null)" || cand=""
+    [ -n "$cand" ] || return 0
+    # PREFER a read that contains the executor's own lines; remember the first non-empty as a fallback.
+    if printf '%s' "$cand" | grep -q '\[host-apply\]'; then j="$cand"; via="$2 (has [host-apply] output)"; return 0; fi
+    [ -z "${_wt_fallback:-}" ] && { _wt_fallback="$cand"; _wt_fallback_via="$1 (no [host-apply] lines — systemd bookends only)"; }
+    return 0
+  }
+  _wt_fallback=''; _wt_fallback_via=''
+  [ -n "$inv" ] && _wt_try "user journal, this invocation" journalctl --user _SYSTEMD_INVOCATION_ID="$inv" -n "$n" --no-pager
+  _wt_try "user journal, unit-scoped"   journalctl --user -u "$1" -n "$n" --no-pager
+  [ -n "$inv" ] && _wt_try "system journal, this invocation" journalctl _SYSTEMD_INVOCATION_ID="$inv" -n "$n" --no-pager
+  _wt_try "system journal, unit-scoped" journalctl -u "$1" -n "$n" --no-pager
+  if [ -z "$j" ]; then j="${_wt_fallback:-}"; via="${_wt_fallback_via:-}"; fi
   [ -n "$j" ] || return 0
-  why_block "$2 (last invocation — the actual cause)" "$j"
+  why_block "$2 (last invocation — via ${via:-unknown query})" "$j"
 }
 
 if [ "${1:-}" = "--selftest" ]; then
