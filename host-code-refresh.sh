@@ -85,6 +85,7 @@ hcr_manifest() {
         host-agent-watch.sh \
         gh-app-auth.sh \
         host-gh-refresh.sh \
+        container-config.sh \
         host-code-refresh.sh
     do
         printf '0755\t%s\t%s\n' "$s" "$bin/$s"
