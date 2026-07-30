@@ -39,11 +39,16 @@ flock -n 9 || { echo "[live-gate-watch] another run holds the lock; skipping"; e
 
 # ---- R9 FLEET HALT (apparatus fedora-dev#135): read the maintainer-bound `halt` signal at the TOP of
 # the tick — BEFORE the sweep/discovery/build/post below — so a fleet SOFT STOP takes effect within one
-# tick. HALTED / persistently-unreadable ⇒ OBSERVE-ONLY: log and exit cleanly (sweep nothing, build
+# tick. HALTED ⇒ OBSERVE-ONLY: log and exit cleanly (sweep nothing, build
 # nothing, post nothing); un-halt resumes next tick (the timer keeps firing). An in-flight build from a
 # prior tick already completed before this tick could acquire the flock above, so it is never touched.
-# The reader (fleet-halt.sh) mirrors the dev-side bin/fleet-halt.sh contract and fails CLOSED toward
-# stopping, so a missing/unreadable reader parks this tick rather than acting blind. ----
+# The reader (fleet-halt.sh) mirrors the dev-side bin/fleet-halt.sh contract. A MISSING or CRASHED
+# reader still parks this tick (fail-closed by construction — see the `! -x` guard below and the rc
+# check: any non-zero is observe-only). An UNREADABLE SIGNAL, however, is NOT a halt as of 2026-07-30 —
+# the reader returns CLEAR/rc 0 and this tick proceeds, because a GitHub blip freezing the host was
+# taking the outage-REPAIR engine offline exactly when it was needed (935 dev-side false halts, zero
+# maintainer-thrown; the `halt` label has never been applied by anyone). The reader's own header carries
+# the measurement and the disclosed residual. ----
 FLEET_HALT="$HOME/.local/bin/fleet-halt.sh"; [ -x "$FLEET_HALT" ] || FLEET_HALT="$HERE/fleet-halt.sh"
 if [ ! -x "$FLEET_HALT" ]; then
   echo "[live-gate-watch] fail-closed: R9 halt reader (fleet-halt.sh) missing/not executable — cannot read the halt signal; observe-only this tick"
