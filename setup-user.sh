@@ -315,7 +315,7 @@ WORKLOAD_CONTAINERS=(
 # ~15 min so a merged host-code PR becomes LIVE between full setup.sh runs — with a fail-closed live
 # read-back. To change the managed set, edit hcr_manifest in host-code-refresh.sh (it covers:
 # container-refresh, claudebox-busy-probe, validate-candidate, build-candidate, throwaway-sweep,
-# live-gate-run, live-gate-watch, fleet-halt, host-agent-watch, gh-app-auth, host-gh-refresh, and
+# live-gate-run, live-gate-watch, host-agent-watch, gh-app-auth, host-gh-refresh, and
 # host-code-refresh itself + all their systemd --user units). Sourcing defines the functions without
 # running the absorber (its main is guarded on direct execution).
 # shellcheck source=/dev/null

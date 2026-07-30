@@ -81,7 +81,6 @@ hcr_manifest() {
         throwaway-sweep.sh \
         live-gate-run.sh \
         live-gate-watch.sh \
-        fleet-halt.sh \
         host-agent-watch.sh \
         gh-app-auth.sh \
         host-gh-refresh.sh \
