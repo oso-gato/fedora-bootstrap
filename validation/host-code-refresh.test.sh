@@ -198,15 +198,22 @@ echo "== CASE 9: a FAILED APPLY must NOT report green (the hole: verify.sh FAILs
 # FAIL, incident 2026-07-17).
 # THE FAILURE IS FORCED AT THE INSTALL STEP, not by touching the clone: removing a source would make the
 # clone DIRTY and trip the earlier dirty-clone guard, so the row would pass on the wrong branch (it did,
-# first draft). An unwritable DESTINATION leaves the clone pristine and fails exactly `install -D`.
+# first draft). A destination `install -D` CANNOT create leaves the clone pristine and fails exactly there.
+# THE DESTINATION IS BLOCKED BY TYPE, NOT BY PERMISSION (the first draft used `chmod 0555` on the bin dir
+# and reported OK applied under the live-gate, which builds as ROOT — root bypasses the write bit, the same
+# reason CASE 7 above SKIPs as root; the gate run is what exposed it). So the bin dir's PARENT is a regular
+# FILE: `install -D` must mkdir through it and gets ENOTDIR, which is a kernel type error no uid bypasses —
+# the case fires identically as root in the live-gate build and as `core` on the dev box and the real host.
 hcr9_run(){ # <tag> <absorber> → sets ST9/RC9
     local tag="$1" abs="$2"
     build_repo "$tag"; advance_origin "adv-$tag"
-    local b="$ROOT/$tag-inst/bin" u="$ROOT/$tag-inst/units" st="$ROOT/$tag-inst/state"
-    mkdir -p "$b" "$u" "$st"; chmod 0555 "$b"
+    local blocker="$ROOT/$tag-inst/not-a-dir"
+    local b="$blocker/bin" u="$ROOT/$tag-inst/units" st="$ROOT/$tag-inst/state"
+    mkdir -p "$ROOT/$tag-inst" "$u" "$st"
+    : > "$blocker"          # a FILE where install -D must create a directory ⇒ ENOTDIR for EVERY uid
     HCR_CLONE="$C_WORK" HCR_BIN_DIR="$b" HCR_UNIT_DIR="$u" HCR_STATE_DIR="$st" \
         SYSTEMCTL_LOG="$ROOT/$tag.sclog" PATH="$BIN:$PATH" bash "$abs" > "$ROOT/$tag.out" 2>&1
-    RC9=$?; ST9="$(cat "$st/status" 2>/dev/null)"; chmod 0755 "$b" 2>/dev/null || true
+    RC9=$?; ST9="$(cat "$st/status" 2>/dev/null)"
 }
 hcr9_run c9 "$ABSORBER"
 { [ "$RC9" != 0 ] && printf '%s' "$ST9" | grep -qE '^[0-9]+ FAILED ' \
@@ -221,7 +228,9 @@ hcr9_run c9 "$ABSORBER"
 echo "== MUTATION: strip the FAILED-install annotation → the same failed apply reports green again =="
 MUT9="$ROOT/hcr-mut-green.sh"
 sed 's|^        HCR_OUTCOME="FAILED install .*$||' "$ABSORBER" > "$MUT9"
-if cmp -s "$ABSORBER" "$MUT9"; then bad "mut9-vacuous" "the sed changed nothing"; else
+# sha256sum, not `cmp`: the live-gate image ships no diffutils, so `cmp` is a command-not-found whose
+# non-zero rc silently took the else-branch — the vacuity guard was inert exactly where it had to hold.
+if [ "$(sha256sum <"$ABSORBER")" = "$(sha256sum <"$MUT9")" ]; then bad "mut9-vacuous" "the sed changed nothing"; else
   hcr9_run c9m "$MUT9"
   printf '%s' "$ST9" | grep -qE '^[0-9]+ ran$' \
     && ok "MUTATION BITES: without the annotation the same failed apply writes 'ran' (reads GREEN)" \
