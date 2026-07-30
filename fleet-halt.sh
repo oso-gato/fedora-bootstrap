@@ -18,19 +18,44 @@
 #     and an App REMOVING a maintainer's `halt` does NOT un-halt it (the maintainer's label still stands).
 #   * No maintainer label event at all ⇒ CLEAR.
 #
-# FAILS CLOSED TOWARD STOPPING (a deliberate inversion of the loop's usual fail-safe-toward-progress
-# bias), softened so a blip is not an outage:
+# AN UNREADABLE SIGNAL IS NOT A HALT (fail direction INVERTED 2026-07-30 — ported from the dev side's
+# fedora-dev#274 STEP 3, which made exactly this change on 2026-07-28 and left this half behind).
 #   * The control issue ABSENT (a clean empty search) is a DEFINITE "no halt asserted" ⇒ CLEAR.
 #   * An UNREADABLE signal (discovery/timeline API error, or a role check that GitHub could not answer
-#     definitively) PAUSES this one sweep (observe-only); only K consecutive unreadable reads escalate to
-#     a declared persistent halt. A 404 on the role check IS definitive ("not a collaborator") ⇒ the
-#     event is inert, NOT unreadable — that is what keeps an App-applied label genuinely inert.
+#     definitively) ⇒ CLEAR, logged, and logged LOUDLY past K CONSECUTIVE unreadable reads. It NEVER
+#     escalates to a halt, and a clean read resets the streak — which now governs only how loudly the
+#     read logs, never whether work proceeds. A 404 on the role check IS definitive ("not a
+#     collaborator") ⇒ the event is inert, NOT unreadable — that keeps an App-applied label inert.
+#   * What still HALTS is unchanged: a label READ, PRESENT, and applied by a MAINTAINER.
+#
+# WHY, MEASURED — and the numbers are the whole argument. On the DEV side this reader fired 935 halts
+# of which ZERO were maintainer-thrown: 100% "the API returned garbage". They suppressed 338 concrete
+# actions, and one of them BLOCKED THE TICKET THAT WOULD HAVE REPAIRED A SIX-DAY OUTAGE. Independently,
+# the `halt` label on the control issue has NEVER been applied by anyone, all-time (0 timeline events,
+# verified 2026-07-30) — so the protection fail-closed buys has not once been needed, while its cost is
+# routine. Freezing the HOST is the worse half of that trade: the host is what REPAIRS an outage, so a
+# GitHub blip was taking the repair engine offline at precisely the moment it was needed.
+#
+# THE REASONING THIS RETIRES: "a gate that cannot be read cannot be trusted to say go." That mistook
+# this label for a safety gate. Merge safety is the two INDEPENDENT App-identity gates, and R9's hard
+# stop is App-key REVOCATION — which needs no GitHub read to work. Failing this label open weakens
+# neither. DISCLOSED RESIDUAL, honestly: if a maintainer throws the switch for the first time ever AND
+# the signal is unreadable at that same moment, the host keeps acting until a read succeeds. Accepted —
+# key revocation is the stop that does not depend on a readable signal.
+#
+# NOT MEASURED HERE (stated rather than implied): the 935 figure is the DEV box's. The host's own
+# false-halt count lives in host journald and was not read for this change. The two read the SAME
+# GitHub API from the same network, so a comparable rate is a fair INFERENCE — not a measurement.
 #
 # OUTPUT — a single state word on stdout + exit code (the caller branches on the code):
 #   CLEAR              exit 0   → proceed (act normally)
 #   HALTED             exit 10  → observe-only (maintainer halt asserted)
-#   PAUSED             exit 11  → observe-only (transient unreadable, < K consecutive)
-#   HALTED-UNREADABLE  exit 12  → observe-only (K consecutive unreadable → declared persistent halt)
+# RETIRED: PAUSED (11) and HALTED-UNREADABLE (12) can no longer be produced. The tokens stay documented
+# because a DEPLOYED caller predating this change may still branch on them, and every host caller treats
+# any non-zero rc as observe-only — so a stale caller reading a code this never emits is inert, not wrong.
+# Callers still treat EVERY non-zero rc (a missing reader's 127 included) as "no new action", so a
+# MISSING or CRASHED reader remains fail-closed BY CONSTRUCTION: the reader itself decides, and one that
+# cannot run at all still stops the sweep. That is the boundary this change deliberately does NOT move.
 # A human-readable line goes to stderr (→ journald). `--selftest` unit-tests the pure decision core with
 # no gh/network. Runs INSIDE claudebox (needs gh + its auth); invoked by a sweeper, not a unit of its own.
 set -uo pipefail
@@ -144,18 +169,25 @@ main(){
       log "FLEET HALT asserted by a maintainer on $ORG/$REPO ('$LABEL' label) — sweepers observe-only until removed"
       exit 10;;
     UNREADABLE)
+      # AN UNREADABLE SIGNAL IS NOT A HALT. The counter survives, but it now governs only how LOUDLY
+      # this reads — never whether work proceeds. Emitting the host's own proceed token (CLEAR) rather
+      # than the dev side's (RUN) is deliberate: four deployed host callers branch on this dialect, and
+      # this change is about the fail DIRECTION only. Aligning the two vocabularies is a separate,
+      # caller-visible change and is NOT smuggled in here.
       n="$(bump_counter)"
+      echo CLEAR
       if [ "$n" -ge "$K" ]; then
-        echo HALTED-UNREADABLE
-        log "FLEET HALT signal UNREADABLE ${n}× (≥ K=$K consecutive) — declaring persistent halt (fail-closed); observe-only"
-        exit 12
+        log "FLEET HALT signal UNREADABLE ${n}× (≥ K=$K consecutive) — this is NOT a halt; proceeding. Nobody has asserted a halt; the signal cannot be READ. If this persists, GitHub reachability is the fault to chase — not the loop."
+      else
+        log "FLEET HALT signal UNREADABLE ${n}× (< K=$K) — not a halt; proceeding"
       fi
-      echo PAUSED
-      log "FLEET HALT signal UNREADABLE ${n}× (< K=$K) — pausing THIS sweep (fail-closed); observe-only"
-      exit 11;;
+      exit 0;;
     *)
+      # An UNEXPECTED state is NOT the unreadable case: the reader returned something no branch above
+      # recognises, which is a defect in this reader rather than a fact about GitHub. That stays
+      # fail-closed — we do not know what it means, so we do not act on a guess.
       echo "$raw"
-      log "FLEET HALT reader returned an unexpected state '$raw' — treating as observe-only (fail-closed)"
+      log "FLEET HALT reader returned an unexpected state '$raw' — treating as observe-only (fail-closed; an unrecognised verdict is a reader defect, not an unreadable signal)"
       exit 10;;
   esac
 }

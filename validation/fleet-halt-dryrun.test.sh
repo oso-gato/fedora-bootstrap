@@ -98,29 +98,52 @@ fh_case "no halt-label events at all ⇒ CLEAR" CLEAR 0 \
 fh_case "control issue ABSENT (empty search) ⇒ CLEAR" CLEAR 0 \
   FAKE_ISSUE_NUM=
 
-echo "== fleet-halt.sh: FAIL-CLOSED — unreadable pauses, K consecutive declares a persistent halt =="
-fh_case "discovery API error ⇒ PAUSED (transient)" PAUSED 11 \
+echo "== fleet-halt.sh: AN UNREADABLE SIGNAL IS NOT A HALT (fail direction inverted 2026-07-30) =="
+# These three rows are the INVERSION of what this file asserted before: each previously demanded PAUSED/11
+# (freeze the host on a GitHub blip). Measured on the dev side: 935 such halts, ZERO maintainer-thrown,
+# 338 actions suppressed, one of them blocking the repair of a six-day outage. The `halt` label has never
+# been applied by anyone, all-time. So the frozen-on-noise behaviour was pure cost.
+fh_case "discovery API error ⇒ CLEAR (not a halt)" CLEAR 0 \
   FAKE_ISSUE_FAIL=1
-fh_case "timeline API error ⇒ PAUSED (transient)" PAUSED 11 \
+fh_case "timeline API error ⇒ CLEAR (not a halt)" CLEAR 0 \
   FAKE_ISSUE_NUM=128 FAKE_TIMELINE_FAIL=1
-fh_case "role check UNREADABLE on the halt actor ⇒ PAUSED (fail-closed, not inert)" PAUSED 11 \
+fh_case "role check UNREADABLE on the halt actor ⇒ CLEAR (not a halt, still not inert-by-accident)" CLEAR 0 \
   FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled flaky' FAKE_UNREADABLE=flaky
 
-echo "-- K-debounce escalation: 3 consecutive unreadable reads on ONE counter ⇒ HALTED-UNREADABLE --"
+echo "-- what still HALTS, and what an UNRECOGNISED verdict does (the boundaries NOT moved) --"
+fh_case "a MAINTAINER-applied label still HALTS" HALTED 10 \
+  FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled arthur' FAKE_MAINTAINERS=arthur
+
+echo "-- K-debounce now governs LOUDNESS ONLY: every read proceeds, the Kth says so loudly --"
 # NOT a subshell — ck must increment pass/fail in the PARENT. One shared HOME/state so the counter carries
-# across the five reads; env passed inline per read.
+# across the five reads; env passed inline per read. STDERR is captured per read, because the counter's
+# whole remaining job is the WORDING: if the loud line never appears, a persistent outage would proceed
+# in silence, which is the one thing this must not do.
 kh="$ROOT/kh"; mkdir -p "$kh"
-s1=$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r1=$?
-s2=$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r2=$?
-s3=$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r3=$?
-# a CLEAR read must RESET the counter so a later blip starts over (not escalate immediately)
-s4=$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k FAKE_ISSUE_NUM='' PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r4=$?
-s5=$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k FAKE_ISSUE_FAIL=1 PATH="$BIN:$PATH" bash "$FH" 2>/dev/null); r5=$?
-if [ "$s1|$r1" = "PAUSED|11" ] && [ "$s2|$r2" = "PAUSED|11" ] && [ "$s3|$r3" = "HALTED-UNREADABLE|12" ] \
-   && [ "$s4|$r4" = "CLEAR|0" ] && [ "$s5|$r5" = "PAUSED|11" ]; then
-  ck 1 "PAUSED,PAUSED,HALTED-UNREADABLE then CLEAR resets → PAUSED"
+kread(){ # <env…> → sets KS (state), KR (rc), KE (stderr)
+  KE="$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k PATH="$BIN:$PATH" env "$@" bash "$FH" 2>&1 >/dev/null)"
+  KS="$(HOME="$kh" FLEET_HALT_STATE="$kh/st" FLEET_HALT_TAG=k PATH="$BIN:$PATH" env "$@" bash "$FH" 2>/dev/null)"; KR=$?
+}
+# NB each kread runs the reader TWICE (once for stderr, once for stdout+rc), so the counter advances by 2.
+# That is fine for a LOUDNESS assertion — we need only to cross K, never to land on it exactly.
+kread FAKE_ISSUE_FAIL=1;  s1="$KS|$KR"; e1="$KE"
+kread FAKE_ISSUE_FAIL=1;  s2="$KS|$KR"; e2="$KE"
+kread FAKE_ISSUE_NUM='';  s4="$KS|$KR"                      # a CLEAR read must RESET the streak
+kread FAKE_ISSUE_FAIL=1;  s5="$KS|$KR"; e5="$KE"
+if [ "$s1" = "CLEAR|0" ] && [ "$s2" = "CLEAR|0" ] && [ "$s4" = "CLEAR|0" ] && [ "$s5" = "CLEAR|0" ]; then
+  ck 1 "every unreadable read proceeds (CLEAR/0), before and after a clean read"
 else
-  ck 0 "K-debounce escalation+reset" "got $s1/$r1,$s2/$r2,$s3/$r3,$s4/$r4,$s5/$r5"
+  ck 0 "unreadable reads must all proceed" "got $s1,$s2,$s4,$s5"
+fi
+if printf '%s' "$e1" | grep -q 'not a halt' && printf '%s' "$e2" | grep -q 'GitHub reachability'; then
+  ck 1 "the Kth consecutive unreadable read escalates the LOG (never the verdict)"
+else
+  ck 0 "K-debounce loudness" "first='$e1' later='$e2'"
+fi
+if printf '%s' "$e5" | grep -q 'not a halt' && ! printf '%s' "$e5" | grep -q 'GitHub reachability'; then
+  ck 1 "a clean read RESETS the streak — the next blip is quiet again"
+else
+  ck 0 "streak reset" "after-reset stderr='$e5'"
 fi
 
 echo "== MUTATION-CHECK: the safety assertions BITE — inject a regression, require the guard case to FAIL =="
@@ -142,13 +165,19 @@ mut_case(){
     ck 1 "$desc — mutant caught (got '$out'/$rc ≠ good '$good_state'/$good_rc)"
   fi
 }
-MUT_FO="$ROOT/mut-failopen.sh"     # FAIL-OPEN regression: every unreadable read ⇒ CLEAR (proceed-when-blind)
-sed 's/echo UNREADABLE/echo CLEAR/g' "$FH" > "$MUT_FO"
+# MUT_FC — the FAIL-CLOSED regression, i.e. the behaviour this change REMOVES. The old suite mutated in
+# the opposite direction (UNREADABLE ⇒ CLEAR) because fail-closed was then the property under guard; that
+# mutant is now the REAL code, so it would be inert and must not survive as a row. The mutation that bites
+# today is restoring the freeze: `echo CLEAR` on its own line exists ONLY in the UNREADABLE arm (the CLEAR
+# arm's is `reset_counter; echo CLEAR; exit 0;;`), so this anchors precisely and nowhere else.
+MUT_FC="$ROOT/mut-failclosed.sh"
+sed 's/^      echo CLEAR$/      echo PAUSED/' "$FH" > "$MUT_FC"
+[ "$(grep -c '^      echo PAUSED$' "$MUT_FC")" = 1 ] || ck 0 "MUT_FC anchor" "the fail-closed mutation did not apply exactly once — the row below would be vacuous"
 MUT_APP="$ROOT/mut-appactive.sh"   # APP-ACTIVE regression: a non-maintainer/App event is no longer inert
 sed 's/0) continue;;/0) case "$event" in labeled) echo HALTED;; *) echo CLEAR;; esac; return 0;;/' "$FH" > "$MUT_APP"
-mut_case "$MUT_FO"  "fail-closed bites: discovery-error mutant no longer PAUSED" PAUSED 11 \
+mut_case "$MUT_FC"  "proceed-on-unreadable bites: discovery-error mutant no longer CLEAR" CLEAR 0 \
   FAKE_ISSUE_FAIL=1
-mut_case "$MUT_FO"  "fail-closed bites: role-check-U mutant no longer PAUSED"    PAUSED 11 \
+mut_case "$MUT_FC"  "proceed-on-unreadable bites: role-check-U mutant no longer CLEAR"    CLEAR 0 \
   FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled flaky' FAKE_UNREADABLE=flaky
 mut_case "$MUT_APP" "App-inert bites: App-label mutant no longer CLEAR"          CLEAR  0 \
   FAKE_ISSUE_NUM=128 FAKE_TIMELINE=$'labeled botapp' FAKE_MAINTAINERS=arthur
