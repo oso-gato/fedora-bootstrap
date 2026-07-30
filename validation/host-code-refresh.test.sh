@@ -191,6 +191,43 @@ else
     echo "        the mechanism is covered by CASE 6 here + not-writable is exercised as core on the dev box + by verify.sh on the real host)"
 fi
 
+echo "== CASE 9: a FAILED APPLY must NOT report green (the hole: verify.sh FAILs only on BLOCKED|FAILED) =="
+# hcr_run defaults the heartbeat to "ran", which verify.sh reads as HEALTHY. Three failure paths in
+# hcr_main used to return WITHOUT assigning HCR_OUTCOME, so a failed apply of merged host code reported
+# green — defeating this absorber's entire stated purpose (make a non-self-refreshing host a LOUD verify
+# FAIL, incident 2026-07-17).
+# THE FAILURE IS FORCED AT THE INSTALL STEP, not by touching the clone: removing a source would make the
+# clone DIRTY and trip the earlier dirty-clone guard, so the row would pass on the wrong branch (it did,
+# first draft). An unwritable DESTINATION leaves the clone pristine and fails exactly `install -D`.
+hcr9_run(){ # <tag> <absorber> → sets ST9/RC9
+    local tag="$1" abs="$2"
+    build_repo "$tag"; advance_origin "adv-$tag"
+    local b="$ROOT/$tag-inst/bin" u="$ROOT/$tag-inst/units" st="$ROOT/$tag-inst/state"
+    mkdir -p "$b" "$u" "$st"; chmod 0555 "$b"
+    HCR_CLONE="$C_WORK" HCR_BIN_DIR="$b" HCR_UNIT_DIR="$u" HCR_STATE_DIR="$st" \
+        SYSTEMCTL_LOG="$ROOT/$tag.sclog" PATH="$BIN:$PATH" bash "$abs" > "$ROOT/$tag.out" 2>&1
+    RC9=$?; ST9="$(cat "$st/status" 2>/dev/null)"; chmod 0755 "$b" 2>/dev/null || true
+}
+hcr9_run c9 "$ABSORBER"
+{ [ "$RC9" != 0 ] && printf '%s' "$ST9" | grep -qE '^[0-9]+ FAILED ' \
+  && ! printf '%s' "$ST9" | grep -qE '^[0-9]+ ran$'; } \
+  && ok "a failed install writes a FAILED heartbeat — verify.sh will FAIL, not read green" \
+  || bad "failed-apply-green" "rc=$RC9 status='$ST9' (a bare 'ran' here is the defect)"
+
+{ ! grep -q 'refusing to install a partial set' "$ABSORBER"; } \
+  && ok "the missing-source warning no longer claims a refusal the code does not perform" \
+  || bad "untrue-warn" "the 'refusing to install a partial set' text survives, but the loop continues"
+
+echo "== MUTATION: strip the FAILED-install annotation → the same failed apply reports green again =="
+MUT9="$ROOT/hcr-mut-green.sh"
+sed 's|^        HCR_OUTCOME="FAILED install .*$||' "$ABSORBER" > "$MUT9"
+if cmp -s "$ABSORBER" "$MUT9"; then bad "mut9-vacuous" "the sed changed nothing"; else
+  hcr9_run c9m "$MUT9"
+  printf '%s' "$ST9" | grep -qE '^[0-9]+ ran$' \
+    && ok "MUTATION BITES: without the annotation the same failed apply writes 'ran' (reads GREEN)" \
+    || bad "mut9" "mutant status='$ST9' (expected the bare 'ran' the fix removes)"
+fi
+
 echo "== MUTATION: neutralize the BLOCKED not-provisioned annotation → heartbeat loses the reason =="
 # Proves the HCR_OUTCOME annotation carries the reason into the heartbeat (not incidental). The mutant still
 # no-ops (the not-provisioned GUARD is untouched) but its heartbeat no longer says WHY. No `cmp`/diffutils
