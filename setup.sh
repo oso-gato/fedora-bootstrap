@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.79 (FLEET HALT fail direction INVERTED on the host — an UNREADABLE halt signal is no longer a halt: fleet-halt.sh returns CLEAR/rc 0 and the sweep proceeds, so a GitHub blip stops freezing the outage-repair engine. Ports the dev side's fedora-dev#274 STEP 3; only a READ, PRESENT, maintainer-applied label halts. Changelog: UPGRADING.md.)
+# Version: 1.2.80 (THE FLEET SOFT HALT IS DELETED — R9 retires it and keeps revocation as the stop of record. 0 maintainer throws ever, 935 false self-fires, 338 suppressed action-attempts against one PR at one sha; it duplicated two stronger stops and needed GitHub readable. Changelog: UPGRADING.md.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

@@ -470,10 +470,10 @@ approved_by_maintainer(){ # <issue>
   while IFS=$'\t' read -r event actor; do
     [ -n "$event" ] && [ -n "$actor" ] || continue
     if role="$(gh api "repos/$ORG/$REPO/collaborators/$actor/permission" -q '.role_name // .permission' 2>/dev/null)"; then
-      # App/bot actors answer 200 + role_name:"" (empirically pinned by fleet-halt.sh), so they resolve
+      # App/bot actors answer 200 + role_name:"" (empirically pinned), so they resolve
       # DEFINITIVELY to m=0 (inert). NB: a non-collaborator login (e.g. a departed one) 404s, and
       # `gh api` exits rc≠0 on that just like on a rate-limit/5xx — so a 404 lands in the U branch
-      # below, NOT here (unlike fleet-halt.sh's 3-way check, which parses stderr for HTTP 404).
+      # below, NOT here (unlike a 3-way check that parses stderr for HTTP 404).
       case "$role" in admin|maintain) m=1;; *) m=0;; esac
     else
       # unresolvable actor ⇒ U: fail-closed (approval_fold answers NO outright, the strictest read —
