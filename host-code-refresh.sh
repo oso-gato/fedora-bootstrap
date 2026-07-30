@@ -2,7 +2,7 @@
 # host-code-refresh.sh — the HOST-SIDE SELF-ARMING ABSORBER (apparatus "F16").
 #
 # THE PROBLEM IT SOLVES ("merged ≠ live"): the host has no product image and no CI-published
-# artifact — its own control code (the watcher/refresh/gate/halt scripts + their systemd --user
+# artifact — its own control code (the watcher/refresh/gate scripts + their systemd --user
 # units) becomes LIVE only when `main` is pulled into the control clone and the user-layer install
 # is re-run (the maintainer's `git -C /opt/fedora-bootstrap pull && setup-user.sh`). So a PR the
 # poller merges to `main` is NOT yet running on the host. THIS absorber closes that gap

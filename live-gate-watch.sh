@@ -37,12 +37,7 @@ exec 9>"$STATE/watch.lock"
 flock -n 9 || { echo "[live-gate-watch] another run holds the lock; skipping"; exit 0; }
 [ -x "$RUNNER" ] || { echo "FATAL: live-gate-run.sh not found"; exit 2; }
 
-# ---- R9 FLEET HALT (apparatus fedora-dev#135): read the maintainer-bound `halt` signal at the TOP of
-# the tick — BEFORE the sweep/discovery/build/post below — so a fleet SOFT STOP takes effect within one
-# tick. HALTED ⇒ OBSERVE-ONLY: log and exit cleanly (sweep nothing, build
-# nothing, post nothing); un-halt resumes next tick (the timer keeps firing). An in-flight build from a
-# prior tick already completed before this tick could acquire the flock above, so it is never touched.
-# NO SOFT STOP IS READ HERE. The maintainer-thrown HALT label was RETIRED 2026-07-30 (R9, fedora-dev#337):
+# ---- NO SOFT STOP IS READ HERE. The maintainer-thrown HALT label was RETIRED 2026-07-30 (R9, fedora-dev#337):
 # thrown by a maintainer 0 times ever, fired by itself 935 times (all false, 574 of them a broken tool
 # inside the box), suppressing 338 real actions — one the ticket that would have repaired a six-day
 # outage. It duplicated two stronger stops needing no code (App-key revocation, container stop) and
