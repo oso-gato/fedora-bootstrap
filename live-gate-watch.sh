@@ -39,9 +39,9 @@ flock -n 9 || { echo "[live-gate-watch] another run holds the lock; skipping"; e
 
 # ---- NO SOFT STOP IS READ HERE. The maintainer-thrown HALT label was RETIRED 2026-07-30 (R9, fedora-dev#337):
 # thrown by a maintainer 0 times ever, fired by itself 935 times (all false, 574 of them a broken tool
-# inside the box), suppressing 338 real actions — one the ticket that would have repaired a six-day
-# outage. It duplicated two stronger stops needing no code (App-key revocation, container stop) and
-# depended on GitHub being readable, so it failed exactly when an outage made it matter. Stopping this
+# inside the box), suppressing 338 action-attempts — ONE PR at ONE sha re-declined on 338 consecutive
+# polls, not 338 distinct actions. It duplicated two stronger stops needing no code (App-key revocation,
+# container stop) and depended on GitHub being readable, so it failed when an outage made it matter. Stopping this
 # watcher is now: revoke the key, or stop the container. ----
 
 # ---- ORPHAN SWEEP + CACHE GC (opportunistic, self-throttled, flock-guarded) ----

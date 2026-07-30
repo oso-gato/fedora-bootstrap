@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.80 (THE FLEET SOFT HALT IS DELETED — R9 retires it and keeps revocation as the stop of record. 0 maintainer throws ever, 935 false self-fires, 338 real actions suppressed; it duplicated two stronger stops and needed GitHub readable. Changelog: UPGRADING.md.)
+# Version: 1.2.80 (THE FLEET SOFT HALT IS DELETED — R9 retires it and keeps revocation as the stop of record. 0 maintainer throws ever, 935 false self-fires, 338 suppressed action-attempts against one PR at one sha; it duplicated two stronger stops and needed GitHub readable. Changelog: UPGRADING.md.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the
