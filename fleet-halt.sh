@@ -39,9 +39,10 @@
 # THE REASONING THIS RETIRES: "a gate that cannot be read cannot be trusted to say go." That mistook
 # this label for a safety gate. Merge safety is the two INDEPENDENT App-identity gates, and R9's hard
 # stop is App-key REVOCATION — which needs no GitHub read to work. Failing this label open weakens
-# neither. DISCLOSED RESIDUAL, honestly: if a maintainer throws the switch for the first time ever AND
-# the signal is unreadable at that same moment, the host keeps acting until a read succeeds. Accepted —
-# key revocation is the stop that does not depend on a readable signal.
+# neither. DISCLOSED RESIDUAL, stated at its full width: for the DURATION of any unreadable window, a
+# standing halt is UNHONORED — not just a switch thrown for the first time, but one already standing
+# that this read cannot see; the host keeps acting until a read succeeds. Accepted — key revocation is
+# the stop that does not depend on a readable signal.
 #
 # NOT MEASURED HERE (stated rather than implied): the 935 figure is the DEV box's. The host's own
 # false-halt count lives in host journald and was not read for this change. The two read the SAME
@@ -51,11 +52,12 @@
 #   CLEAR              exit 0   → proceed (act normally)
 #   HALTED             exit 10  → observe-only (maintainer halt asserted)
 # RETIRED: PAUSED (11) and HALTED-UNREADABLE (12) can no longer be produced. The tokens stay documented
-# because a DEPLOYED caller predating this change may still branch on them, and every host caller treats
-# any non-zero rc as observe-only — so a stale caller reading a code this never emits is inert, not wrong.
-# Callers still treat EVERY non-zero rc (a missing reader's 127 included) as "no new action", so a
-# MISSING or CRASHED reader remains fail-closed BY CONSTRUCTION: the reader itself decides, and one that
-# cannot run at all still stops the sweep. That is the boundary this change deliberately does NOT move.
+# because the rc contract is what a caller binds to and these codes were part of it: a consumer still
+# branching on them is INERT (this reader never emits them again), not wrong. The ONE deployed consumer
+# is live-gate-watch.sh, and it branches on the EXIT CODE, never the token — treating EVERY non-zero rc
+# (a missing reader's 127 included) as "no new action". So a MISSING or CRASHED reader remains
+# fail-closed BY CONSTRUCTION: the reader itself decides, and one that cannot run at all still stops the
+# sweep. That is the boundary this change deliberately does NOT move.
 # A human-readable line goes to stderr (→ journald). `--selftest` unit-tests the pure decision core with
 # no gh/network. Runs INSIDE claudebox (needs gh + its auth); invoked by a sweeper, not a unit of its own.
 set -uo pipefail
@@ -171,9 +173,11 @@ main(){
     UNREADABLE)
       # AN UNREADABLE SIGNAL IS NOT A HALT. The counter survives, but it now governs only how LOUDLY
       # this reads — never whether work proceeds. Emitting the host's own proceed token (CLEAR) rather
-      # than the dev side's (RUN) is deliberate: four deployed host callers branch on this dialect, and
-      # this change is about the fail DIRECTION only. Aligning the two vocabularies is a separate,
-      # caller-visible change and is NOT smuggled in here.
+      # than the dev side's (RUN) keeps this change to the fail DIRECTION alone. HONEST about what that
+      # defers: the CLEAR→RUN rename is NEARLY FREE, not caller-risky — exactly ONE deployed consumer
+      # reads this reader (live-gate-watch.sh), it branches on the EXIT CODE (`hrc != 0`), and the token
+      # reaches only a log line. So the vocabulary alignment is deferred as SCOPE DISCIPLINE, not
+      # because anything would break; it is a separate change, declared rather than smuggled in here.
       n="$(bump_counter)"
       echo CLEAR
       if [ "$n" -ge "$K" ]; then

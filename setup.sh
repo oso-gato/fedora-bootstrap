@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fedora-bootstrap — orchestrator. Run as ROOT on a fresh host (Day 0).
-# Version: 1.2.78 (live-gate HEAD-SHA COHERENCE — the gate can no longer verdict one sha while the watcher dedups another: live-gate-watch.sh hands its dedup sha to live-gate-run.sh, which refuses to gate any other head. Fixes the #267 stall where a lagging refs/pull/N/head buried a live head under a GREEN marker. Changelog: UPGRADING.md.)
+# Version: 1.2.79 (FLEET HALT fail direction INVERTED on the host — an UNREADABLE halt signal is no longer a halt: fleet-halt.sh returns CLEAR/rc 0 and the sweep proceeds, so a GitHub blip stops freezing the outage-repair engine. Ports the dev side's fedora-dev#274 STEP 3; only a READ, PRESENT, maintainer-applied label halts. Changelog: UPGRADING.md.)
 #
 # Runs the two privilege layers in their correct identities (see README "Privilege layers"):
 #   setup-host.sh  — the SYSTEM layer, as ROOT: host packages, /etc, system services, the

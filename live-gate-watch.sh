@@ -39,7 +39,7 @@ flock -n 9 || { echo "[live-gate-watch] another run holds the lock; skipping"; e
 
 # ---- R9 FLEET HALT (apparatus fedora-dev#135): read the maintainer-bound `halt` signal at the TOP of
 # the tick — BEFORE the sweep/discovery/build/post below — so a fleet SOFT STOP takes effect within one
-# tick. HALTED / persistently-unreadable ⇒ OBSERVE-ONLY: log and exit cleanly (sweep nothing, build
+# tick. HALTED ⇒ OBSERVE-ONLY: log and exit cleanly (sweep nothing, build
 # nothing, post nothing); un-halt resumes next tick (the timer keeps firing). An in-flight build from a
 # prior tick already completed before this tick could acquire the flock above, so it is never touched.
 # The reader (fleet-halt.sh) mirrors the dev-side bin/fleet-halt.sh contract. A MISSING or CRASHED
