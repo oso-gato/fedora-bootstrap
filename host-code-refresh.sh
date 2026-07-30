@@ -118,7 +118,7 @@ hcr_install_from() {
     while IFS=$'\t' read -r mode src dst; do
         [ -n "$mode" ] || continue
         if [ ! -f "$clone/$src" ]; then
-            warn "install: MISSING source $clone/$src — refusing to install a partial set"
+            warn "install: MISSING source $clone/$src — skipping it; the tick FAILS and the set is left PARTIAL until the next one"
             rc=1; continue
         fi
         install -D -m "$mode" "$clone/$src" "$dst" || { warn "install FAILED: $clone/$src -> $dst"; rc=1; }
@@ -275,6 +275,7 @@ hcr_main() {
             log "fast-forward available: $(printf '%s' "$local_sha" | cut -c1-12) -> $short — applying"
             if ! timeout "$gt" git -C "$clone" merge --ff-only "origin/$branch" >/dev/null 2>&1; then
                 warn "git merge --ff-only unexpectedly failed after FF check — leaving clone as-is"
+                HCR_OUTCOME="FAILED merge-ff-only $short (clone left as-is; retried next tick)"
                 return 1
             fi
             ;;
@@ -284,11 +285,13 @@ hcr_main() {
     esac
 
     local merged_sha; merged_sha="$(git -C "$clone" rev-parse HEAD 2>/dev/null || echo '')"
-    [ -n "$merged_sha" ] || { warn "post-merge HEAD unreadable — aborting apply"; return 1; }
+    [ -n "$merged_sha" ] || { warn "post-merge HEAD unreadable — aborting apply"
+        HCR_OUTCOME="FAILED head-unreadable (post-merge HEAD could not be read; nothing installed)"; return 1; }
 
     # ---- apply: (re)install the merged artifacts, reload/enable the units ----
     if ! hcr_install_from "$clone"; then
         warn "install of the managed set FAILED — NOT recording success; will retry next tick"
+        HCR_OUTCOME="FAILED install $short (one or more managed artifacts did not install)"
         return 1
     fi
     hcr_reload_restart
@@ -321,6 +324,13 @@ hcr_heartbeat() { # <state-dir> <outcome...>
 # hcr_run: the entry wrapper — run the absorber, then ALWAYS record the heartbeat (whatever outcome
 # hcr_main set via $HCR_OUTCOME), preserving hcr_main's exit code. This is what the unit/CLI invokes so
 # a blocked/transient/failed tick is never silent.
+# THE DEFAULT IS LOAD-BEARING AND WAS A HOLE. `verify.sh` FAILs only on a heartbeat matching
+# BLOCKED|FAILED, so this default of "ran" reads GREEN — and three failure paths in hcr_main used to
+# return without assigning an outcome, meaning a FAILED APPLY OF MERGED HOST CODE reported healthy.
+# That defeats this absorber's whole purpose (its OWNERSHIP header: make a non-self-refreshing host a
+# LOUD verify FAIL, incident 2026-07-17). Every failure path now names itself. If you add another,
+# ASSIGN HCR_OUTCOME before returning non-zero — the default cannot distinguish "nothing to do" from
+# "it broke", and silence here is indistinguishable from health.
 hcr_run() {
     local state="${HCR_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/host-code-refresh}"
     HCR_OUTCOME="ran"
